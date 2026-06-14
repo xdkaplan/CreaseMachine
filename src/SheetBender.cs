@@ -76,6 +76,11 @@ namespace CreaseMachine
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
         {
             pManager.AddGenericParameter("Mesh", "Mesh", "The developing mesh, as a Plankton mesh.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Energy", "Energy",
+                "Per-vertex developability energy (min eigenvalue of the 1-ring normal covariance), "
+              + "parallel to the mesh vertices. ~0 where developable; higher at residual non-developable "
+              + "spots (seam corners). Colour the mesh by it to inspect crease structure.",
+                GH_ParamAccess.list);
         }
 
         private PlanktonMesh P = new PlanktonMesh();
@@ -114,6 +119,7 @@ namespace CreaseMachine
                 initialized = true;
                 prevSubdiv = subdiv;                 // don't fire a subdivide on the reset itself
                 DA.SetData(0, new GH_PlanktonMesh(P));
+                SetEnergyOutput(DA);
                 return;
             }
 
@@ -205,6 +211,17 @@ namespace CreaseMachine
             }
 
             DA.SetData(0, new GH_PlanktonMesh(P));
+            SetEnergyOutput(DA);
+        }
+
+        /// <summary>Per-vertex developability energy output (parallel to the mesh vertices).</summary>
+        private void SetEnergyOutput(IGH_DataAccess DA)
+        {
+            int nV = P.Vertices.Count;
+            double[] energy = new double[nV];
+            for (int v = 0; v < nV; v++)
+                if (!P.Vertices[v].IsUnused) energy[v] = DevelopabilityEnergy.VertexEnergy(P, v);
+            DA.SetDataList(1, energy);
         }
 
         /// <summary>First real edge length, used to make Step scale-invariant.</summary>

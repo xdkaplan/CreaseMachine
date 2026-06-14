@@ -30,6 +30,7 @@ Category: **Kangaroo → Mesh**.
 | Output | Nick | Type | Meaning |
 |--------|------|------|---------|
 | Mesh | Mesh | Generic (Plankton mesh) | The developing mesh, as a `PlanktonMesh`. |
+| Energy | Energy | Number (list) | Per-vertex developability energy (smaller eigenvalue of the 1-ring normal covariance), parallel to the mesh vertices. ~0 where developable, higher at residual non-developable spots (seam corners). Colour the mesh by it to inspect crease structure. |
 
 ### Notes on the method
 
@@ -42,6 +43,12 @@ Category: **Kangaroo → Mesh**.
 - Boundaries are held fixed.
 - Slivers and severe folds are healed by simple, manifold-safe edge collapses
   (Plankton's `CollapseEdge` primitive) — this is **not** an adaptive remesher.
+- Faces that fold back past the vertex normal (an inverted/overhang
+  configuration) are dropped from the gradient sum, whose amplifier term would
+  otherwise spike toward a numerical explosion. A legitimate convex sharp edge
+  never reaches that threshold, so it is preserved.
+- **Energy** is exposed per vertex so you can colour the mesh and inspect where
+  curvature concentrates (seam corners stay hot; developed regions go to ~0).
 
 ## Building
 

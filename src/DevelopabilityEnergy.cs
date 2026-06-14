@@ -193,6 +193,15 @@ namespace CreaseMachine
                     if (1.0 + sinPhi == 1.0) continue;
 
                     double cosPhi = Nv * Nf;
+                    // Inverted-face guard. As phi -> pi (face normal nearly antipodal to the vertex
+                    // normal) the tangent direction of Nf is undefined and the phi/sinPhi (factorf)
+                    // and phi/tanPhi (factorv) amplifiers blow up, spiking the gradient toward an
+                    // explosion. Threshold justified by the bench: a CONVEX sharp edge (even razor +
+                    // strongly asymmetric, where the area-weighted Nv is pulled to one side) tops out
+                    // at ~106deg from the vertex normal and is developable (gradient 0 - preserved).
+                    // Reaching phi > 148deg requires the surface to fold UNDER itself (a degenerate
+                    // overhang / inversion), so this never touches a legitimate convex edge.
+                    if (cosPhi < -0.85) continue;   // phi > ~148 deg => inverted/folded face, drop it
                     double phi = SafeAcos(cosPhi);
                     double tanPhi = sinPhi / cosPhi;
 
