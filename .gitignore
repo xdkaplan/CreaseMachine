@@ -1,0 +1,16 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+
+# Bench artifact — regenerated on every GradCheck run
+/test/flow_result.obj
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+
+# NOTE: lib/*.dll is intentionally NOT ignored — the vendored Plankton
+# assemblies must be committed so the project builds without a Plankton checkout.
