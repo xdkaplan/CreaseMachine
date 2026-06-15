@@ -71,6 +71,17 @@ namespace CreaseMachine
             pManager.AddBooleanParameter("Reset", "Reset",
                 "True to (re)initialize from the input mesh, false to run. Connect a timer for continuous flow.",
                 GH_ParamAccess.item, true);
+
+            //6
+            pManager.AddNumberParameter("deBranch", "deBranch",
+                "Weight of the B.5.1 branching penalty (Stein/Grinspun/Crane 2018, App B.5.1): an "
+              + "extra per-vertex cost equal to the squared MINIMUM width of the convex hull of the "
+              + "+/- signed face normals. The covariance energy penalizes the SUM of squared widths "
+              + "(smallest eigenvalue), so it tolerates a few stray normals making a crazy/branchy "
+              + "minimum; this term penalizes the MIN width directly - strictly anti-branching by "
+              + "construction. 0 = off. Start small (~0.05) and raise until crazes thin out. "
+              + "Live-tunable.",
+                GH_ParamAccess.item, 0.0);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -96,6 +107,7 @@ namespace CreaseMachine
             int Iter = 1;
             bool subdiv = false;
             bool reset = true;
+            double deBranch = 0.0;
 
             DA.GetData(0, ref inMesh);
             DA.GetData(1, ref Step);
@@ -103,6 +115,7 @@ namespace CreaseMachine
             DA.GetData(3, ref Iter);
             DA.GetData(4, ref subdiv);
             DA.GetData(5, ref reset);
+            DA.GetData(6, ref deBranch);
 
             // --- (Re)initialize from the input mesh ---
             if (reset || !initialized)
@@ -119,7 +132,7 @@ namespace CreaseMachine
                 initialized = true;
                 prevSubdiv = subdiv;                 // don't fire a subdivide on the reset itself
                 DA.SetData(0, new GH_PlanktonMesh(P));
-                SetEnergyOutput(DA);
+                SetEnergyOutput(DA, deBranch);
                 return;
             }
 
@@ -138,6 +151,17 @@ namespace CreaseMachine
             {
                 P.Compact();                          // collapse leaves unused elements behind
                 vel = new Vec3[P.Vertices.Count];     // Compact renumbered vertices - drop momentum
+            }
+
+            // --- Remove needle triangles (aspect < 5%): the absolute-length short-edge collapse
+            // above misses these - a needle's short edge can be above 0.2*mean and still spike
+            // the 1/dA face-normal-derivative term ~30x. Killing them PRE-STEP prevents the
+            // cap-saturated-motion cascade that drives a one-frame gradient spike at a needle's
+            // far vertex into a fold over the next several frames (the "about-to-explode" mode).
+            if (MeshOps.CollapseSliverEdges(P, 0.05) > 0)
+            {
+                P.Compact();
+                vel = new Vec3[P.Vertices.Count];
             }
 
             // Step is a fraction of edge length. The developability gradient has units of
@@ -174,9 +198,10 @@ namespace CreaseMachine
 
                 double[] energy;
                 Vec3[] grad;
-                // 4-arg overload also hands back the severe-fold flags (free - already computed for
-                // the fold guard), which we use after the loop to collapse those pinches.
-                DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out foldFlags);   // grad at lookahead
+                // 5-arg overload also hands back the severe-fold flags (free - already computed for
+                // the fold guard), which we use after the loop to collapse those pinches, and takes
+                // the B.5.1 branching-penalty weight.
+                DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out foldFlags, deBranch);   // grad at lookahead
 
                 // v = beta*v - t*grad ;  x = base + v
                 for (int v = 0; v < nV; v++)
@@ -211,16 +236,17 @@ namespace CreaseMachine
             }
 
             DA.SetData(0, new GH_PlanktonMesh(P));
-            SetEnergyOutput(DA);
+            SetEnergyOutput(DA, deBranch);
         }
 
-        /// <summary>Per-vertex developability energy output (parallel to the mesh vertices).</summary>
-        private void SetEnergyOutput(IGH_DataAccess DA)
+        /// <summary>Per-vertex developability energy output (parallel to the mesh vertices),
+        /// including the optional B.5.1 branching penalty so the output matches what the flow saw.</summary>
+        private void SetEnergyOutput(IGH_DataAccess DA, double branchWeight)
         {
             int nV = P.Vertices.Count;
             double[] energy = new double[nV];
             for (int v = 0; v < nV; v++)
-                if (!P.Vertices[v].IsUnused) energy[v] = DevelopabilityEnergy.VertexEnergy(P, v);
+                if (!P.Vertices[v].IsUnused) energy[v] = DevelopabilityEnergy.VertexEnergy(P, v, branchWeight);
             DA.SetDataList(1, energy);
         }
 

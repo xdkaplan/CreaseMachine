@@ -18,7 +18,7 @@ namespace CreaseMachine
             out Vec3[] energyGrad)
         {
             bool[] isFold;
-            ComputeHingeEnergyAndGrad(P, out energy, out energyGrad, out isFold);
+            ComputeHingeEnergyAndGrad(P, out energy, out energyGrad, out isFold, 0.0);
         }
 
         // Overload that also reports which vertices are SEVERE folds (coherence < 0.05). The
@@ -30,6 +30,21 @@ namespace CreaseMachine
             out double[] energy,
             out Vec3[] energyGrad,
             out bool[] isFold)
+        {
+            ComputeHingeEnergyAndGrad(P, out energy, out energyGrad, out isFold, 0.0);
+        }
+
+        // 5-arg overload adds the branching (anti-crazing) penalty from Stein/Grinspun/Crane App
+        // B.5.1: per vertex i, an extra cost psi_i := min_{|u|=1} max_{a,b in St(i)} <x_a - x_b, u>^2
+        // where {x_*} are the +/- signed face normals. The covariance energy penalizes the SUM of
+        // squared widths of the normal convex hull (smaller eigenvalue of M); psi penalizes its
+        // MIN width - strictly anti-branching by construction. Set branchWeight = 0 to disable.
+        public static void ComputeHingeEnergyAndGrad(
+            PlanktonMesh P,
+            out double[] energy,
+            out Vec3[] energyGrad,
+            out bool[] isFold,
+            double branchWeight)
         {
             int nV = P.Vertices.Count;
             int nF = P.Faces.Count;
@@ -273,6 +288,166 @@ namespace CreaseMachine
                     energyGrad[jg] += -cxEik;
                     energyGrad[kg] += cxEij;
                 }
+
+                // --- B.5.1 branching penalty (optional) ---
+                // psi_i := min_{|u|=1} max_{a,b} <x_a - x_b, u>^2 over the +/- signed face normals
+                // {x_k} = {+/- N_f : f in 1-ring}. The minimizing u for any candidate pair (a,b) is
+                // the unit altitude of the triangle (0, x_a, x_b), so we enumerate pairs and take
+                // the smallest max-projection-squared. Cheap: O(n^4) for n ~ 6.
+                if (branchWeight > 0)
+                {
+                    int nFR = faces.Count;
+                    int m = 2 * nFR;
+                    Vec3[] X = new Vec3[m];
+                    for (int idx = 0; idx < m; idx++)
+                    {
+                        Vec3 nf = faceNormals[faces[idx >> 1]];
+                        X[idx] = (idx & 1) == 0 ? nf : -nf;
+                    }
+
+                    double psiMin = double.MaxValue;
+                    int aStar = -1, bStar = -1, cStar = -1, dStar = -1;
+                    Vec3 uStar = Vec3.Zero, wStar = Vec3.Zero;
+                    double crossLenStar = 0;
+
+                    for (int a = 0; a < m; a++)
+                    for (int b = a + 1; b < m; b++)
+                    {
+                        Vec3 w = X[b] - X[a];
+                        Vec3 cross = Vec3.Cross(Nv, w);
+                        double cl = cross.Length;
+                        if (cl < 1e-12) continue;
+                        Vec3 u = cross / cl;
+
+                        // max over (c, d) of <X[c] - X[d], u>^2 - the width of the +/- hull along u
+                        double psiAb = 0; int cB = -1, dB = -1;
+                        for (int c = 0; c < m; c++)
+                        for (int d = c + 1; d < m; d++)
+                        {
+                            double sd = (X[c] - X[d]) * u;
+                            double s2 = sd * sd;
+                            if (s2 > psiAb) { psiAb = s2; cB = c; dB = d; }
+                        }
+
+                        if (psiAb < psiMin)
+                        {
+                            psiMin = psiAb;
+                            aStar = a; bStar = b; cStar = cB; dStar = dB;
+                            uStar = u; wStar = w; crossLenStar = cl;
+                        }
+                    }
+
+                    if (psiMin < double.MaxValue && psiMin > 0)
+                    {
+                        energy[vert] += branchWeight * psiMin;
+
+                        // --- Subgradient of psi at the winning (a*, b*, c*, d*).
+                        // psi = s^2, s = <xDiff, u*>, u* = c/|c|, c = Nv x w, w = X[b*] - X[a*].
+                        // Chain through u*: dw/dx_a = -I, dc/dx_a applied to delta = -Nv x delta,
+                        // d|c|/dx_a applied to delta = -<u*, Nv x delta>. So
+                        //   du*/dx_a delta = -(1/|c|)(I - u* u*^T)(Nv x delta)
+                        // and ds/dx_a applied to delta = <xDiff, du*/dx_a delta>
+                        //                              = -(delta/|c|) . [(xDiff x Nv) - s (u* x Nv)].
+                        // Hence dpsi/dx_a = -(2s/|c|) [(xDiff x Nv) - s (u* x Nv)], dpsi/dx_b is its
+                        // negative (w = x_b - x_a flips sign). NOTE: the paper's
+                        //   d u*/d x_a = -1/|w|^3 (Nv x w) w^T
+                        // is the INTRINSIC-2D form where Nv perp w, xDiff so |c| = |w| and Nv x w is
+                        // in the (x_a, x_b) plane - in 3D it points perpendicular to w, so we use the
+                        // chain-rule form above and FD-check confirms it.
+                        // For x_{c*}, x_{d*}: ds/dx_c = u*, ds/dx_d = -u*.
+                        Vec3 xDiff = X[cStar] - X[dStar];
+                        double s = xDiff * uStar;
+
+                        int[] winIdx = { aStar, bStar, cStar, dStar };
+                        Vec3[] winGrad = new Vec3[4];
+                        if (crossLenStar > 1e-15)
+                        {
+                            Vec3 xDiffXNv = Vec3.Cross(xDiff, Nv);
+                            Vec3 uStarXNv = Vec3.Cross(uStar, Nv);
+                            Vec3 gradU = ((-2.0 * s) / crossLenStar) * (xDiffXNv - s * uStarXNv);
+                            winGrad[0] = gradU;
+                            winGrad[1] = -gradU;
+                        }
+                        winGrad[2] = (2.0 * s) * uStar;
+                        winGrad[3] = (-2.0 * s) * uStar;
+
+                        // Chain x_alpha = sign_alpha * N_{f_alpha}. Multiple winning slots can map
+                        // to the same face (e.g. +N_f as x_a*, -N_f as x_c*) - sum their dPsi/dN_f
+                        // BEFORE chaining through dN_f/dp so each face is processed once.
+                        for (int i = 0; i < 4; i++)
+                        {
+                            if (winIdx[i] < 0) continue;
+                            int fid_i = winIdx[i] >> 1;
+                            int sgn_i = (winIdx[i] & 1) == 0 ? 1 : -1;
+                            int f_i = faces[fid_i];
+                            Vec3 dPsiDNf = ((double)sgn_i) * winGrad[i];
+
+                            // fold in any later winning slot pointing at the same face
+                            for (int j = i + 1; j < 4; j++)
+                            {
+                                if (winIdx[j] < 0) continue;
+                                if (faces[winIdx[j] >> 1] != f_i) continue;
+                                int sgn_j = (winIdx[j] & 1) == 0 ? 1 : -1;
+                                dPsiDNf += ((double)sgn_j) * winGrad[j];
+                                winIdx[j] = -1;
+                            }
+
+                            // Chain dN_f/dp_v = (e_opposite x N_f) N_f^T / dA distributes to the 3 face verts
+                            int li_i = locIdx[fid_i];
+                            int[] fv_i = faceVerts[f_i];
+                            int iv = fv_i[li_i];
+                            int jv = fv_i[(li_i + 1) % 3];
+                            int kv = fv_i[(li_i + 2) % 3];
+                            Vec3 Piv = Pos(P.Vertices[iv]);
+                            Vec3 Pjv = Pos(P.Vertices[jv]);
+                            Vec3 Pkv = Pos(P.Vertices[kv]);
+                            Vec3 ejk_i = Pkv - Pjv;
+                            Vec3 eki_i = Piv - Pkv;
+                            Vec3 eij_i = Pjv - Piv;
+                            Vec3 Nf_i = faceNormals[f_i];
+                            double dA_i = doubleAreas[f_i];
+                            if (dA_i < 1e-16) continue;
+
+                            double ci_i = (dPsiDNf * Vec3.Cross(ejk_i, Nf_i)) / dA_i;
+                            double cj_i = (dPsiDNf * Vec3.Cross(eki_i, Nf_i)) / dA_i;
+                            double ck_i = (dPsiDNf * Vec3.Cross(eij_i, Nf_i)) / dA_i;
+
+                            energyGrad[iv] += (branchWeight * ci_i) * Nf_i;
+                            energyGrad[jv] += (branchWeight * cj_i) * Nf_i;
+                            energyGrad[kv] += (branchWeight * ck_i) * Nf_i;
+                        }
+
+                        // --- Subgradient w.r.t. Nv: u* depends on Nv, which depends on every face
+                        // in the 1-ring via Nraw. dPsi/dNv = (2s/|c|) [(w x xDiff) - s (w x u*)];
+                        // project off the Nv component (that part of the gradient gets killed when
+                        // we re-normalize anyway), divide by |Nraw|, and distribute through the
+                        // SAME cross-product chain the existing covariance totalFactorv loop uses.
+                        Vec3 dPsiDNv = (2.0 * s / crossLenStar) *
+                                       (Vec3.Cross(wStar, xDiff) - s * Vec3.Cross(wStar, uStar));
+                        Vec3 dPsiDNvPerp = dPsiDNv - (Nv * dPsiDNv) * Nv;
+                        double rawLenNv = vertNormalsRaw[vert].Length;
+                        if (rawLenNv > 1e-15)
+                        {
+                            Vec3 factorvBranch = (branchWeight / rawLenNv) * dPsiDNvPerp;
+                            for (int gi = 0; gi < faces.Count; gi++)
+                            {
+                                int gB = faces[gi];
+                                int gliB = locIdx[gi];
+                                int[] gvB = faceVerts[gB];
+                                int igB = vert;
+                                int jgB = gvB[(gliB + 1) % 3];
+                                int kgB = gvB[(gliB + 2) % 3];
+                                Vec3 eij_gB = Pos(P.Vertices[jgB]) - Pos(P.Vertices[igB]);
+                                Vec3 eik_gB = Pos(P.Vertices[kgB]) - Pos(P.Vertices[igB]);
+                                Vec3 cxEij_B = Vec3.Cross(factorvBranch, eij_gB);
+                                Vec3 cxEik_B = Vec3.Cross(factorvBranch, eik_gB);
+                                energyGrad[igB] += cxEik_B - cxEij_B;
+                                energyGrad[jgB] += -cxEik_B;
+                                energyGrad[kgB] += cxEij_B;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -284,12 +459,20 @@ namespace CreaseMachine
         // each Partial stays O(valence), keeping the whole thing O(E).
         public static void ComputeNumericalGrad(PlanktonMesh P, out double[] energy, out Vec3[] grad)
         {
+            ComputeNumericalGrad(P, out energy, out grad, 0.0);
+        }
+
+        // 4-arg overload: numerical gradient including the optional B.5.1 branching penalty.
+        // Uses VertexEnergy(...,branchWeight) so the FD probe sees the same energy the analytic
+        // path computes - this is a ground-truth check for the branching subgradient.
+        public static void ComputeNumericalGrad(PlanktonMesh P, out double[] energy, out Vec3[] grad, double branchWeight)
+        {
             int nV = P.Vertices.Count;
             energy = new double[nV];
             grad = new Vec3[nV];
 
             for (int u = 0; u < nV; u++)
-                energy[u] = VertexEnergy(P, u);
+                energy[u] = VertexEnergy(P, u, branchWeight);
 
             double eps = 1e-4 * RepresentativeEdge(P);
             if (eps <= 0) eps = 1e-4;
@@ -297,7 +480,9 @@ namespace CreaseMachine
             for (int v = 0; v < nV; v++)
             {
                 if (P.Vertices[v].IsUnused || P.Vertices.IsBoundary(v)) continue;
-                grad[v] = new Vec3(Partial(P, v, 0, eps), Partial(P, v, 1, eps), Partial(P, v, 2, eps));
+                grad[v] = new Vec3(Partial(P, v, 0, eps, branchWeight),
+                                    Partial(P, v, 1, eps, branchWeight),
+                                    Partial(P, v, 2, eps, branchWeight));
             }
 
             RejectKinkOutliers(P, grad);
@@ -328,29 +513,42 @@ namespace CreaseMachine
 
         private static double Partial(PlanktonMesh P, int v, int axis, double eps)
         {
+            return Partial(P, v, axis, eps, 0.0);
+        }
+
+        private static double Partial(PlanktonMesh P, int v, int axis, double eps, double branchWeight)
+        {
             float ox = P.Vertices[v].X, oy = P.Vertices[v].Y, oz = P.Vertices[v].Z;
             int[] nb = P.Vertices.GetVertexNeighbours(v);
 
-            double Ep = LocalEnergySum(P, v, nb, axis, ox, oy, oz, +eps);
-            double Em = LocalEnergySum(P, v, nb, axis, ox, oy, oz, -eps);
+            double Ep = LocalEnergySum(P, v, nb, axis, ox, oy, oz, +eps, branchWeight);
+            double Em = LocalEnergySum(P, v, nb, axis, ox, oy, oz, -eps, branchWeight);
             P.Vertices.SetVertex(v, (double)ox, (double)oy, (double)oz); // restore
             return (Ep - Em) / (2.0 * eps);
         }
 
-        private static double LocalEnergySum(PlanktonMesh P, int v, int[] nb, int axis, float ox, float oy, float oz, double delta)
+        private static double LocalEnergySum(PlanktonMesh P, int v, int[] nb, int axis, float ox, float oy, float oz, double delta, double branchWeight)
         {
             double x = ox, y = oy, z = oz;
             if (axis == 0) x += delta; else if (axis == 1) y += delta; else z += delta;
             P.Vertices.SetVertex(v, x, y, z);
 
-            double e = VertexEnergy(P, v);
-            for (int n = 0; n < nb.Length; n++) e += VertexEnergy(P, nb[n]);
+            double e = VertexEnergy(P, v, branchWeight);
+            for (int n = 0; n < nb.Length; n++) e += VertexEnergy(P, nb[n], branchWeight);
             return e;
         }
 
         // Energy of a single vertex, recomputed from current positions (local normals).
         // Matches the per-vertex energy assigned by ComputeHingeEnergyAndGrad.
         public static double VertexEnergy(PlanktonMesh P, int u)
+        {
+            return VertexEnergy(P, u, 0.0);
+        }
+
+        // 3-arg overload also adds the optional B.5.1 branching penalty (weight = 0 disables).
+        // Keep in sync with ComputeHingeEnergyAndGrad - the energy reported here MUST equal the
+        // energy[u] that the analytic path computes, or the finite-difference bench drifts.
+        public static double VertexEnergy(PlanktonMesh P, int u, double branchWeight)
         {
             if (P.Vertices[u].IsUnused || P.Vertices.IsBoundary(u)) return 0.0;
 
@@ -406,7 +604,50 @@ namespace CreaseMachine
             // Nv is an exact zero-eigenvector of M (every Nfw is perpendicular to it), so
             // the energy is the smaller eigenvalue of the 2x2 tangent-plane block - closed
             // form, no iterative eigensolve. ~10x cheaper than the Jacobi sweep.
-            return MinTangentEigenvalue(m00, m01, m02, m11, m12, m22, Nv);
+            double e = MinTangentEigenvalue(m00, m01, m02, m11, m12, m22, Nv);
+            if (branchWeight > 0) e += branchWeight * BranchPsi(Nv, fN);
+            return e;
+        }
+
+        // Energy-only B.5.1 branching penalty: psi = min over signed normal pairs (a, b) of
+        // (max over (c, d) of <X[c] - X[d], u*_ab>^2), where u*_ab = (Nv x w)/|Nv x w|, w = x_b - x_a,
+        // X = {+/- N_f : f in 1-ring}. Same minimum as the analytic-path block in ComputeHingeEnergy
+        // AndGrad - kept here as a pure value (no gradient) for VertexEnergy and FD probes.
+        private static double BranchPsi(Vec3 Nv, List<Vec3> faceNormals)
+        {
+            int n = faceNormals.Count;
+            if (n < 2) return 0.0;
+            int m = 2 * n;
+
+            double psiMin = double.MaxValue;
+            for (int a = 0; a < m; a++)
+            {
+                Vec3 xa = (a & 1) == 0 ? faceNormals[a >> 1] : -faceNormals[a >> 1];
+                for (int b = a + 1; b < m; b++)
+                {
+                    Vec3 xb = (b & 1) == 0 ? faceNormals[b >> 1] : -faceNormals[b >> 1];
+                    Vec3 w = xb - xa;
+                    Vec3 cross = Vec3.Cross(Nv, w);
+                    double cl = cross.Length;
+                    if (cl < 1e-12) continue;
+                    Vec3 u = cross / cl;
+
+                    double psiAb = 0;
+                    for (int c = 0; c < m; c++)
+                    {
+                        Vec3 xc = (c & 1) == 0 ? faceNormals[c >> 1] : -faceNormals[c >> 1];
+                        for (int d = c + 1; d < m; d++)
+                        {
+                            Vec3 xd = (d & 1) == 0 ? faceNormals[d >> 1] : -faceNormals[d >> 1];
+                            double sd = (xc - xd) * u;
+                            double s2 = sd * sd;
+                            if (s2 > psiAb) psiAb = s2;
+                        }
+                    }
+                    if (psiAb < psiMin) psiMin = psiAb;
+                }
+            }
+            return psiMin >= double.MaxValue ? 0.0 : psiMin;
         }
 
         private static double MinTangentEigenvalue(double m00, double m01, double m02,

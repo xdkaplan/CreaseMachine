@@ -29,6 +29,27 @@ class Program
         Console.WriteLine();
         Check("ComputeNumericalGrad   (the fix)", DevelopabilityEnergy.ComputeNumericalGrad, P);
 
+        // FD-check the combined (covariance + B.5.1 branching) gradient at branchWeight=0.5.
+        // BUG count tells us whether the branching subgradient is correct on this mesh.
+        EnergyFunc devBranchHalf = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            bool[] fF;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(Pm, out eb, out gb, out fF, 0.5);
+        };
+        Check("Dev + branch=0.5     (analytic)", devBranchHalf, P);
+        EnergyFunc devBranchHalfNum = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            DevelopabilityEnergy.ComputeNumericalGrad(Pm, out eb, out gb, 0.5);
+        };
+        Check("Dev + branch=0.5     (numerical via VertexEnergy)", devBranchHalfNum, P);
+        EnergyFunc devBranchTiny = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            bool[] fF;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(Pm, out eb, out gb, out fF, 0.01);
+        };
+        Check("Dev + branch=0.01    (analytic)", devBranchTiny, P);
+        AnalyzeDevFunc("Dev + branch=0.5 ", devBranchHalf, P);
+
         Console.WriteLine();
         FlowTest(BuildBumpyGrid(11), 400);
         Console.WriteLine();
@@ -45,6 +66,13 @@ class Program
         FlowAndWatch(@"C:\Temp\AboutToExplode.stl", 40, 0.05, 0.9);
         Console.WriteLine();
         TrackPoint(@"C:\Temp\AboutToExplode.stl", 41.815, 5.542, 11.818, 20, 0.05, 0.9);
+        Console.WriteLine();
+        // NEW: AbouttoBlow.stl, user-reported about-to-explode vertex
+        ExplodeDiagnostic(@"C:\Temp\AbouttoBlow.stl");
+        Console.WriteLine();
+        FlowAndWatch(@"C:\Temp\AbouttoBlow.stl", 40, 0.05, 0.9);
+        Console.WriteLine();
+        TrackPoint(@"C:\Temp\AbouttoBlow.stl", -14.495, 12.292, -21.835, 20, 0.05, 0.9);
         return 0;
     }
 
@@ -132,6 +160,7 @@ class Program
         for (int s = 0; s < steps; s++)
         {
             if (MeshOps.CollapseShortEdges(P, 0.2) > 0) { P.Compact(); vel = new Vec3[P.Vertices.Count]; }
+            if (MeshOps.CollapseSliverEdges(P, 0.05) > 0) { P.Compact(); vel = new Vec3[P.Vertices.Count]; }
             int nV = P.Vertices.Count;
             if (vel.Length != nV) vel = new Vec3[nV];
             double L = RepEdge(P);
@@ -624,9 +653,13 @@ class Program
     // is fine but the energy is non-smooth there)?
     static void AnalyzeDev(PlanktonMesh P)
     {
+        AnalyzeDevFunc("", DevelopabilityEnergy.ComputeHingeEnergyAndGrad, P);
+    }
+
+    static void AnalyzeDevFunc(string tag, EnergyFunc f, PlanktonMesh P)
+    {
         double[] e0; Vec3[] g0;
-        DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e0, out g0);
-        EnergyFunc f = DevelopabilityEnergy.ComputeHingeEnergyAndGrad;
+        f(P, out e0, out g0);
 
         int clean = 0, kink = 0, bug = 0, shownBug = 0;
         for (int v = 0; v < P.Vertices.Count; v++)
@@ -644,6 +677,14 @@ class Program
             // FD blowing up as eps shrinks -> the energy jumped (discontinuity/kink)
             if (nFine.Length > 3.0 * nCoarse.Length + 1e-9) { kink++; continue; }
 
+            // FD eps-dependent at the same point -> we're sitting on a subgradient kink
+            // (the min-max-pair winning configuration changes within the FD step), so the
+            // analytic SUBGRADIENT is one valid element of the subdifferential and FD picks
+            // a different one. Not a bug, just non-smoothness.
+            Vec3 fdDiff = nFine - nCoarse;
+            double fdJitter = fdDiff.Length / (1e-12 + Math.Max(nFine.Length, nCoarse.Length));
+            if (fdJitter > 0.05) { kink++; continue; }
+
             // FD stable across eps but != analytic -> the analytic gradient is wrong here
             bug++;
             if (shownBug < 6)
@@ -655,7 +696,7 @@ class Program
                 shownBug++;
             }
         }
-        Console.WriteLine("  classification:  clean=" + clean +
+        Console.WriteLine("  " + tag + "classification:  clean=" + clean +
             "   kink(discontinuity)=" + kink +
             "   BUG(gradient error)=" + bug);
     }
