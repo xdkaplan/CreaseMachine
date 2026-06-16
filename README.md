@@ -1,18 +1,24 @@
 # CreaseMachine
 
-A Grasshopper (Rhino 8) component — **SheetBender** — that flows a triangle mesh
+A Grasshopper (Rhino 8) component — **CreaseMachine** — that flows a triangle mesh
 toward a piecewise-developable (creasable) sheet using the covariance
 ("hinge") developability energy of **Stein, Grinspun & Crane**, *"Developability
-of Triangle Meshes"* (ACM TOG 37(4), 2018).
+of Triangle Meshes"* (ACM TOG 37(4), 2018), with optional paper-faithful B.2 /
+B.4 / B.5.1 extensions and a practical L1 dihedral sparsity term for sub-panel
+consolidation.
 
-The component does only three things: evaluate the developability energy and its
-analytic gradient, flow the mesh down that gradient (Nesterov-accelerated
-gradient descent), and — on demand — apply one 1→4 subdivision so creases can
-sharpen at higher resolution. No remeshing, no projection, no smoothing.
+The component evaluates the developability energy and its analytic gradient,
+flows the mesh down that gradient (Nesterov-accelerated gradient descent), and
+— on demand — applies one 1→4 subdivision so creases can sharpen at higher
+resolution. No remeshing, no projection, no smoothing.
 
-## The `SheetBender` component
+The flow loop is multicore-parallel (per-vertex independent work, per-task
+gradient accumulators, reduce at the end) and can run on a background thread
+decoupled from the Grasshopper solve cycle.
 
-Category: **Kangaroo → Mesh**.
+## The `CreaseMachine` component
+
+Category: **Mesh → CreaseMachine**.
 
 ### Inputs
 
@@ -20,17 +26,25 @@ Category: **Kangaroo → Mesh**.
 |-------|------|------|---------|---------|
 | Mesh | Mesh | Mesh | — | Triangle mesh to develop. Connectivity is preserved (no remeshing); quads are triangulated on input. |
 | Step | Step | Number | 0.05 | Step size as a fraction of edge length — the most-curved vertices move about this fraction of an edge per iteration. Applied internally as `Step·L²` so it behaves identically at any mesh scale and after Subdivide. ~0.05 descends cleanly; raise for speed, lower if the surface shimmers. Live-tunable. |
-| Momentum | Mom | Number | 0.9 | Nesterov momentum (0–0.95). 0 = plain gradient descent; 0.9 reaches a developable state in roughly 5× fewer iterations. Higher is faster but lowers the stable Step ceiling. Resets on Reset and Subdivide. Live-tunable. |
-| Iterations | Iter | Integer | 1 | Flow steps taken per solve. Connect a timer for continuous flow. |
+| Momentum | Mom | Number | 0.9 | Nesterov momentum (0–0.95). 0 = plain gradient descent; 0.9 reaches a developable state in roughly 5× fewer iterations. Higher is faster but lowers the stable `Step` ceiling. Resets on Reset and Subdivide. Live-tunable. |
+| Iterations | Iter | Integer | 1 | Flow steps taken per solve. Connect a timer for continuous flow (or use `Running` to run continuously on a background thread regardless of the timer). |
 | Subdivide | Subdiv | Boolean | false | Rising edge (false→true) applies one in-place 1→4 (midpoint) subdivision to the live mesh. Per the paper: subdivide after the flow settles to get hi-res creases, then keep flowing. |
 | Reset | Reset | Boolean | true | True to (re)initialize from the input mesh, false to run. Connect a timer for continuous flow. |
+| deBranch | deBranch | Number | 0 | Weight of the **B.5.1 branching penalty** — the squared *minimum* width of the convex hull of `±` signed face normals. The covariance energy penalises the *sum* of squared widths; this term penalises the min directly, strictly anti-branching by construction. Useful when seams craze along curved seams. Live-tunable. |
+| deConsolidate | deConsolidate | Number | 0 | Weight of the **B.2 combinatorial / consolidation** penalty — for each vertex, the minimum within-cluster pair-sum `Σ‖N_s − N_t‖²` over connected 2-partitions of its 1-ring. Penalises within-patch normal spread while leaving real seams alone — merges piecewise developability into global. Live-tunable. |
+| useMaxCov | useMaxCov | Boolean | false | Replace the default sum-covariance (smaller eigenvalue of `Σθ N Nᵀ`, Eq 5) with the **B.4 max-covariance** `λ_max = min_u max_f ⟨u,N_f⟩²`. The sum form lets rulings branch into V's at seams; the max form forces every normal onto a single 1-D arc → straight rulings. Live-tunable. |
+| Sharpness | Sharpness | Number | 4.0 | Corner-preservation exponent. Per-vertex energy and gradient are multiplied by `w(d) = 1 / (1 + (d / (π/4))^Sharpness)`, where `d` is the Gauss–Bonnet angle defect. At 0 the falloff is off (corners get pulled flat); higher values preserve sharper junctions (cube corner at Sharpness=4 keeps ~6% weight). Live-tunable. |
+| deCraze | deCraze | Number | 0 | Weight of an **L1 dihedral sparsity** penalty (`Σ|φ_e| × weight`). Sparse-promoting: within-patch edges drop their dihedral to exactly zero (so adjacent patches merge) while real seams keep theirs. Corner-weighted by `Sharpness` so sharp junctions are still preserved. Not from the paper — see `NOTICE.md` for the Lasso / He&Schaefer L0-mesh-denoising citation. Live-tunable. |
+| Running | Running | Boolean | false | `true` = decouple compute from the GH solve cycle. The flow runs continuously on a background worker thread, snapshotting the mesh + energy out on each timer tick. All other inputs stay live-tunable. `false` = legacy behaviour: one flow step per GH solve. See [Running mode](#running-mode) below. |
+| DetMix | DetMix | Number | 0.0 | Continuous blend in `[0, 1]` between the paper-faithful `λ_min(M)` energy (`DetMix=0`) and the symmetric `det(M_tangent) = λ_min·λ_max` energy (`DetMix=1`). `λ_min` is genuinely non-smooth at degenerate vertices (icosahedral corners, symmetric quads) — the picked eigenvector is direction-arbitrary there, which can produce visible twist on symmetric meshes. Mixing in a small amount (try 0.05–0.2) restores symmetry by combining both tangent-plane eigenvectors. Live-tunable. |
 
-### Output
+### Outputs
 
 | Output | Nick | Type | Meaning |
 |--------|------|------|---------|
-| Mesh | Mesh | Generic (Plankton mesh) | The developing mesh, as a `PlanktonMesh`. |
-| Energy | Energy | Number (list) | Per-vertex developability energy (smaller eigenvalue of the 1-ring normal covariance), parallel to the mesh vertices. ~0 where developable, higher at residual non-developable spots (seam corners). Colour the mesh by it to inspect crease structure. |
+| Mesh | Mesh | Generic (Plankton mesh) | The developing mesh, as a `PlanktonMesh`. Snapshotted under the worker mesh-lock so it is consistent with the energy + brush outputs. |
+| Energy | Energy | Number (list) | Per-vertex developability energy (smaller eigenvalue of the 1-ring normal covariance — or the `DetMix`-blended energy when `DetMix > 0`), parallel to the mesh vertices. ~0 where developable, higher at residual non-developable spots (seam corners). Colour the mesh by it to inspect crease structure. |
+| BrushWeights | Brush | Number (list) | Per-vertex brush-paint state (an additive local `deCraze` boost) accumulated by the experimental drag-paint UX. Parallel to the mesh vertices, 0 where untouched, up to ~2.0 saturated. Useful as a vertex-colour overlay during development. (The brush UX itself is still prototyping — its behaviour and accumulation curve may change.) |
 
 ### Notes on the method
 
@@ -47,8 +61,39 @@ Category: **Kangaroo → Mesh**.
   configuration) are dropped from the gradient sum, whose amplifier term would
   otherwise spike toward a numerical explosion. A legitimate convex sharp edge
   never reaches that threshold, so it is preserved.
+- A **kink-outlier filter** zeros any vertex whose gradient magnitude exceeds
+  ~8× the per-vertex median. Eigenvalue crossings of the in-plane covariance
+  produce genuine subgradient jumps; without the filter, those single vertices
+  fly off and corrupt the flow at moderate-to-large `Step`.
+- **DetMix** smoothly trades paper-faithfulness for symmetry. At `DetMix = 0`
+  the energy is exactly the paper's `λ_min(M)`, non-smooth at degenerate
+  vertices — fine on most meshes, visibly twisty on icosahedra / symmetric
+  quads. Raising `DetMix` adds in `λ_min·λ_max`, whose gradient combines both
+  tangent-plane eigenvectors and is basis-invariant. Small values (0.05–0.2)
+  fix the symmetric-mesh twist without changing the rest of the flow's
+  character.
 - **Energy** is exposed per vertex so you can colour the mesh and inspect where
   curvature concentrates (seam corners stay hot; developed regions go to ~0).
+
+### Running mode
+
+When `Running = true`, the flow detaches from the GH solve cycle and runs on a
+background worker thread as fast as the engine can deliver. The component still
+solves on the GH timer / input changes — those solves just snapshot the
+*current* mesh + energy + brush state for display, instead of stepping the flow
+themselves. Practical implications:
+
+- A connected timer paces the **display refresh**, not the compute rate.
+- All inputs (`Step`, `Momentum`, weights, `Sharpness`, `deCraze`, `DetMix`)
+  remain live-tunable while the worker iterates — the worker reads them once
+  per iteration under a shared lock.
+- Multicore parallelism is capped at `ProcessorCount − 2` so the Rhino viewport,
+  the GH UI thread, and the OS keep cycles for responsiveness.
+- `Reset = true`, removing the component, or closing the document stops the
+  worker cleanly.
+
+When `Running = false` the component behaves as it did originally: one flow
+step per GH solve.
 
 ## Building
 
@@ -73,8 +118,9 @@ To install, copy that `.gha` into your Grasshopper Libraries folder
 
 A Rhino-free console bench (`GradCheck`) compiles the energy, vector and
 mesh-ops sources directly and runs a battery of checks: finite-difference
-gradient verification, developability classification, scale-invariance, and
-momentum/collapse/degeneracy sanity.
+gradient verification, developability classification, scale-invariance,
+momentum/collapse/degeneracy sanity, plus a per-config CHA microbench on a
+representative input.
 
 ```sh
 dotnet build test/GradCheck.csproj -c Release
@@ -82,23 +128,25 @@ test/bin/Release/net48/GradCheck.exe
 ```
 
 (`GradCheck.exe` is a net48 executable — run it directly, not via `dotnet`.)
-Some diagnostics look for a hardcoded `C:\Temp\AboutToExplode.stl`; if it is
+Some diagnostics look for hardcoded STL files under `C:\Temp`; if they are
 absent those lines are skipped — that is expected.
 
 ## Vendored dependencies
 
 `lib/Plankton.dll` and `lib/PlanktonGh.dll` are stock, unmodified upstream
 [Plankton](https://github.com/meshmash/Plankton) (0.4.3) by Daniel Piker and
-Will Pearson. They are committed to this repo so the project builds without a
-separate Plankton checkout.
+Will Pearson, vendored so the project builds without a separate Plankton
+checkout. Plankton is LGPL — see `NOTICE.md`.
 
-## License — OPEN TODO
+## License
 
-**No license has been chosen for this project yet.** This is deliberate and
-must be resolved by the author before any distribution.
+This project is released under the **GNU General Public License, version 2
+(GPL-v2)**. See `LICENSE` for the full text, and `NOTICE.md` for the upstream
+attributions and how the license decision was reached.
 
-The developability energy and its gradient are **re-derived from the reference
-implementation** accompanying Stein, Grinspun & Crane (2018), which is licensed
-**GPL-v2**. That lineage has licensing implications for this repository that need
-to be assessed before a license is selected. See `NOTICE.md` for full
-attribution.
+GPL-v2 matches the license of the reference implementation released by the
+authors of the Stein/Grinspun/Crane paper this code re-derives, keeps the
+lineage clean, and is compatible with the LGPL-licensed Plankton dependency.
+Commercial use is permitted under the GPL-v2 terms: you may distribute and
+sell builds of this `.gha`, provided you also make the source available and
+preserve the license on any derivative work.

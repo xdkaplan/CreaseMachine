@@ -49,7 +49,48 @@ class Program
         };
         Check("Dev + branch=0.01    (analytic)", devBranchTiny, P);
         AnalyzeDevFunc("Dev + branch=0.5 ", devBranchHalf, P);
+        EnergyFunc devConsHalf = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            bool[] fF;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(Pm, out eb, out gb, out fF, 0.0, 0.5);
+        };
+        Check("Dev + consolidate=0.5 (analytic)", devConsHalf, P);
+        EnergyFunc devConsHalfNum = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            DevelopabilityEnergy.ComputeNumericalGrad(Pm, out eb, out gb, 0.0, 0.5);
+        };
+        Check("Dev + consolidate=0.5 (numerical via VertexEnergy)", devConsHalfNum, P);
+        AnalyzeDevFunc("Dev + consolidate=0.5 ", devConsHalf, P);
+        EnergyFunc maxCov = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            bool[] fF;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(Pm, out eb, out gb, out fF, 0.0, 0.0, true);
+        };
+        Check("MaxCov                (analytic)", maxCov, P);
+        EnergyFunc maxCovNum = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            DevelopabilityEnergy.ComputeNumericalGrad(Pm, out eb, out gb, 0.0, 0.0, true);
+        };
+        Check("MaxCov                (numerical via VertexEnergy)", maxCovNum, P);
+        AnalyzeDevFunc("MaxCov ", maxCov, P);
+        EnergyFunc craze = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            bool[] fF;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(Pm, out eb, out gb, out fF, 0.0, 0.0, false, 4.0, 0.5);
+        };
+        Check("deCraze=0.5            (analytic)", craze, P);
+        EnergyFunc crazeNum = (PlanktonMesh Pm, out double[] eb, out Vec3[] gb) =>
+        {
+            DevelopabilityEnergy.ComputeNumericalGrad(Pm, out eb, out gb, 0.0, 0.0, false, 4.0, 0.5);
+        };
+        Check("deCraze=0.5            (numerical via VertexEnergy)", crazeNum, P);
+        AnalyzeDevFunc("deCraze=0.5 ", craze, P);
 
+        Console.WriteLine();
+        // Perf bench: time CHA in each config on a realistic-sized mesh so we can SEE what's
+        // actually slow vs guessing. Bunny (13K verts) is representative; bumpy grid (49 verts)
+        // is too small to register past noise.
+        PerfBench(@"C:\Temp\BunnyScraped.stl");
         Console.WriteLine();
         FlowTest(BuildBumpyGrid(11), 400);
         Console.WriteLine();
@@ -73,7 +114,190 @@ class Program
         FlowAndWatch(@"C:\Temp\AbouttoBlow.stl", 40, 0.05, 0.9);
         Console.WriteLine();
         TrackPoint(@"C:\Temp\AbouttoBlow.stl", -14.495, 12.292, -21.835, 20, 0.05, 0.9);
+        Console.WriteLine();
+        InspectMesh(@"C:\Temp\Twisted Ribbon.stl");
+        Console.WriteLine();
+        FlowAndWatch(@"C:\Temp\Twisted Ribbon.stl", 200, 0.05, 0.9, 0.0, 0.0);
+        Console.WriteLine();
+        // With B.2 consolidation at SMALL weight: the Twisted Ribbon starts at a partition-tie
+        // KINK (within-cluster sums all ~0 with multiple optimal partitions), so finite-step
+        // Nesterov amplifies FP noise and the energy grows even though the subgradient is correct.
+        // A near-zero weight keeps the drift small enough to see the behaviour without divergence.
+        FlowAndWatch(@"C:\Temp\Twisted Ribbon.stl", 60, 0.05, 0.0, 0.0, 0.05);
+        Console.WriteLine();
+        // Mesh Cube: canonical piecewise-developable. Every term SHOULD read 0 at every vertex.
+        // Run InspectMesh + zero-momentum flows with each term in isolation to see which one drifts.
+        InspectMesh(@"C:\Temp\Mesh Cube.stl");
+        Console.WriteLine();
+        FlowAndWatch(@"C:\Temp\Mesh Cube.stl", 40, 0.05, 0.0, 0.0, 0.0);
+        Console.WriteLine();
+        FlowAndWatch(@"C:\Temp\Mesh Cube.stl", 40, 0.05, 0.0, 0.05, 0.0);
+        Console.WriteLine();
+        FlowAndWatch(@"C:\Temp\Mesh Cube.stl", 40, 0.05, 0.0, 0.0, 0.05);
+        Console.WriteLine();
+        CompareEnergies(@"C:\Temp\Bunny PreSmooyj 2026-06-15.stl", @"C:\Temp\BunnyScraped.stl");
+        Console.WriteLine();
+        CompareThreeEnergies(@"C:\Temp\Bunny PreSmooyj 2026-06-15.stl",
+                             @"C:\Temp\BunnyScraped.stl",
+                             @"C:\Temp\BunnyScrapedR2.stl");
         return 0;
+    }
+
+    static void CompareThreeEnergies(string pathA, string pathB, string pathC)
+    {
+        Console.WriteLine("=== Three-way compare: " + System.IO.Path.GetFileNameWithoutExtension(pathA) +
+            "  vs  " + System.IO.Path.GetFileNameWithoutExtension(pathB) +
+            "  vs  " + System.IO.Path.GetFileNameWithoutExtension(pathC) + " ===");
+        if (!System.IO.File.Exists(pathA) || !System.IO.File.Exists(pathB) || !System.IO.File.Exists(pathC))
+        { Console.WriteLine("  (one or more files not found)"); return; }
+        PlanktonMesh PA = LoadBinaryStl(pathA);
+        PlanktonMesh PB = LoadBinaryStl(pathB);
+        PlanktonMesh PC = LoadBinaryStl(pathC);
+        Console.WriteLine("  A (PreSmooth): " + PA.Vertices.Count + " verts, " + PA.Faces.Count + " faces");
+        Console.WriteLine("  B (Scraped)  : " + PB.Vertices.Count + " verts, " + PB.Faces.Count + " faces");
+        Console.WriteLine("  C (ScrapedR2): " + PC.Vertices.Count + " verts, " + PC.Faces.Count + " faces");
+
+        Action<string, double, double, double> report3 = (name, eA, eB, eC) =>
+        {
+            Console.WriteLine("  " + name.PadRight(28) +
+                "A=" + eA.ToString("G6").PadRight(12) +
+                "B=" + eB.ToString("G6").PadRight(12) +
+                "C=" + eC.ToString("G6").PadRight(12) +
+                "  C/A=" + (eA > 1e-20 ? (100.0 * eC / eA).ToString("F1") + "%" : "n/a").PadRight(8) +
+                "C/B=" + (eB > 1e-20 ? (100.0 * eC / eB).ToString("F1") + "%" : "n/a"));
+        };
+
+        double covA = SumEnergyAll(PA, 0, 0, false), covB = SumEnergyAll(PB, 0, 0, false), covC = SumEnergyAll(PC, 0, 0, false);
+        double mxA  = SumEnergyAll(PA, 0, 0, true),  mxB  = SumEnergyAll(PB, 0, 0, true),  mxC  = SumEnergyAll(PC, 0, 0, true);
+        double bcA  = SumEnergyAll(PA, 1, 0, false), bcB  = SumEnergyAll(PB, 1, 0, false), bcC  = SumEnergyAll(PC, 1, 0, false);
+        double cnA  = SumEnergyAll(PA, 0, 1, false), cnB  = SumEnergyAll(PB, 0, 1, false), cnC  = SumEnergyAll(PC, 0, 1, false);
+        report3("Covariance lambda (sum)", covA, covB, covC);
+        report3("MaxCov lambda^max",       mxA,  mxB,  mxC);
+        report3("deBranch psi  (weight=1)", bcA - covA, bcB - covB, bcC - covC);
+        report3("deConsolidate E^P (w=1)", cnA - covA, cnB - covB, cnC - covC);
+    }
+
+    // Same-topology / different-position comparison. Reports total energy under each formulation
+    // for two meshes - the formulation whose energy DROPS from mesh A to B is the one that aligns
+    // with the direction of manual sculpting (here: combining patches to reduce crazing).
+    static void CompareEnergies(string pathA, string pathB)
+    {
+        Console.WriteLine("=== Compare energies: " + System.IO.Path.GetFileName(pathA) +
+            "  vs  " + System.IO.Path.GetFileName(pathB) + " ===");
+        if (!System.IO.File.Exists(pathA) || !System.IO.File.Exists(pathB))
+        {
+            Console.WriteLine("  (one or both files not found)");
+            return;
+        }
+        PlanktonMesh PA = LoadBinaryStl(pathA);
+        PlanktonMesh PB = LoadBinaryStl(pathB);
+        Console.WriteLine("  A: " + PA.Vertices.Count + " verts, " + PA.Faces.Count + " faces");
+        Console.WriteLine("  B: " + PB.Vertices.Count + " verts, " + PB.Faces.Count + " faces");
+
+        // Each formulation: report (totalA, totalB, delta=B-A, percent reduction).
+        Action<string, double, double> report = (name, eA, eB) =>
+        {
+            double delta = eB - eA;
+            double pct = eA > 1e-20 ? 100.0 * (1.0 - eB / eA) : double.NaN;
+            Console.WriteLine("  " + name.PadRight(28) + "A=" + eA.ToString("G10").PadRight(16) +
+                "B=" + eB.ToString("G10").PadRight(16) +
+                "  B-A=" + (delta >= 0 ? "+" : "") + delta.ToString("G6").PadRight(13) +
+                "  " + (double.IsNaN(pct) ? "" : (pct >= 0 ? "(-" + pct.ToString("F3") + "%)" : "(+" + (-pct).ToString("F3") + "%)")));
+        };
+
+        report("Covariance lambda (sum)", SumEnergyAll(PA, 0, 0, false), SumEnergyAll(PB, 0, 0, false));
+        report("MaxCov lambda^max",       SumEnergyAll(PA, 0, 0, true),  SumEnergyAll(PB, 0, 0, true));
+        report("deBranch psi (weight=1)", SumEnergyAll(PA, 1, 0, false) - SumEnergyAll(PA, 0, 0, false),
+                                          SumEnergyAll(PB, 1, 0, false) - SumEnergyAll(PB, 0, 0, false));
+        report("deConsolidate E^P (w=1)", SumEnergyAll(PA, 0, 1, false) - SumEnergyAll(PA, 0, 0, false),
+                                          SumEnergyAll(PB, 0, 1, false) - SumEnergyAll(PB, 0, 0, false));
+    }
+
+    static double SumEnergyAll(PlanktonMesh P, double branchWeight, double consolidateWeight, bool useMaxCov)
+    {
+        double s = 0;
+        for (int v = 0; v < P.Vertices.Count; v++)
+            s += DevelopabilityEnergy.VertexEnergy(P, v, branchWeight, consolidateWeight, useMaxCov);
+        return s;
+    }
+
+    // Per-edge dihedral angles + per-vertex valence + per-vertex Energy. Tells us whether a mesh
+    // is genuinely at the dev-flow minimum (small dihedrals, energy 0) or just being silently
+    // dismissed (valence < 4 -> VertexEnergy returns 0 regardless of actual normal spread).
+    static void InspectMesh(string path)
+    {
+        Console.WriteLine("=== Inspect " + System.IO.Path.GetFileName(path) + " ===");
+        if (!System.IO.File.Exists(path)) { Console.WriteLine("  (file not found)"); return; }
+        PlanktonMesh P = LoadBinaryStl(path);
+
+        int nV = P.Vertices.Count;
+        int nF = P.Faces.Count;
+        int interior = 0, boundary = 0;
+        for (int v = 0; v < nV; v++)
+        {
+            if (P.Vertices[v].IsUnused) continue;
+            if (P.Vertices.IsBoundary(v)) boundary++; else interior++;
+        }
+        Console.WriteLine("  " + nV + " verts (" + interior + " interior, " + boundary + " boundary), " + nF + " faces");
+
+        // Valence + Energy table for INTERIOR vertices only (boundary verts have Energy=0 by guard)
+        Console.WriteLine("  --- interior vertex valences + Energy ---");
+        int subValence4 = 0, val4 = 0, val5 = 0, val6 = 0, valGE7 = 0;
+        for (int v = 0; v < nV; v++)
+        {
+            if (P.Vertices[v].IsUnused || P.Vertices.IsBoundary(v)) continue;
+            int val = P.Vertices.GetVertexNeighbours(v).Length;
+            double e = DevelopabilityEnergy.VertexEnergy(P, v);
+            if (val < 4) subValence4++;
+            else if (val == 4) val4++;
+            else if (val == 5) val5++;
+            else if (val == 6) val6++;
+            else valGE7++;
+            Console.WriteLine("    v" + v.ToString().PadLeft(3) + "  valence=" + val + "  Energy=" + e.ToString("G5"));
+        }
+        Console.WriteLine("  valence histogram (interior): <4=" + subValence4 + "  4=" + val4 + "  5=" + val5 + "  6=" + val6 + "  >=7=" + valGE7);
+        if (subValence4 > 0)
+            Console.WriteLine("  WARNING: " + subValence4 + " interior verts have valence<4 -- VertexEnergy returns 0 there by guard, NOT by being developable");
+
+        // Per-edge dihedral angles. Pair (h, h+1) is one edge.
+        Console.WriteLine("  --- edge dihedrals (interior edges only) ---");
+        int nE = 0;
+        double maxDihedral = 0;
+        double sumAbsDihedral = 0;
+        int countAbove01 = 0;   // > ~5.7 deg
+        int countAbove1 = 0;    // > ~57 deg
+        for (int h = 0; h < P.Halfedges.Count; h += 2)
+        {
+            if (P.Halfedges[h].IsUnused) continue;
+            int fA = P.Halfedges[h].AdjacentFace;
+            int fB = P.Halfedges[h + 1].AdjacentFace;
+            if (fA < 0 || fB < 0) continue;   // boundary edge, no dihedral
+            // Face normals
+            Vec3 NA = FaceNormal(P, fA);
+            Vec3 NB = FaceNormal(P, fB);
+            double c = NA * NB;
+            if (c > 1) c = 1; else if (c < -1) c = -1;
+            double dihedral = Math.Acos(c);
+            if (dihedral > maxDihedral) maxDihedral = dihedral;
+            sumAbsDihedral += dihedral;
+            if (dihedral > 0.1) countAbove01++;
+            if (dihedral > 1.0) countAbove1++;
+            nE++;
+        }
+        Console.WriteLine("  " + nE + " interior edges, max dihedral = " + (maxDihedral * 180.0 / Math.PI).ToString("F3") +
+            " deg, mean = " + (sumAbsDihedral / Math.Max(1, nE) * 180.0 / Math.PI).ToString("F3") +
+            " deg, " + countAbove01 + " > 5.7 deg, " + countAbove1 + " > 57 deg");
+
+        Console.WriteLine("  total Energy via VertexEnergy = " + SumEnergy(P).ToString("G5"));
+    }
+
+    static Vec3 FaceNormal(PlanktonMesh P, int f)
+    {
+        int[] fv = P.Faces.GetFaceVertices(f);
+        Vec3 a = Pos(P, fv[0]); Vec3 b = Pos(P, fv[1]); Vec3 c = Pos(P, fv[2]);
+        Vec3 cr = Vec3.Cross(b - a, c - a);
+        double L = cr.Length;
+        return L > 1e-30 ? cr / L : Vec3.Zero;
     }
 
     // Locate the vertex nearest a world point and follow its fan through the flow: report its
@@ -147,15 +371,31 @@ class Program
         }
     }
 
-    // Run the EXACT SheetBender flow (collapse + Nesterov momentum + velocity cap, energy guard
-    // active) on the mesh and watch for the explosion; on blow-up, dump the culprit vertex so we
-    // can see the failing quantity (coherence = fold? minAspect = sliver? minEdge = short edge?).
     static void FlowAndWatch(string path, int steps, double step, double beta)
     {
-        Console.WriteLine("=== Flow & watch (Step=" + step + ", beta=" + beta + ") ===");
+        FlowAndWatch(path, steps, step, beta, 0.0, 0.0);
+    }
+
+    static void FlowAndWatch(string path, int steps, double step, double beta, double branchWeight)
+    {
+        FlowAndWatch(path, steps, step, beta, branchWeight, 0.0);
+    }
+
+    // Run the EXACT CreaseMachine flow (collapse + Nesterov momentum + velocity cap, energy guard
+    // active, optional B.5.1 branching at branchWeight, optional B.2 consolidation at
+    // consolidateWeight) on the mesh and watch for the explosion; on blow-up, dump the culprit
+    // vertex so we can see the failing quantity (coherence = fold? minAspect = sliver? minEdge =
+    // short edge?). Reports total Energy and maxGrad each step.
+    static void FlowAndWatch(string path, int steps, double step, double beta, double branchWeight, double consolidateWeight)
+    {
+        Console.WriteLine("=== Flow & watch (Step=" + step + ", beta=" + beta +
+            (branchWeight > 0 ? ", deBranch=" + branchWeight : "") +
+            (consolidateWeight > 0 ? ", deConsolidate=" + consolidateWeight : "") +
+            ") " + System.IO.Path.GetFileName(path) + " ===");
         if (!System.IO.File.Exists(path)) { Console.WriteLine("  (file not found)"); return; }
         PlanktonMesh P = LoadBinaryStl(path);
         Vec3[] vel = new Vec3[P.Vertices.Count];
+        double startE = double.NaN;
 
         for (int s = 0; s < steps; s++)
         {
@@ -174,10 +414,12 @@ class Program
                     P.Vertices.SetVertex(v, bx[v] + beta * vel[v].X, by[v] + beta * vel[v].Y, bz[v] + beta * vel[v].Z);
             }
             double[] e; Vec3[] g; bool[] fold;
-            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out fold);   // P is at the LOOKAHEAD
-            double maxg = 0; int argmax = -1;
-            for (int v = 0; v < nV; v++) { double m = g[v].Length; if (m > maxg) { maxg = m; argmax = v; } }
-            Console.WriteLine("  step " + s.ToString().PadLeft(2) + " verts=" + nV + " maxGrad=" + maxg.ToString("G5"));
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out fold, branchWeight, consolidateWeight);   // P is at the LOOKAHEAD
+            double maxg = 0; int argmax = -1; double totalE = 0;
+            for (int v = 0; v < nV; v++) { double m = g[v].Length; if (m > maxg) { maxg = m; argmax = v; } totalE += e[v]; }
+            if (double.IsNaN(startE)) startE = totalE;
+            Console.WriteLine("  step " + s.ToString().PadLeft(3) + " verts=" + nV.ToString().PadLeft(4) +
+                " Energy=" + totalE.ToString("G5").PadRight(10) + " maxGrad=" + maxg.ToString("G5"));
 
             if (double.IsNaN(maxg) || maxg > 30)
             {
@@ -213,6 +455,9 @@ class Program
             int healed = MeshOps.CollapseFolds(P, fold);
             if (healed > 0) { P.Compact(); vel = new Vec3[P.Vertices.Count]; Console.WriteLine("    healed " + healed + " fold(s) -> verts=" + P.Vertices.Count); }
         }
+        double endE = SumEnergy(P);
+        Console.WriteLine("  start Energy = " + startE.ToString("G5") + " ,  end Energy = " + endE.ToString("G5") +
+            (endE < startE ? "  (descended " + (100.0 * (1.0 - endE / startE)).ToString("F1") + "%)" : "  (DID NOT DESCEND)"));
     }
 
     // Load the user's "about to explode" mesh and find WHICH vertices have the biggest gradient
@@ -271,6 +516,99 @@ class Program
         foreach (int n in nb) { double d = (Pos(P, v) - Pos(P, n)).Length; if (d < minEdge) minEdge = d; }
         if (minEdge == double.MaxValue) minEdge = 0;
         if (minAspect == double.MaxValue) minAspect = 0;
+    }
+
+    // CHA microbench: time a representative mesh in every config the CreaseMachine exposes, so
+    // we can see where time actually goes vs intuition. Each config runs WARMUP_ITERS untimed
+    // (JIT + cache warmup), then BENCH_ITERS timed; reports mean ms and per-call ops/sec.
+    static void PerfBench(string path)
+    {
+        Console.WriteLine("=== CHA perf bench: " + System.IO.Path.GetFileName(path) + " ===");
+        if (!System.IO.File.Exists(path)) { Console.WriteLine("  (file not found)"); return; }
+        PlanktonMesh P = LoadBinaryStl(path);
+        int nV = P.Vertices.Count, nF = P.Faces.Count;
+        Console.WriteLine("  mesh: " + nV + " verts, " + nF + " faces");
+        Console.WriteLine();
+
+        const int WARMUP = 3;
+        const int ITERS  = 20;
+        var sw = new System.Diagnostics.Stopwatch();
+
+        double tickToMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        Action<string, Action> bench = (label, fn) =>
+        {
+            for (int i = 0; i < WARMUP; i++) fn();
+            // GC right before measurement, then suppress collections inside the loop
+            GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+            CHAStats.Reset();
+            CHAStats.Enabled = true;
+            sw.Restart();
+            for (int i = 0; i < ITERS; i++) fn();
+            sw.Stop();
+            CHAStats.Enabled = false;
+            double meanMs = sw.Elapsed.TotalMilliseconds / ITERS;
+            int calls = Math.Max(1, CHAStats.Calls);
+            double facePcMs   = CHAStats.FacePrecomputeTicks  * tickToMs / calls;
+            double vertNorMs  = CHAStats.VertNormalsTicks     * tickToMs / calls;
+            double perVertMs  = CHAStats.PerVertexLoopTicks   * tickToMs / calls;
+            double l1Ms       = CHAStats.L1Ticks              * tickToMs / calls;
+            double gvfMs      = CHAStats.GetVertexFacesTicks  * tickToMs / calls;
+            double gfvMs      = CHAStats.GetFaceVertsTicks    * tickToMs / calls;
+            double otherMs    = meanMs - facePcMs - vertNorMs - perVertMs - l1Ms;
+            Console.WriteLine("  " + label.PadRight(48) + meanMs.ToString("F2").PadLeft(8) + " ms/call" +
+                "   [facePc " + facePcMs.ToString("F1") + "  vN " + vertNorMs.ToString("F1") +
+                "  perV " + perVertMs.ToString("F1") + "  L1 " + l1Ms.ToString("F1") +
+                "  other " + otherMs.ToString("F1") +
+                "  (GFV " + gfvMs.ToString("F1") + " GVF " + gvfMs.ToString("F1") + ")]");
+        };
+
+        double[] e; Vec3[] g; bool[] ff;
+
+        // Baselines
+        bench("covariance only, grad (flow path)", () => {
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff,
+                0.0, 0.0, false, 4.0, 0.0);
+        });
+        bench("covariance only, energy-only (output path)", () => {
+            DevelopabilityEnergy.ComputeHingeEnergy(P, out e, out ff,
+                0.0, 0.0, false, 4.0, 0.0);
+        });
+
+        // deCraze (L1) - what the user currently runs
+        bench("+ deCraze=0.5, grad", () => {
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff,
+                0.0, 0.0, false, 4.0, 0.5);
+        });
+        bench("+ deCraze=0.5, energy-only", () => {
+            DevelopabilityEnergy.ComputeHingeEnergy(P, out e, out ff,
+                0.0, 0.0, false, 4.0, 0.5);
+        });
+
+        // deBranch (B.5.1) - O(m^4) enumeration per vertex
+        bench("+ deBranch=0.5, grad", () => {
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff,
+                0.5, 0.0, false, 4.0, 0.0);
+        });
+
+        // deConsolidate (B.2) - O(m^2*m) enumeration
+        bench("+ deConsolidate=0.5, grad", () => {
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff,
+                0.0, 0.5, false, 4.0, 0.0);
+        });
+
+        // useMaxCov (B.4) - O(m^3) enumeration
+        bench("useMaxCov, grad", () => {
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff,
+                0.0, 0.0, true, 4.0, 0.0);
+        });
+
+        // Combined: simulate one full Grasshopper solve (flow + output)
+        bench("flow CHA + energy output (cov+deCraze=0.5)", () => {
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff,
+                0.0, 0.0, false, 4.0, 0.5);
+            DevelopabilityEnergy.ComputeHingeEnergy(P, out e, out ff,
+                0.0, 0.0, false, 4.0, 0.5);
+        });
     }
 
     static PlanktonMesh LoadBinaryStl(string path)
@@ -485,7 +823,7 @@ class Program
             (maxRel < 1e-3 ? "SCALE-INVARIANT" : "NOT invariant"));
     }
 
-    // Run the SheetBender flow (analytic grad, global step t = step*L^2) and return the energy
+    // Run the CreaseMachine flow (analytic grad, global step t = step*L^2) and return the energy
     // at each step. Shared shape with FlowTest, minus the printing.
     static double[] FlowEnergies(PlanktonMesh P, int steps, double step)
     {
@@ -594,7 +932,7 @@ class Program
 
             // paper-faithful step (reference LINESEARCH_NONE): a SINGLE global step size,
             // p = -grad, V += step*p. No per-vertex cap or normalization (both #undef in the
-            // reference). Boundary vertices stay put. This mirrors exactly what SheetBender does:
+            // reference). Boundary vertices stay put. This mirrors exactly what CreaseMachine does:
             // step is a fraction of edge length, scaled as L^2 so it is scale/subdivision-invariant
             // (the dev gradient carries 1/length units). Here L=1, so L^2 == L - same result.
             double t = step * L * L;
