@@ -1,9 +1,9 @@
 # CreaseMachine - Human authored ReadMe, agentic code.
 
 This GH component builds surfaces based on **Stein, Grinspun & Crane**, 
-*"Developability of Triangle Meshes"* (ACM TOG 37(4), 2018), with optional 
-paper-faithful subgradients based on sections B.2 / B.4 / B.5.1. "Decraze"
-is my own force. All four of these seem to conflict with the main
+*"Developability of Triangle Meshes"* (ACM TOG 37(4), 2018), with all of the
+papers 'subgradients' (forces) which are listed in sections B.2 / B.4 / B.5.1. 
+"Decraze" is my (our?) own force. All four of these seem to conflict with the main
 developablize force and create jitter at high step sizes.
 
 Subdividng in the middle of the run helps add resolution. Sometimes
