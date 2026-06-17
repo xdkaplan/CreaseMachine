@@ -151,6 +151,19 @@ namespace CreaseMachine
               + "kill twist on icosahedra / quads without changing the rest of the flow's character. "
               + "Try 0.05 - 0.2 as a starting point. Live-tunable.",
                 GH_ParamAccess.item, 0.0);
+
+            //13
+            pManager.AddNumberParameter("Stabilize", "Stabilize",
+                "Weight (0 to ~0.5) of the projected tangential relaxer - the vertex-slippage fix. "
+              + "Pulls each interior vertex a fraction of the way toward its 1-ring centroid, but "
+              + "FIRST removes the part of that pull lying along the developability gradient, so the "
+              + "motion is confined to the zero-energy (developable-preserving) directions. It cannot "
+              + "oppose or assist the develop force and does not move the converged shape - it only "
+              + "stops low-angle, multi-panel vertices from sliding along their normal/tangent plane "
+              + "(the 'slippage' that turns symmetric inputs like icosahedra oblong). Internally "
+              + "scale/resolution-invariant (no per-mesh tuning); the weight only sets how fast slip "
+              + "is damped. 0 = off. Start ~0.2. Live-tunable.",
+                GH_ParamAccess.item, 0.0);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -209,6 +222,7 @@ namespace CreaseMachine
             public double sharpness;
             public double deCraze;
             public double detMix;
+            public double stabilize;
             public bool subdivRequest;   // edge-triggered: SolveInstance sets, worker consumes
         }
 
@@ -227,6 +241,7 @@ namespace CreaseMachine
             double deCraze = 0.0;
             bool running = false;
             double detMix = 0.0;
+            double stabilize = 0.0;
 
             DA.GetData(0, ref inMesh);
             DA.GetData(1, ref Step);
@@ -242,6 +257,8 @@ namespace CreaseMachine
             DA.GetData(11, ref running);
             DA.GetData(12, ref detMix);
             if (detMix < 0) detMix = 0; else if (detMix > 1) detMix = 1;
+            DA.GetData(13, ref stabilize);
+            if (stabilize < 0) stabilize = 0;
 
             // --- (Re)initialize from the input mesh ---
             if (reset || !initialized)
@@ -278,6 +295,7 @@ namespace CreaseMachine
                 shared.sharpness = sharpness;
                 shared.deCraze = deCraze;
                 shared.detMix = detMix;
+                shared.stabilize = stabilize;
                 if (subdiv && !prevSubdiv) shared.subdivRequest = true;
             }
             prevSubdiv = subdiv;
@@ -304,7 +322,7 @@ namespace CreaseMachine
         private void DoFlowStep()
         {
             // Snapshot current params under sharedLock to avoid holding it through the whole step.
-            double Step, Momentum, deBranch, deConsolidate, sharpness, deCraze, detMix;
+            double Step, Momentum, deBranch, deConsolidate, sharpness, deCraze, detMix, stabilize;
             int Iter;
             bool useMaxCov, subdivRequest;
             lock (sharedLock)
@@ -318,6 +336,7 @@ namespace CreaseMachine
                 sharpness = shared.sharpness;
                 deCraze = shared.deCraze;
                 detMix = shared.detMix;
+                stabilize = shared.stabilize;
                 subdivRequest = shared.subdivRequest;
                 shared.subdivRequest = false;
             }
@@ -387,6 +406,12 @@ namespace CreaseMachine
                     if (vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);
                     P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
                 }
+
+                // Slippage stabilizer: a tangential relax confined to the developable level set
+                // (projected off the dev gradient `grad` just computed). Position-only, so it
+                // leaves the momentum velocity untouched. eps floor = 0.25 * median|grad|.
+                if (stabilize > 0.0)
+                    MeshOps.ProjectedTangentialRelax(P, grad, stabilize, 0.25);
             }
 
             if (foldFlags != null && MeshOps.CollapseFolds(P, foldFlags) > 0)

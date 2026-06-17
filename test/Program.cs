@@ -1211,38 +1211,46 @@ class Program
     static void RunSlippageFixture(string name, PlanktonMesh seed, int steps, double step)
     {
         Console.WriteLine("  -- " + name + "  (steps=" + steps + ", step=" + step + ") --");
-        Console.WriteLine("     config                      axisRatio (start -> end)     energy (start -> end)     maxDrift");
+        Console.WriteLine("     config                          axisRatio (start -> end)  energy (start -> end)    maxDrift");
 
-        double[] detMixes = { 0.0, 1.0 };
-        double[] betas = { 0.0, 0.9 };
-        foreach (double dm in detMixes)
-            foreach (double beta in betas)
-            {
-                PlanktonMesh P = CloneMesh(seed);
-                double ar0 = PrincipalAxisRatio(P);
-                double e0 = SumEnergy(P);
-                int nV = P.Vertices.Count;
-                double[] ix = new double[nV], iy = new double[nV], iz = new double[nV];
-                SnapshotCentered(P, ix, iy, iz);
+        // The 2x2 source-diagnosis ladder: which mechanism is live?
+        RunSlipRow("detMix=0.0 mom=0.00",           seed, steps, step, 0.0, 0.00, 0.0);
+        RunSlipRow("detMix=0.0 mom=0.90",           seed, steps, step, 0.0, 0.90, 0.0);
+        RunSlipRow("detMix=1.0 mom=0.00",           seed, steps, step, 1.0, 0.00, 0.0);
+        RunSlipRow("detMix=1.0 mom=0.90",           seed, steps, step, 1.0, 0.90, 0.0);
+        // The stabilizer rows: the relaxer should drop axisRatio growth on the WORST baseline
+        // (detMix=0 mom=0.9) WITHOUT raising the energy floor vs that same baseline.
+        RunSlipRow("detMix=0.0 mom=0.90 relax=0.3", seed, steps, step, 0.0, 0.90, 0.3);
+        RunSlipRow("detMix=1.0 mom=0.90 relax=0.3", seed, steps, step, 1.0, 0.90, 0.3);
+    }
 
-                bool diverged = FlowNesterovDetMix(P, steps, step, beta, dm, true);
+    static void RunSlipRow(string label, PlanktonMesh seed, int steps, double step,
+                           double detMix, double beta, double relax)
+    {
+        PlanktonMesh P = CloneMesh(seed);
+        double ar0 = PrincipalAxisRatio(P);
+        double e0 = SumEnergy(P);
+        int nV = P.Vertices.Count;
+        double[] ix = new double[nV], iy = new double[nV], iz = new double[nV];
+        SnapshotCentered(P, ix, iy, iz);
 
-                double ar1 = PrincipalAxisRatio(P);
-                double e1 = SumEnergy(P);
-                double drift = MaxCenteredDrift(P, ix, iy, iz);
+        bool diverged = FlowNesterovDetMix(P, steps, step, beta, detMix, relax, true);
 
-                string label = "detMix=" + dm.ToString("F1") + " mom=" + beta.ToString("F2") +
-                               (diverged ? " (DIVERGED)" : "");
-                Console.WriteLine("     " + label.PadRight(28) +
-                    (ar0.ToString("F4") + " -> " + ar1.ToString("F4")).PadRight(29) +
-                    (e0.ToString("G4") + " -> " + e1.ToString("G4")).PadRight(26) +
-                    drift.ToString("G4"));
-            }
+        double ar1 = PrincipalAxisRatio(P);
+        double e1 = SumEnergy(P);
+        double drift = MaxCenteredDrift(P, ix, iy, iz);
+
+        string lab = label + (diverged ? " (DIVERGED)" : "");
+        Console.WriteLine("     " + lab.PadRight(32) +
+            (ar0.ToString("F4") + " -> " + ar1.ToString("F4")).PadRight(26) +
+            (e0.ToString("G4") + " -> " + e1.ToString("G4")).PadRight(24) +
+            drift.ToString("G4"));
     }
 
     // Run the same Nesterov step the live component uses (lookahead, raw grad, t = step*L^2,
-    // velocity capped at one edge), but with detMix wired through. Returns true if it diverged.
-    static bool FlowNesterovDetMix(PlanktonMesh P, int steps, double step, double beta, double detMix, bool cap)
+    // velocity capped at one edge), with detMix wired through and an optional projected-tangential
+    // relax (the slippage stabilizer) applied per step. Returns true if it diverged.
+    static bool FlowNesterovDetMix(PlanktonMesh P, int steps, double step, double beta, double detMix, double relaxWeight, bool cap)
     {
         double L = RepEdge(P);
         double alpha = step * L * L;
@@ -1273,6 +1281,9 @@ class Program
                 if (cap && vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);
                 P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
             }
+
+            if (relaxWeight > 0.0)
+                MeshOps.ProjectedTangentialRelax(P, g, relaxWeight, 0.25);
         }
         return false;
     }
