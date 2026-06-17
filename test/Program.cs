@@ -98,6 +98,8 @@ class Program
         Console.WriteLine();
         OptimizerComparison();
         Console.WriteLine();
+        SlippageTest();
+        Console.WriteLine();
         DegeneracyTest();
         Console.WriteLine();
         CollapseTest();
@@ -1171,5 +1173,287 @@ class Program
                 P.Faces.AddFace(a, c, d);
             }
         return P;
+    }
+
+    // ===================================================================================
+    // Vertex-slippage / symmetry instrument.
+    //
+    // WHY: at a low-angle, multi-panel vertex the normal covariance is near-degenerate
+    // (lambda_min ~= lambda_max, both small), so the paper's lambda_min energy picks a
+    // direction-arbitrary eigenvector and emits a small but mis-aimed gradient. That
+    // gradient lives mostly INSIDE the developable level set, so it slides the vertex
+    // along a zero-energy direction ("slippage") instead of reducing energy. Nesterov
+    // momentum and the per-vertex velocity cap then amplify the drift. A high-symmetry
+    // icosahedron / icosphere is the cleanest fixture: a perfectly symmetric vertex cloud
+    // has principal-axis ratio 1.000, and any slippage breaks that symmetry, driving the
+    // ratio above 1 (the "oblong distortion" noted in HANDOFF.md s5).
+    //
+    // This is a MEASUREMENT, not a fix. It runs the 2x2 ladder
+    //   detMix in {0, 1}  x  momentum in {0, 0.9}
+    // so the primary agent can read which mechanism is live BEFORE any stabilizer is
+    // committed. Expected reading if the diagnosis holds: detMix=1 collapses the
+    // axis-ratio growth (the artifact is in the gradient direction, fixed at the source
+    // by the basis-invariant det blend), and it does so WITHOUT changing the energy floor
+    // (det(M) = lambda_min*lambda_max has the SAME zero set as lambda_min).
+    // ===================================================================================
+    static void SlippageTest()
+    {
+        Console.WriteLine("=== Vertex slippage / symmetry (icosahedron + icosphere) ===");
+        Console.WriteLine("  metric: principal-axis ratio of the vertex cloud (1.0000 = perfectly symmetric);");
+        Console.WriteLine("          energy = sum of paper lambda_min (common yardstick across rows).");
+        Console.WriteLine("          A fix that only de-aliases the gradient must drop axisRatio growth");
+        Console.WriteLine("          while leaving the energy floor unchanged.");
+
+        RunSlippageFixture("icosahedron (12v/20f)", BuildIcosahedron(), 150, 0.02);
+        RunSlippageFixture("icosphere L1 (42v/80f)", BuildIcosphere(1), 150, 0.02);
+    }
+
+    static void RunSlippageFixture(string name, PlanktonMesh seed, int steps, double step)
+    {
+        Console.WriteLine("  -- " + name + "  (steps=" + steps + ", step=" + step + ") --");
+        Console.WriteLine("     config                      axisRatio (start -> end)     energy (start -> end)     maxDrift");
+
+        double[] detMixes = { 0.0, 1.0 };
+        double[] betas = { 0.0, 0.9 };
+        foreach (double dm in detMixes)
+            foreach (double beta in betas)
+            {
+                PlanktonMesh P = CloneMesh(seed);
+                double ar0 = PrincipalAxisRatio(P);
+                double e0 = SumEnergy(P);
+                int nV = P.Vertices.Count;
+                double[] ix = new double[nV], iy = new double[nV], iz = new double[nV];
+                SnapshotCentered(P, ix, iy, iz);
+
+                bool diverged = FlowNesterovDetMix(P, steps, step, beta, dm, true);
+
+                double ar1 = PrincipalAxisRatio(P);
+                double e1 = SumEnergy(P);
+                double drift = MaxCenteredDrift(P, ix, iy, iz);
+
+                string label = "detMix=" + dm.ToString("F1") + " mom=" + beta.ToString("F2") +
+                               (diverged ? " (DIVERGED)" : "");
+                Console.WriteLine("     " + label.PadRight(28) +
+                    (ar0.ToString("F4") + " -> " + ar1.ToString("F4")).PadRight(29) +
+                    (e0.ToString("G4") + " -> " + e1.ToString("G4")).PadRight(26) +
+                    drift.ToString("G4"));
+            }
+    }
+
+    // Run the same Nesterov step the live component uses (lookahead, raw grad, t = step*L^2,
+    // velocity capped at one edge), but with detMix wired through. Returns true if it diverged.
+    static bool FlowNesterovDetMix(PlanktonMesh P, int steps, double step, double beta, double detMix, bool cap)
+    {
+        double L = RepEdge(P);
+        double alpha = step * L * L;
+        double capLen = L;
+        int nV = P.Vertices.Count;
+        Vec3[] vel = new Vec3[nV];
+        double[] bx = new double[nV], by = new double[nV], bz = new double[nV];
+
+        for (int s = 0; s < steps; s++)
+        {
+            for (int v = 0; v < nV; v++)
+            {
+                bx[v] = P.Vertices[v].X; by[v] = P.Vertices[v].Y; bz[v] = P.Vertices[v].Z;
+                if (beta > 0 && !P.Vertices.IsBoundary(v) && vel[v].IsValid)
+                    P.Vertices.SetVertex(v, bx[v] + beta * vel[v].X, by[v] + beta * vel[v].Y, bz[v] + beta * vel[v].Z);
+            }
+
+            double[] e; Vec3[] g; bool[] ff;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(
+                P, out e, out g, out ff, 0.0, 0.0, false, 4.0, 0.0, true, null, detMix);
+
+            for (int v = 0; v < nV; v++)
+            {
+                if (P.Vertices.IsBoundary(v)) { P.Vertices.SetVertex(v, bx[v], by[v], bz[v]); continue; }
+                if (!g[v].IsValid) return true;
+                vel[v] = beta * vel[v] - alpha * g[v];
+                double vl = vel[v].Length;
+                if (cap && vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);
+                P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
+            }
+        }
+        return false;
+    }
+
+    // Principal-axis ratio = sqrt(lambda_max / lambda_min) of the vertex-position covariance
+    // about the centroid. Isotropic cloud -> 1.0; an oblong cloud grows above 1.
+    static double PrincipalAxisRatio(PlanktonMesh P)
+    {
+        int nV = P.Vertices.Count, n = 0;
+        double cx = 0, cy = 0, cz = 0;
+        for (int v = 0; v < nV; v++)
+        {
+            if (P.Vertices[v].IsUnused) continue;
+            cx += P.Vertices[v].X; cy += P.Vertices[v].Y; cz += P.Vertices[v].Z; n++;
+        }
+        if (n < 3) return 1.0;
+        cx /= n; cy /= n; cz /= n;
+
+        double sxx = 0, syy = 0, szz = 0, sxy = 0, sxz = 0, syz = 0;
+        for (int v = 0; v < nV; v++)
+        {
+            if (P.Vertices[v].IsUnused) continue;
+            double dx = P.Vertices[v].X - cx, dy = P.Vertices[v].Y - cy, dz = P.Vertices[v].Z - cz;
+            sxx += dx * dx; syy += dy * dy; szz += dz * dz;
+            sxy += dx * dy; sxz += dx * dz; syz += dy * dz;
+        }
+        double[,] m = new double[3, 3] { { sxx, sxy, sxz }, { sxy, syy, syz }, { sxz, syz, szz } };
+        double l0, l1, l2; Jacobi3(m, out l0, out l1, out l2);
+        double lo = Math.Min(l0, Math.Min(l1, l2));
+        double hi = Math.Max(l0, Math.Max(l1, l2));
+        if (lo <= 1e-20) return double.PositiveInfinity;
+        return Math.Sqrt(hi / lo);
+    }
+
+    // Cyclic Jacobi eigenvalues of a 3x3 symmetric matrix (eigenvalues only, order arbitrary).
+    static void Jacobi3(double[,] m, out double l0, out double l1, out double l2)
+    {
+        for (int sweep = 0; sweep < 60; sweep++)
+        {
+            double off = Math.Abs(m[0, 1]) + Math.Abs(m[0, 2]) + Math.Abs(m[1, 2]);
+            if (off < 1e-20) break;
+            for (int p = 0; p < 3; p++)
+                for (int q = p + 1; q < 3; q++)
+                {
+                    double apq = m[p, q];
+                    if (Math.Abs(apq) < 1e-300) continue;
+                    int r = 3 - p - q;
+                    double app = m[p, p], aqq = m[q, q];
+                    double theta = (aqq - app) / (2.0 * apq);
+                    double t = Math.Sign(theta) / (Math.Abs(theta) + Math.Sqrt(theta * theta + 1.0));
+                    if (theta == 0.0) t = 1.0;
+                    double c = 1.0 / Math.Sqrt(t * t + 1.0), sn = t * c;
+                    double apr = m[p, r], aqr = m[q, r];
+                    m[p, p] = app - t * apq;
+                    m[q, q] = aqq + t * apq;
+                    m[p, q] = 0.0; m[q, p] = 0.0;
+                    m[p, r] = c * apr - sn * aqr; m[r, p] = m[p, r];
+                    m[q, r] = sn * apr + c * aqr; m[r, q] = m[q, r];
+                }
+        }
+        l0 = m[0, 0]; l1 = m[1, 1]; l2 = m[2, 2];
+    }
+
+    static void SnapshotCentered(PlanktonMesh P, double[] ox, double[] oy, double[] oz)
+    {
+        int nV = P.Vertices.Count, n = 0;
+        double cx = 0, cy = 0, cz = 0;
+        for (int v = 0; v < nV; v++) { cx += P.Vertices[v].X; cy += P.Vertices[v].Y; cz += P.Vertices[v].Z; n++; }
+        if (n > 0) { cx /= n; cy /= n; cz /= n; }
+        for (int v = 0; v < nV; v++)
+        {
+            ox[v] = P.Vertices[v].X - cx; oy[v] = P.Vertices[v].Y - cy; oz[v] = P.Vertices[v].Z - cz;
+        }
+    }
+
+    // Max per-vertex displacement after removing net translation (a coarse slippage indicator;
+    // global rotation is assumed negligible for these short flows).
+    static double MaxCenteredDrift(PlanktonMesh P, double[] ox, double[] oy, double[] oz)
+    {
+        int nV = P.Vertices.Count, n = 0;
+        double cx = 0, cy = 0, cz = 0;
+        for (int v = 0; v < nV; v++) { cx += P.Vertices[v].X; cy += P.Vertices[v].Y; cz += P.Vertices[v].Z; n++; }
+        if (n > 0) { cx /= n; cy /= n; cz /= n; }
+        double maxD = 0.0;
+        for (int v = 0; v < nV; v++)
+        {
+            double dx = (P.Vertices[v].X - cx) - ox[v];
+            double dy = (P.Vertices[v].Y - cy) - oy[v];
+            double dz = (P.Vertices[v].Z - cz) - oz[v];
+            double d = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+            if (d > maxD) maxD = d;
+        }
+        return maxD;
+    }
+
+    static PlanktonMesh CloneMesh(PlanktonMesh P)
+    {
+        var Q = new PlanktonMesh();
+        for (int v = 0; v < P.Vertices.Count; v++)
+            Q.Vertices.Add(P.Vertices[v].X, P.Vertices[v].Y, P.Vertices[v].Z);
+        for (int f = 0; f < P.Faces.Count; f++)
+        {
+            int[] fv = P.Faces.GetFaceVertices(f);
+            Q.Faces.AddFace(fv[0], fv[1], fv[2]);
+        }
+        return Q;
+    }
+
+    // Regular icosahedron, vertices projected to the unit sphere. 12 verts (all valence 5),
+    // 20 faces, consistent outward winding.
+    static PlanktonMesh BuildIcosahedron()
+    {
+        double t = (1.0 + Math.Sqrt(5.0)) / 2.0;
+        double[][] v =
+        {
+            new double[] { -1,  t,  0 }, new double[] {  1,  t,  0 }, new double[] { -1, -t,  0 }, new double[] {  1, -t,  0 },
+            new double[] {  0, -1,  t }, new double[] {  0,  1,  t }, new double[] {  0, -1, -t }, new double[] {  0,  1, -t },
+            new double[] {  t,  0, -1 }, new double[] {  t,  0,  1 }, new double[] { -t,  0, -1 }, new double[] { -t,  0,  1 }
+        };
+        var P = new PlanktonMesh();
+        for (int i = 0; i < 12; i++)
+        {
+            double x = v[i][0], y = v[i][1], z = v[i][2];
+            double l = Math.Sqrt(x * x + y * y + z * z);
+            P.Vertices.Add(x / l, y / l, z / l);
+        }
+        int[][] f =
+        {
+            new[] { 0, 11, 5 }, new[] { 0, 5, 1 }, new[] { 0, 1, 7 }, new[] { 0, 7, 10 }, new[] { 0, 10, 11 },
+            new[] { 1, 5, 9 }, new[] { 5, 11, 4 }, new[] { 11, 10, 2 }, new[] { 10, 7, 6 }, new[] { 7, 1, 8 },
+            new[] { 3, 9, 4 }, new[] { 3, 4, 2 }, new[] { 3, 2, 6 }, new[] { 3, 6, 8 }, new[] { 3, 8, 9 },
+            new[] { 4, 9, 5 }, new[] { 2, 4, 11 }, new[] { 6, 2, 10 }, new[] { 8, 6, 7 }, new[] { 9, 8, 1 }
+        };
+        for (int i = 0; i < 20; i++) P.Faces.AddFace(f[i][0], f[i][1], f[i][2]);
+        return P;
+    }
+
+    // Geodesic icosphere: icosahedron 1->4 subdivided 'levels' times, midpoints reprojected
+    // to the unit sphere (shared via an edge-keyed midpoint cache so the mesh stays manifold).
+    static PlanktonMesh BuildIcosphere(int levels)
+    {
+        PlanktonMesh P = BuildIcosahedron();
+        for (int l = 0; l < levels; l++) P = SubdivideSphere(P, 1.0);
+        return P;
+    }
+
+    static PlanktonMesh SubdivideSphere(PlanktonMesh P, double radius)
+    {
+        var Q = new PlanktonMesh();
+        for (int v = 0; v < P.Vertices.Count; v++)
+            Q.Vertices.Add(P.Vertices[v].X, P.Vertices[v].Y, P.Vertices[v].Z);
+        var mid = new System.Collections.Generic.Dictionary<long, int>();
+        for (int f = 0; f < P.Faces.Count; f++)
+        {
+            int[] fv = P.Faces.GetFaceVertices(f);
+            int a = fv[0], b = fv[1], c = fv[2];
+            int ab = EdgeMidpoint(Q, mid, a, b, radius);
+            int bc = EdgeMidpoint(Q, mid, b, c, radius);
+            int ca = EdgeMidpoint(Q, mid, c, a, radius);
+            Q.Faces.AddFace(a, ab, ca);
+            Q.Faces.AddFace(b, bc, ab);
+            Q.Faces.AddFace(c, ca, bc);
+            Q.Faces.AddFace(ab, bc, ca);
+        }
+        return Q;
+    }
+
+    static int EdgeMidpoint(PlanktonMesh Q, System.Collections.Generic.Dictionary<long, int> mid, int i, int j, double radius)
+    {
+        int lo = Math.Min(i, j), hi = Math.Max(i, j);
+        long key = ((long)lo << 32) | (uint)hi;
+        int idx;
+        if (mid.TryGetValue(key, out idx)) return idx;
+        double mx = (Q.Vertices[i].X + Q.Vertices[j].X) * 0.5;
+        double my = (Q.Vertices[i].Y + Q.Vertices[j].Y) * 0.5;
+        double mz = (Q.Vertices[i].Z + Q.Vertices[j].Z) * 0.5;
+        double len = Math.Sqrt(mx * mx + my * my + mz * mz);
+        if (len > 1e-15) { double sc = radius / len; mx *= sc; my *= sc; mz *= sc; }
+        idx = Q.Vertices.Count;
+        Q.Vertices.Add(mx, my, mz);
+        mid[key] = idx;
+        return idx;
     }
 }
