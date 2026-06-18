@@ -142,6 +142,30 @@ reduction jitter. When optimizing CHA, capture the checksums first and require e
 change to reproduce them to ~1e-9 relative — a real value bug lands far above that.
 See [`docs/PERF-CHA.md`](docs/PERF-CHA.md) for the optimization history and numbers.
 
+## Headless tooling (Rhino-less)
+
+Two front-ends over the same engine, for development / fabrication exploration without Rhino:
+
+- **`cli/`** (`CreaseCLI` → `crease.exe`): a stateful REPL. `load` a mesh, then `run N [params]`
+  to bake it incrementally (Nesterov velocity persists across runs for continuity). Numeric
+  params accept linear ramps over a run: `run 150 deCraze=0.1>0.0`. Other commands: `subdivide`,
+  `reset`, `stats`, `zero-momentum`, `export <file.obj|.ply>` (PLY carries per-vertex
+  developability energy as vertex colour). Metrics per run: developability `sumE` (regularizers
+  excluded), `maxGrad`, `panels`, `crazeRMS`, `maxDih` (crease cutoff = `CrazeBand`).
+- **`gui/`** (`CreaseGUI` → `CreaseGUI.exe`): a basic WinForms control panel that **drives
+  `crease.exe` as a subprocess** (composes commands → stdin, streams output → log). No 3D viewer;
+  Export writes PLY/OBJ for MeshLab/Blender/Rhino, with an optional auto-export-to-watch-file for
+  live-reload review. Locates `crease.exe` in `cli/bin` (Browse fallback).
+
+```sh
+dotnet build cli/CreaseCLI.csproj -c Release && cli/bin/Release/net48/crease.exe
+dotnet build gui/CreaseGUI.csproj -c Release && gui/bin/Release/net48/CreaseGUI.exe
+```
+
+Both compile the Rhino-free engine sources directly (like the bench). **Known debt:** the flow
+step is mirrored — not shared — across `CreaseMachine.DoFlowStep`, the bench, `repro/`, and the
+CLI; they must be kept in sync by hand until extracted into one shared `Flow`/`Session` class.
+
 ## Vendored dependencies
 
 `lib/Plankton.dll` and `lib/PlanktonGh.dll` are stock, unmodified upstream
