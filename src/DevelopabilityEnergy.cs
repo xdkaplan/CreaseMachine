@@ -770,7 +770,9 @@ namespace CreaseMachine
                         Vec3 dTdj = -dTli;
                         Vec3 dTdk = -dTli2;
 
-                        Vec3 fvec = 2.0 * xNfw * theta *
+                        // 2*xNfw*theta drives both fvec and factorv - compute once (bit-identical).
+                        double twoXNfwTheta = 2.0 * xNfw * theta;
+                        Vec3 fvec = twoXNfwTheta *
                             (xMuvf * muff + (phi / sinPhi) * xNuf * nuf);
 
                         double cdi = fvec * dNdp[b3 + li];
@@ -781,13 +783,14 @@ namespace CreaseMachine
                         gradLocal[j] += cwEff * (xNfw2 * dTdj + cdj * Nf);
                         gradLocal[k] += cwEff * (xNfw2 * dTdk + cdk * Nf);
 
-                        double rawLen = vertNormalsRaw[vert].Length;
-                        if (rawLen < 1e-16) continue;
+                        // rawLen is the vertex raw-normal length - loop-invariant over this vertex's
+                        // faces; reuse rawLenV from the fold guard instead of re-sqrt'ing per face.
+                        if (rawLenV < 1e-16) continue;
                         if (Math.Abs(tanPhi) < 1e-16) continue;
 
-                        Vec3 factorv = -2.0 * xNfw * theta *
+                        Vec3 factorv = -twoXNfwTheta *
                             ((xCur * (muvf + phi * Nv)) * muvf +
-                             (phi / tanPhi) * xNuf * nuf) / rawLen;
+                             (phi / tanPhi) * xNuf * nuf) / rawLenV;
                         // factorv from this pass is weighted by passW so totalFactorv is the
                         // SUM of (w_min * factorv_xmin) + (w_max * factorv_xmax) ready for the
                         // single apply step below.
@@ -1453,20 +1456,25 @@ namespace CreaseMachine
         private static void RejectKinkOutliers(PlanktonMesh P, Vec3[] grad)
         {
             int nV = P.Vertices.Count;
+            // grad[v].Length (a sqrt) was previously recomputed ~4x per vertex; compute it once
+            // into len[]. The median is built from interior vertices only, but the zeroing pass
+            // applies to ALL vertices (matching the original) - bit-identical comparisons.
+            double[] len = new double[nV];
+            for (int v = 0; v < nV; v++) len[v] = grad[v].Length;
             int m = 0;
             for (int v = 0; v < nV; v++)
-                if (!P.Vertices[v].IsUnused && !P.Vertices.IsBoundary(v) && grad[v].Length > 0) m++;
+                if (!P.Vertices[v].IsUnused && !P.Vertices.IsBoundary(v) && len[v] > 0) m++;
             if (m < 4) return;
 
             double[] mg = new double[m];
             int k = 0;
             for (int v = 0; v < nV; v++)
-                if (!P.Vertices[v].IsUnused && !P.Vertices.IsBoundary(v) && grad[v].Length > 0) mg[k++] = grad[v].Length;
+                if (!P.Vertices[v].IsUnused && !P.Vertices.IsBoundary(v) && len[v] > 0) mg[k++] = len[v];
             Array.Sort(mg);
             double thr = 8.0 * mg[m / 2];   // 8x the median magnitude
             if (thr <= 0) return;
             for (int v = 0; v < nV; v++)
-                if (grad[v].Length > thr) grad[v] = Vec3.Zero;
+                if (len[v] > thr) grad[v] = Vec3.Zero;
         }
 
         private static double Partial(PlanktonMesh P, int v, int axis, double eps)
