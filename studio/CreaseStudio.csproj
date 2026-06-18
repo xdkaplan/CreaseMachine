@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>CreaseStudio</AssemblyName>
+    <RootNamespace>CreaseStudio</RootNamespace>
+  </PropertyGroup>
+  <!-- In-process net8 WPF viewer/brush studio. Renders via OpenTK + GLWpfControl (MatCap shader
+       to come). Drives the same Rhino-free engine the plugin/CLI use, in-process. -->
+  <ItemGroup>
+    <PackageReference Include="OpenTK" Version="4.8.2" />
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+  </ItemGroup>
+</Project>
