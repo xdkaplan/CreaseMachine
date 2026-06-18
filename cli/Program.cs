@@ -334,7 +334,8 @@ static class Program
           detMix = new Ramp(dm, dm); deBranch = new Ramp(br, br); deConsolidate = new Ramp(co, co); sharpness = new Ramp(sh, sh); }
         public string Echo()
         {
-            return "step " + E(step) + " mom " + E(mom) + " deCraze " + E(deCraze) + " band " + E(band) +
+            return "step " + E(step) + " mom " + E(mom) + " deCraze " + E(deCraze) +
+                   " band " + E(band) + " sharp " + E(sharpness) +
                    (detMix.a != 0 || detMix.b != 0 ? " detMix " + E(detMix) : "") +
                    (deBranch.a != 0 || deBranch.b != 0 ? " deBranch " + E(deBranch) : "") +
                    (deConsolidate.a != 0 || deConsolidate.b != 0 ? " deConsolidate " + E(deConsolidate) : "");
