@@ -44,12 +44,15 @@ static class Program
         if (args.Length > 0 && System.IO.File.Exists(args[0]))
             foreach (var ln in System.IO.File.ReadAllLines(args[0])) { Console.WriteLine("> " + ln); if (!Dispatch(ln)) return 0; }
 
+        // Only draw the "> " prompt for a human at a terminal; when stdin is piped (e.g. the GUI
+        // driving us as a subprocess) the prompts would just clutter the captured output.
+        bool interactive = !Console.IsInputRedirected;
         string line;
-        Console.Write("> ");
+        if (interactive) Console.Write("> ");
         while ((line = Console.ReadLine()) != null)
         {
             if (!Dispatch(line)) break;
-            Console.Write("> ");
+            if (interactive) Console.Write("> ");
         }
         return 0;
     }
@@ -129,11 +132,11 @@ static class Program
 
         var m = Metrics(band);
         Console.WriteLine("  ran " + N + " (total " + totalIters + ")" +
-            "  ΣE " + Fmt(startE) + "→" + Fmt(m.sumE) +
+            "  sumE " + Fmt(startE) + "->" + Fmt(m.sumE) +
             "  maxGrad " + lastMaxGrad.ToString("0.00e+0", CultureInfo.InvariantCulture) +
             "  panels " + m.panels +
-            "  crazeRMS " + m.crazeRmsDeg.ToString("0.0") + "°" +
-            "  maxDih " + m.maxDihDeg.ToString("0.0") + "°" +
+            "  crazeRMS " + m.crazeRmsDeg.ToString("0.0") + "deg" +
+            "  maxDih " + m.maxDihDeg.ToString("0.0") + "deg" +
             "   [" + R.Echo() + (maxCov ? " maxCov" : "") + " momFix " + momFix + "]" +
             "   " + (sw.Elapsed.TotalSeconds).ToString("0.0") + "s");
     }
@@ -182,9 +185,9 @@ static class Program
     {
         if (P == null) { Console.WriteLine("  ! load a mesh first"); return; }
         var m = Metrics(band);
-        Console.WriteLine("  " + tag + ": verts " + P.Vertices.Count + "  ΣE " + Fmt(m.sumE) +
-            "  panels " + m.panels + "  crazeRMS " + m.crazeRmsDeg.ToString("0.0") + "°" +
-            "  maxDih " + m.maxDihDeg.ToString("0.0") + "°  (crease cutoff " + (band * 180.0 / Math.PI).ToString("0.0") + "°)");
+        Console.WriteLine("  " + tag + ": verts " + P.Vertices.Count + "  sumE " + Fmt(m.sumE) +
+            "  panels " + m.panels + "  crazeRMS " + m.crazeRmsDeg.ToString("0.0") + "deg" +
+            "  maxDih " + m.maxDihDeg.ToString("0.0") + "deg  (crease cutoff " + (band * 180.0 / Math.PI).ToString("0.0") + "deg)");
     }
 
     static void PrintHelp()

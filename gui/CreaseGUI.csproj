@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>CreaseGUI</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <!-- Thin WinForms control panel that DRIVES crease.exe as a subprocess (writes commands to
+       its stdin, streams its output to the log). No engine code here - crease.exe is the engine.
+       Build cli/CreaseCLI.csproj first; this app locates crease.exe in cli/bin (or Browse). -->
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>
