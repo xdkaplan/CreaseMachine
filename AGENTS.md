@@ -162,9 +162,16 @@ dotnet build cli/CreaseCLI.csproj -c Release && cli/bin/Release/net48/crease.exe
 dotnet build gui/CreaseGUI.csproj -c Release && gui/bin/Release/net48/CreaseGUI.exe
 ```
 
-Both compile the Rhino-free engine sources directly (like the bench). **Known debt:** the flow
-step is mirrored — not shared — across `CreaseMachine.DoFlowStep`, the bench, `repro/`, and the
-CLI; they must be kept in sync by hand until extracted into one shared `Flow`/`Session` class.
+Both compile the Rhino-free engine sources directly (like the bench).
+
+**Known debt (one fidelity-critical pair):** the CLI's `FlowStep` is sold as matching the
+plug-in, so it must track `CreaseMachine.DoFlowStep` by hand — today faithful at `Iter=1`, but
+the CLI collapses short/sliver edges every step whereas `DoFlowStep` collapses once then takes
+`Iter` steps, so they drift at `Iter>1`; and any future edit to one must be mirrored in the
+other. The bench's `FlowAndWatch` and `repro/` ALSO replicate the loop but are **diagnostic
+harnesses, not under a sync contract** — `FlowAndWatch` already omits the momFix restart logic,
+and `repro/` is a frozen racking experiment. Extracting one shared Rhino-free `Flow`/`Session`
+class (planned for the in-process GUI) removes the CLI↔production drift risk entirely.
 
 ## Vendored dependencies
 
