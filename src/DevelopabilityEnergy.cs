@@ -316,8 +316,10 @@ namespace CreaseMachine
             int[] fvFlat = new int[nF * 3];
             Vec3[] faceNormals = new Vec3[nF];
             double[] doubleAreas = new double[nF];
-            Vec3[] dNdp = new Vec3[nF * 3];
-            Vec3[] dTheta = new Vec3[nF * 3];
+            // dNdp/dTheta are gradient-only scaffolds (read solely under wantGrad guards below),
+            // so don't allocate+zero ~2*nF*3 Vec3 on the energy-only display path.
+            Vec3[] dNdp = wantGrad ? new Vec3[nF * 3] : null;
+            Vec3[] dTheta = wantGrad ? new Vec3[nF * 3] : null;
             Vec3[] faceEdge = new Vec3[nF * 3];
             bool[] faceSliver = new bool[nF];
             // Vertex -> incident-faces flat lookup is built after the face precompute below by
@@ -364,21 +366,28 @@ namespace CreaseMachine
                 {
                     Vec3 N = cross / doubleAreas[f];
                     faceNormals[f] = N;
-                    // Eq 8 distribution vectors: e_opp for local vertex i is (next.next - next).
-                    // local 0 opp = p2 - p1 = e12, local 1 opp = p0 - p2 = e20, local 2 opp = p1 - p0 = e01.
-                    double invDA = 1.0 / doubleAreas[f];
-                    dNdp[b3]     = Vec3.Cross(e12, N) * invDA;
-                    dNdp[b3 + 1] = Vec3.Cross(e20, N) * invDA;
-                    dNdp[b3 + 2] = Vec3.Cross(e01, N) * invDA;
-
-                    // Corner-angle gradient cross products: dTheta[3f + li] is the cross product
-                    // for the edge going FROM local li TO local (li+1)%3 - so dTd for vertex at li
-                    // is dTheta[li] + dTheta[(li+2)%3] (the two edges incident to li, weighted by
-                    // their inverse squared length, crossed with N). All three local rotations
-                    // derive their dTdi/dTdj/dTdk from these same three vectors.
-                    if (e01Sq > 0) dTheta[b3]     = Vec3.Cross(N, e01) * (1.0 / e01Sq);
-                    if (e12Sq > 0) dTheta[b3 + 1] = Vec3.Cross(N, e12) * (1.0 / e12Sq);
-                    if (e20Sq > 0) dTheta[b3 + 2] = Vec3.Cross(N, e20) * (1.0 / e20Sq);
+                    // dNdp/dTheta are GRADIENT scaffolds only - skip them on the energy-only path
+                    // (EmitSnapshot, run every GH display tick) where wantGrad is false.
+                    if (wantGrad)
+                    {
+                        // Eq 8 distribution vectors: e_opp for local vertex i is (next.next - next).
+                        // local 0 opp = p2 - p1 = e12, local 1 opp = p0 - p2 = e20, local 2 opp = p1 - p0 = e01.
+                        // Corner-angle gradient: dTheta[3f + li] is the cross for the edge FROM local
+                        // li TO local (li+1)%3, crossed with N and scaled by 1/|edge|^2.
+                        // Cross(N, e) == -Cross(e, N), so the three dNdp crosses and the three dTheta
+                        // crosses are the SAME three vectors - compute each once (6 crosses -> 3),
+                        // bit-identical to the originals.
+                        Vec3 c01 = Vec3.Cross(e01, N);   // -> dNdp[local 2], dTheta[local 0]
+                        Vec3 c12 = Vec3.Cross(e12, N);   // -> dNdp[local 0], dTheta[local 1]
+                        Vec3 c20 = Vec3.Cross(e20, N);   // -> dNdp[local 1], dTheta[local 2]
+                        double invDA = 1.0 / doubleAreas[f];
+                        dNdp[b3]     = c12 * invDA;
+                        dNdp[b3 + 1] = c20 * invDA;
+                        dNdp[b3 + 2] = c01 * invDA;
+                        if (e01Sq > 0) dTheta[b3]     = c01 * (-1.0 / e01Sq);
+                        if (e12Sq > 0) dTheta[b3 + 1] = c12 * (-1.0 / e12Sq);
+                        if (e20Sq > 0) dTheta[b3 + 2] = c20 * (-1.0 / e20Sq);
+                    }
                 }
             }
 

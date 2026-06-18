@@ -9,8 +9,12 @@ class Program
 {
     delegate void EnergyFunc(PlanktonMesh P, out double[] energy, out Vec3[] grad);
 
-    static int Main()
+    static int Main(string[] args)
     {
+        // "perf" => fast mode: FD correctness gate + perf bench + value checksums only,
+        // skipping the long C:\Temp flow/inspect diagnostics (most of whose files are absent).
+        bool perfOnly = Array.IndexOf(args, "perf") >= 0;
+
         PlanktonMesh P = BuildBumpyGrid(7);
         Console.WriteLine("mesh: " + P.Vertices.Count + " verts, " + P.Faces.Count + " faces");
         Console.WriteLine();
@@ -87,10 +91,24 @@ class Program
         AnalyzeDevFunc("deCraze=0.5 ", craze, P);
 
         Console.WriteLine();
-        // Perf bench: time CHA in each config on a realistic-sized mesh so we can SEE what's
-        // actually slow vs guessing. Bunny (13K verts) is representative; bumpy grid (49 verts)
-        // is too small to register past noise.
-        PerfBench(@"C:\Temp\BunnyScraped.stl");
+        // Perf bench: time CHA in each config on realistic-sized meshes so we can SEE what's
+        // actually slow vs guessing. Three bunnies span the range; bumpy grid (49 verts) is
+        // too small to register past noise.
+        PerfBench(@"C:\Temp\Bunny 2.5k.stl");
+        Console.WriteLine();
+        PerfBench(@"C:\Temp\Bunny 5k.stl");
+        Console.WriteLine();
+        PerfBench(@"C:\Temp\Bunny 20k.stl");
+        Console.WriteLine();
+        // Value-preservation gate: deterministic checksums of the flow config the user runs.
+        // A perf change must reproduce these to ~1e-9 relative (gradient reduction is parallel,
+        // so the last ~3 ULPs jitter run-to-run; a real value change shows up far above that).
+        Checksum(@"C:\Temp\Bunny 2.5k.stl");
+        Checksum(@"C:\Temp\Bunny 5k.stl");
+        Checksum(@"C:\Temp\Bunny 20k.stl");
+
+        if (perfOnly) return 0;
+
         Console.WriteLine();
         FlowTest(BuildBumpyGrid(11), 400);
         Console.WriteLine();
@@ -609,6 +627,39 @@ class Program
             DevelopabilityEnergy.ComputeHingeEnergy(P, out e, out ff,
                 0.0, 0.0, false, 4.0, 0.5);
         });
+    }
+
+    // Value-preservation gate for perf refactors. Runs the flow config the user actually drives
+    // (covariance + deCraze=0.5, CrazeBand=0.1) and prints deterministic checksums at full
+    // precision: total energy, summed gradient magnitude, and an index-weighted gradient probe
+    // (sensitive to per-vertex changes that would cancel in a plain sum). Capture at baseline;
+    // every optimization must reproduce all three to ~1e-9 relative. sumE is fully deterministic
+    // (per-vertex energy, serial sum here); the gradient sums carry ~1e-13 relative parallel-
+    // reduction jitter, far below the threshold where a real value bug would land.
+    static void Checksum(string path)
+    {
+        string tag = System.IO.Path.GetFileName(path);
+        if (!System.IO.File.Exists(path)) { Console.WriteLine("=== Checksum " + tag + ": (file not found) ==="); return; }
+        PlanktonMesh P = LoadBinaryStl(path);
+        double savedBand = DevelopabilityEnergy.CrazeBand;
+        DevelopabilityEnergy.CrazeBand = 0.1;
+        double[] e; Vec3[] g; bool[] ff;
+        DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out e, out g, out ff, 0.0, 0.0, false, 4.0, 0.5);
+        DevelopabilityEnergy.CrazeBand = savedBand;
+
+        int nV = P.Vertices.Count;
+        double sumE = 0, sumG = 0, probe = 0;
+        for (int v = 0; v < nV; v++)
+        {
+            sumE += e[v];
+            double gl = g[v].Length;
+            if (!double.IsNaN(gl) && !double.IsInfinity(gl)) sumG += gl;
+            probe += (v + 1) * (0.37 * g[v].X + 0.51 * g[v].Y + 0.71 * g[v].Z);
+        }
+        Console.WriteLine("=== Checksum " + tag.PadRight(16) + " verts=" + nV.ToString().PadLeft(6) +
+            "  sumE=" + sumE.ToString("G17") +
+            "  sum|g|=" + sumG.ToString("G17") +
+            "  probe=" + probe.ToString("G17"));
     }
 
     static PlanktonMesh LoadBinaryStl(string path)
