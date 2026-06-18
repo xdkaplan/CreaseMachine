@@ -14,6 +14,7 @@ namespace CreaseStudio
         GLWpfControl _gl;
         MeshView _view;
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
+        readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         bool _glInit, _meshDirty;
         long _totalIters;
         byte[] _matcapPx; int _matcapW, _matcapH;   // matcap texture pixels (BGRA, GL row order)
@@ -28,6 +29,7 @@ namespace CreaseStudio
         public MainWindow()
         {
             InitializeComponent();
+            DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
 
             _gl = new GLWpfControl();
             CenterHost.Children.Add(_gl);   // GL viewport lives in the center cell of the docked layout
@@ -75,7 +77,7 @@ namespace CreaseStudio
             }
 
             // +10 iter control now lives in the top bar (declared in XAML); keep RunIters wired to it.
-            IterButton.Click += (s, e) => RunIters(10);
+            IterButton.Click += (s, e) => RunIters(_sim.IterPerRun);
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -118,7 +120,7 @@ namespace CreaseStudio
         void RunIters(int n)
         {
             if (_session == null) return;
-            var p = new FlowParams { Step = 0.05, Momentum = 0.9, Sharpness = 4.0, CrazeBand = 0.1, MomFix = 4 };
+            var p = _sim.ToFlowParams();   // snapshot the right-panel settings for this run
             for (int i = 0; i < n; i++)
             {
                 _session.CollapseShort();
