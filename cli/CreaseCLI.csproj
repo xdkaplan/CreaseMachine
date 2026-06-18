@@ -14,6 +14,7 @@
     <Compile Include="..\src\Vec3.cs" />
     <Compile Include="..\src\DevelopabilityEnergy.cs" />
     <Compile Include="..\src\MeshOps.cs" />
+    <Compile Include="..\src\Session.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 </Project>

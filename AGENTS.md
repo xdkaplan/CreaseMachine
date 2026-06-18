@@ -164,14 +164,18 @@ dotnet build gui/CreaseGUI.csproj -c Release && gui/bin/Release/net48/CreaseGUI.
 
 Both compile the Rhino-free engine sources directly (like the bench).
 
-**Known debt (one fidelity-critical pair):** the CLI's `FlowStep` is sold as matching the
-plug-in, so it must track `CreaseMachine.DoFlowStep` by hand — today faithful at `Iter=1`, but
-the CLI collapses short/sliver edges every step whereas `DoFlowStep` collapses once then takes
-`Iter` steps, so they drift at `Iter>1`; and any future edit to one must be mirrored in the
-other. The bench's `FlowAndWatch` and `repro/` ALSO replicate the loop but are **diagnostic
-harnesses, not under a sync contract** — `FlowAndWatch` already omits the momFix restart logic,
-and `repro/` is a frozen racking experiment. Extracting one shared Rhino-free `Flow`/`Session`
-class (planned for the in-process GUI) removes the CLI↔production drift risk entirely.
+**Shared flow step:** the canonical Nesterov developability step lives once in
+[`src/Session.cs`](src/Session.cs) as `FlowSession.NesterovStep` (look-ahead → CHA →
+momentum-restart + trust-region cap), with thin `CollapseShort/CollapseSliver/HealFolds`
+helpers over `MeshOps`. Both the GH component (`CreaseMachine.DoFlowStep`) and the CLI drive
+the same `FlowSession`, so the intricate flow logic cannot drift between them — verified by the
+CLI reproducing fixed bunny checksums bit-for-bit after the extraction. Collapse *cadence* is
+still the caller's choice (GH collapses once per `Iter`-step solve; the CLI collapses every
+step) — legitimate per-host policy, not shared math. The bench's `FlowAndWatch` and `repro/`
+keep their own loop copies on purpose: diagnostic harnesses, not under a sync contract
+(`FlowAndWatch` omits the momFix restarts; `repro/` is a frozen racking experiment). The
+in-process GUI will hold a persistent `FlowSession` rather than the per-step transient the
+plugin/CLI wrap today.
 
 ## Vendored dependencies
 

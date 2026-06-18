@@ -372,75 +372,22 @@ namespace CreaseMachine
                 brushWeights = new double[P.Vertices.Count];   // indices renumbered - blank paint
             }
 
-            if (MeshOps.CollapseShortEdges(P, 0.2) > 0)
+            // Drive the shared FlowSession (the exact same flow the CLI/GUI run) over the
+            // component's live mesh + velocity + brush field, then sync the (possibly collapse-
+            // reallocated) state back. Collapse-once-then-Iter-steps cadence is preserved.
+            FlowSession session = new FlowSession { Mesh = P, Vel = vel, BrushWeights = brushWeights };
+            session.CollapseShort();
+            session.CollapseSliver();
+            FlowParams fp = new FlowParams
             {
-                P.Compact();
-                vel = new Vec3[P.Vertices.Count];
-                brushWeights = new double[P.Vertices.Count];
-            }
-            if (MeshOps.CollapseSliverEdges(P, 0.05) > 0)
-            {
-                P.Compact();
-                vel = new Vec3[P.Vertices.Count];
-                brushWeights = new double[P.Vertices.Count];
-            }
-
-            double L = RepresentativeEdge(P);
-            double t = Step * L * L;
-            double capLen = L;
-
-            double beta = Math.Max(0.0, Math.Min(0.95, Momentum));
-            int nV = P.Vertices.Count;
-            if (vel == null || vel.Length != nV) vel = new Vec3[nV];
-            double[] bx = new double[nV], by = new double[nV], bz = new double[nV];
+                Step = Step, Momentum = Momentum, deBranch = deBranch, deConsolidate = deConsolidate,
+                Sharpness = sharpness, deCraze = deCraze, CrazeBand = crazeBand, DetMix = detMix,
+                UseMaxCov = useMaxCov, MomFix = momFix,
+            };
             bool[] foldFlags = null;
-
-            for (int s = 0; s < Iter; s++)
-            {
-                for (int v = 0; v < nV; v++)
-                {
-                    PlanktonVertex pv = P.Vertices[v];
-                    bx[v] = pv.X; by[v] = pv.Y; bz[v] = pv.Z;
-                    if (beta > 0 && !pv.IsUnused && !P.Vertices.IsBoundary(v) && vel[v].IsValid)
-                        P.Vertices.SetVertex(v, bx[v] + beta * vel[v].X, by[v] + beta * vel[v].Y, bz[v] + beta * vel[v].Z);
-                }
-
-                double[] energy;
-                Vec3[] grad;
-                // brushWeights = per-vertex additive deCraze boost. Null skips the brush term in CHA.
-                bool[] degenVerts;
-                DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out foldFlags, out degenVerts,
-                    deBranch, deConsolidate, useMaxCov, sharpness, deCraze, true, brushWeights, detMix);
-
-                for (int v = 0; v < nV; v++)
-                {
-                    if (P.Vertices[v].IsUnused || P.Vertices.IsBoundary(v))
-                    {
-                        P.Vertices.SetVertex(v, bx[v], by[v], bz[v]);
-                        continue;
-                    }
-                    Vec3 g = grad[v];
-                    if (!g.IsValid)
-                    {
-                        vel[v] = Vec3.Zero;
-                        P.Vertices.SetVertex(v, bx[v], by[v], bz[v]);
-                        continue;
-                    }
-                    if ((momFix == 2 || momFix == 4) && beta > 0 && degenVerts[v]) vel[v] = Vec3.Zero;
-                    if ((momFix == 3 || momFix == 4) && beta > 0 && detMix < 0.5 && (g * vel[v]) > 0.0) vel[v] = Vec3.Zero;
-                    vel[v] = beta * vel[v] - t * g;
-                    double vl = vel[v].Length;
-                    if (vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);
-                    P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
-                }
-            }
-
-            if (foldFlags != null && MeshOps.CollapseFolds(P, foldFlags) > 0)
-            {
-                P.Compact();
-                vel = new Vec3[P.Vertices.Count];
-                brushWeights = new double[P.Vertices.Count];
-            }
+            for (int s = 0; s < Iter; s++) session.NesterovStep(fp, out foldFlags);
+            session.HealFolds(foldFlags);
+            P = session.Mesh; vel = session.Vel; brushWeights = session.BrushWeights;
         }
 
         /// <summary>Deep-copy the live mesh + brush state under meshLock, then compute energy on

@@ -212,49 +212,22 @@ static class Program
     // heal folds. `frac` in [0,1] drives the param ramps. Returns this step's max |grad|.
     static double FlowStep(RunRamps R, double frac)
     {
-        double dStep = R.step.At(frac), dMom = R.mom.At(frac), dCraze = R.deCraze.At(frac),
-               dBand = R.band.At(frac), dDet = R.detMix.At(frac), dBranch = R.deBranch.At(frac),
-               dCons = R.deConsolidate.At(frac), dSharp = R.sharpness.At(frac);
-
-        if (MeshOps.CollapseShortEdges(P, 0.2) > 0) { P.Compact(); vel = new Vec3[P.Vertices.Count]; }
-        if (MeshOps.CollapseSliverEdges(P, 0.05) > 0) { P.Compact(); vel = new Vec3[P.Vertices.Count]; }
-
-        int nV = P.Vertices.Count;
-        if (vel == null || vel.Length != nV) vel = new Vec3[nV];
-        double L = RepEdge(P);
-        double t = dStep * L * L, cap = L;
-        double beta = Math.Max(0.0, Math.Min(0.95, dMom));
-
-        var bx = new double[nV]; var by = new double[nV]; var bz = new double[nV];
-        for (int v = 0; v < nV; v++)
+        var p = new FlowParams
         {
-            var pv = P.Vertices[v];
-            bx[v] = pv.X; by[v] = pv.Y; bz[v] = pv.Z;
-            if (beta > 0 && !pv.IsUnused && !P.Vertices.IsBoundary(v) && vel[v].IsValid)
-                P.Vertices.SetVertex(v, bx[v] + beta * vel[v].X, by[v] + beta * vel[v].Y, bz[v] + beta * vel[v].Z);
-        }
-
-        DevelopabilityEnergy.CrazeBand = dBand;
-        double[] energy; Vec3[] grad; bool[] fold; bool[] degen;
-        DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out fold, out degen,
-            dBranch, dCons, maxCov, dSharp, dCraze, true, null, dDet);
-
-        double maxG = 0.0;
-        for (int v = 0; v < nV; v++)
-        {
-            if (P.Vertices[v].IsUnused || P.Vertices.IsBoundary(v)) { P.Vertices.SetVertex(v, bx[v], by[v], bz[v]); continue; }
-            Vec3 g = grad[v];
-            if (!g.IsValid) { vel[v] = Vec3.Zero; P.Vertices.SetVertex(v, bx[v], by[v], bz[v]); continue; }
-            if ((momFix == 2 || momFix == 4) && beta > 0 && degen[v]) vel[v] = Vec3.Zero;
-            if ((momFix == 3 || momFix == 4) && beta > 0 && dDet < 0.5 && (g * vel[v]) > 0.0) vel[v] = Vec3.Zero;
-            vel[v] = beta * vel[v] - t * g;
-            double vl = vel[v].Length;
-            if (vl > cap && vl > 1e-20) vel[v] = vel[v] * (cap / vl);
-            P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
-            double gl = g.Length; if (gl > maxG) maxG = gl;
-        }
-
-        if (fold != null && MeshOps.CollapseFolds(P, fold) > 0) { P.Compact(); vel = new Vec3[P.Vertices.Count]; }
+            Step = R.step.At(frac), Momentum = R.mom.At(frac), deCraze = R.deCraze.At(frac),
+            CrazeBand = R.band.At(frac), DetMix = R.detMix.At(frac), deBranch = R.deBranch.At(frac),
+            deConsolidate = R.deConsolidate.At(frac), Sharpness = R.sharpness.At(frac),
+            UseMaxCov = maxCov, MomFix = momFix,
+        };
+        // Drive the SHARED flow via a transient session wrapping the CLI's P/vel, then sync back.
+        // Same order the CLI used inline (collapse short -> collapse sliver -> Nesterov -> fold heal),
+        // now the identical implementation the GH component runs.
+        var session = new FlowSession { Mesh = P, Vel = vel, BrushWeights = null };
+        session.CollapseShort();
+        session.CollapseSliver();
+        double maxG = session.NesterovStep(p, out bool[] fold);
+        session.HealFolds(fold);
+        P = session.Mesh; vel = session.Vel;
         return maxG;
     }
 
@@ -384,19 +357,6 @@ static class Program
     // ============================ mesh helpers ============================
 
     static Vec3 V(int v) { var p = P.Vertices[v]; return new Vec3(p.X, p.Y, p.Z); }
-
-    static double RepEdge(PlanktonMesh m)
-    {
-        for (int i = 0; i < m.Halfedges.Count; i += 2)
-        {
-            if (m.Halfedges[i].IsUnused) continue;
-            var a = m.Vertices[m.Halfedges[i].StartVertex]; var b = m.Vertices[m.Halfedges[i + 1].StartVertex];
-            double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-            double L = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-            if (L > 0) return L;
-        }
-        return 1.0;
-    }
 
     // 1->4 midpoint subdivision (mirrors CreaseMachine.UniformSubdivide; geometry-preserving).
     static PlanktonMesh UniformSubdivide(PlanktonMesh Pin)
