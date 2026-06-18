@@ -58,6 +58,13 @@ baseline `10.5 / 1.7 / 9.8 / 0 / 2.1` → final `1.6 / 0.1 / 5.1 / 0 / 1.3`.
 - **Pooling per-task `gradLocal` arrays across calls.** Would cut GC pressure (helps
   Running-mode frame smoothness) but not raw ms (the zeroing cost remains), and the
   bench masks GC via `GC.Collect` before timing. Left for a future flat-array pass.
+- **Caching the topology-invariant connectivity across iterations** (rebuild only on
+  subdivide/collapse). Measured the prize first: the vertex->face adjacency build is
+  only **0.1 / 0.2 / 0.4 ms** (2.5k / 5k / 20k) once parallelized — ~6% of the 20k flow
+  call. Caching it would need a cache object + topology *and* sliver-flip dirty
+  detection (the filtered adjacency excludes position-dependent slivers) threaded
+  through the hot path, for ~0.4 ms. Bad trade post-parallelization; not done. `fvFlat`
+  is pure topology but is rebuilt cheaply inside the face loop (3 StartVertex reads/face).
 
 ## Next levers (for a future pass)
 
