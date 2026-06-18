@@ -114,6 +114,27 @@ namespace CreaseMachine
             DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out foldFlags, out degenVerts,
                 p.deBranch, p.deConsolidate, p.UseMaxCov, p.Sharpness, p.deCraze, true, BrushWeights, p.DetMix);
 
+            // Global adaptive momentum restart (O'Donoghue & Candes 2015, gradient scheme): if the
+            // carried-in momentum is, in aggregate, pushing the flow UPHILL at the look-ahead
+            // (sum over vertices of grad . velocity > 0), the whole step is overshooting. Hard-reset
+            // ALL velocity so a single overshoot cannot compound into the fold -> collapse cascade
+            // that destroys the mesh under sustained high momentum. Stateless (no cross-step memory,
+            // so it works with the per-step transient sessions the plugin/CLI wrap). Active for the
+            // default Combined mode (MomFix 4); same detMix guard as the per-vertex restart, and a
+            // no-op when beta == 0 (pure gradient descent never overshoots this way).
+            bool globalRestart = false;
+            if (p.MomFix == 4 && beta > 0 && p.DetMix < 0.5)
+            {
+                double gv = 0.0;
+                for (int v = 0; v < nV; v++)
+                {
+                    if (P.Vertices[v].IsUnused || P.Vertices.IsBoundary(v)) continue;
+                    Vec3 g = grad[v];
+                    if (g.IsValid) gv += g * vel[v];
+                }
+                globalRestart = gv > 0.0;
+            }
+
             double maxG = 0.0;
             for (int v = 0; v < nV; v++)
             {
@@ -129,13 +150,23 @@ namespace CreaseMachine
                     P.Vertices.SetVertex(v, bx[v], by[v], bz[v]);
                     continue;
                 }
+                double gl = g.Length; if (gl > maxG) maxG = gl;
+                if (globalRestart)
+                {
+                    // Whole flow overshooting: discard the look-ahead hop entirely - revert to the
+                    // base iterate and zero momentum. The next step then re-evaluates the gradient
+                    // from here with no momentum (a clean restart), instead of stepping along the
+                    // stale gradient sampled at the overshot look-ahead (which points wrong).
+                    vel[v] = Vec3.Zero;
+                    P.Vertices.SetVertex(v, bx[v], by[v], bz[v]);
+                    continue;
+                }
                 if ((p.MomFix == 2 || p.MomFix == 4) && beta > 0 && degenVerts[v]) vel[v] = Vec3.Zero;
                 if ((p.MomFix == 3 || p.MomFix == 4) && beta > 0 && p.DetMix < 0.5 && (g * vel[v]) > 0.0) vel[v] = Vec3.Zero;
                 vel[v] = beta * vel[v] - t * g;
                 double vl = vel[v].Length;
                 if (vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);
                 P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
-                double gl = g.Length; if (gl > maxG) maxG = gl;
             }
             return maxG;
         }

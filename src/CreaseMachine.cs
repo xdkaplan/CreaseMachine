@@ -162,7 +162,10 @@ namespace CreaseMachine
               + "(flags the isotropic poles; reduces collapses but racking onset ~unchanged)\n"
               + "3 = GradRestart: zero vel when dot(grad,vel)>0 AND detMix<0.5 — velocity is "
               + "heading uphill; delayed racking onset to ~61 on the geodesic sphere\n"
-              + "4 = Combined: 2+3 (default)",
+              + "4 = Combined: 2+3 PLUS a GLOBAL adaptive momentum restart (O'Donoghue-Candes) — "
+              + "resets all velocity on any step that overshoots uphill in aggregate, which prevents "
+              + "the fold->collapse cascade that destroyed meshes under sustained high momentum. "
+              + "Makes mom=0.9 stable AND convergent (default).",
                 GH_ParamAccess.item, 4);
 
             //14
