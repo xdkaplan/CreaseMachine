@@ -15,6 +15,8 @@
     <Compile Include="..\src\DevelopabilityEnergy.cs" />
     <Compile Include="..\src\MeshOps.cs" />
     <Compile Include="..\src\Session.cs" />
+    <Compile Include="..\src\MeshIO.cs" />
+    <Compile Include="..\src\FlowMetrics.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 </Project>
