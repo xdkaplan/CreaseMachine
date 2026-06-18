@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>crease</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Plankton">
+      <HintPath>..\lib\Plankton.dll</HintPath>
+    </Reference>
+    <!-- compile the Rhino-free engine straight from src (same as the GradCheck bench) -->
+    <Compile Include="..\src\Vec3.cs" />
+    <Compile Include="..\src\DevelopabilityEnergy.cs" />
+    <Compile Include="..\src\MeshOps.cs" />
+    <Compile Include="Program.cs" />
+  </ItemGroup>
+</Project>
