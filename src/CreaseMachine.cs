@@ -29,7 +29,8 @@ namespace CreaseMachine
             : base("CreaseMachine", "CreaseMachine",
                    "Developability flow (Stein, Grinspun & Crane 2018): bends a triangle mesh "
                  + "toward a piecewise-developable, creasable sheet. Developability force plus "
-                 + "1->4 subdivision only - no remeshing.",
+                 + "1->4 subdivision only - no remeshing. "
+                 + "Build: " + BuildInfo.Date + " (" + BuildInfo.Hash + ")",
                    "Mesh", "CreaseMachine")
         { }
 
@@ -151,6 +152,31 @@ namespace CreaseMachine
               + "kill twist on icosahedra / quads without changing the rest of the flow's character. "
               + "Try 0.05 - 0.2 as a starting point. Live-tunable.",
                 GH_ParamAccess.item, 0.0);
+
+            //13
+            pManager.AddIntegerParameter("MomFix", "MomFix",
+                "Momentum restart mode — controls how accumulated velocity is suppressed at "
+              + "near-isotropic vertices where the gradient direction is direction-arbitrary:\n"
+              + "1 = none (baseline paper behaviour — racks on geodesic spheres at iter ~27)\n"
+              + "2 = DegenZeroMom: zero vel at vertices where eigenvalue separation sep<0.1 "
+              + "(flags the isotropic poles; reduces collapses but racking onset ~unchanged)\n"
+              + "3 = GradRestart: zero vel when dot(grad,vel)>0 AND detMix<0.5 — velocity is "
+              + "heading uphill; delayed racking onset to ~61 on the geodesic sphere\n"
+              + "4 = Combined: 2+3 (default)",
+                GH_ParamAccess.item, 4);
+
+            //14
+            pManager.AddNumberParameter("CrazeBand", "CrazeBand",
+                "deCraze smoothing band, in RADIANS (Huber). The deCraze L1 penalty is |phi| on the "
+              + "unsigned dihedral, whose force holds CONSTANT magnitude as phi->0 and flips direction "
+              + "across the flat (phi=0) cusp - that non-vanishing, reversing force is what makes "
+              + "deCraze vibrate/jitter under momentum instead of flattening cleanly. CrazeBand "
+              + "replaces |phi| with a quadratic below the band so the force tapers smoothly to 0 at "
+              + "flat (near-flat edges SETTLE) while edges above the band keep the full L1 pull (real "
+              + "creases are untouched). ~0.1 rad (~5.7 deg, default) calms the jitter while preserving "
+              + "creases; raise toward 0.2-0.3 if it still buzzes, lower if real creases soften. "
+              + "0 = off (original pure-L1 behaviour). Only active when deCraze > 0. Live-tunable.",
+                GH_ParamAccess.item, 0.1);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -209,6 +235,8 @@ namespace CreaseMachine
             public double sharpness;
             public double deCraze;
             public double detMix;
+            public int momFix;
+            public double crazeBand;
             public bool subdivRequest;   // edge-triggered: SolveInstance sets, worker consumes
         }
 
@@ -227,6 +255,8 @@ namespace CreaseMachine
             double deCraze = 0.0;
             bool running = false;
             double detMix = 0.0;
+            int momFix = 4;
+            double crazeBand = 0.1;
 
             DA.GetData(0, ref inMesh);
             DA.GetData(1, ref Step);
@@ -241,7 +271,13 @@ namespace CreaseMachine
             DA.GetData(10, ref deCraze);
             DA.GetData(11, ref running);
             DA.GetData(12, ref detMix);
+            DA.GetData(13, ref momFix);
+            DA.GetData(14, ref crazeBand);
             if (detMix < 0) detMix = 0; else if (detMix > 1) detMix = 1;
+            if (momFix < 1) momFix = 1; else if (momFix > 4) momFix = 4;
+            if (crazeBand < 0) crazeBand = 0; else if (crazeBand > Math.PI) crazeBand = Math.PI;
+            // Static config read by both the flow's analytic gradient and EmitSnapshot's energy.
+            DevelopabilityEnergy.CrazeBand = crazeBand;
 
             // --- (Re)initialize from the input mesh ---
             if (reset || !initialized)
@@ -278,6 +314,8 @@ namespace CreaseMachine
                 shared.sharpness = sharpness;
                 shared.deCraze = deCraze;
                 shared.detMix = detMix;
+                shared.momFix = momFix;
+                shared.crazeBand = crazeBand;
                 if (subdiv && !prevSubdiv) shared.subdivRequest = true;
             }
             prevSubdiv = subdiv;
@@ -304,8 +342,8 @@ namespace CreaseMachine
         private void DoFlowStep()
         {
             // Snapshot current params under sharedLock to avoid holding it through the whole step.
-            double Step, Momentum, deBranch, deConsolidate, sharpness, deCraze, detMix;
-            int Iter;
+            double Step, Momentum, deBranch, deConsolidate, sharpness, deCraze, detMix, crazeBand;
+            int Iter, momFix;
             bool useMaxCov, subdivRequest;
             lock (sharedLock)
             {
@@ -318,9 +356,14 @@ namespace CreaseMachine
                 sharpness = shared.sharpness;
                 deCraze = shared.deCraze;
                 detMix = shared.detMix;
+                momFix = shared.momFix;
+                crazeBand = shared.crazeBand;
                 subdivRequest = shared.subdivRequest;
                 shared.subdivRequest = false;
             }
+            // Worker thread reads CrazeBand via this static; refresh it from the snapshot each step
+            // so live-tuning the slider while Running=true takes effect on the next iteration.
+            DevelopabilityEnergy.CrazeBand = crazeBand;
 
             if (subdivRequest)
             {
@@ -365,7 +408,8 @@ namespace CreaseMachine
                 double[] energy;
                 Vec3[] grad;
                 // brushWeights = per-vertex additive deCraze boost. Null skips the brush term in CHA.
-                DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out foldFlags,
+                bool[] degenVerts;
+                DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out energy, out grad, out foldFlags, out degenVerts,
                     deBranch, deConsolidate, useMaxCov, sharpness, deCraze, true, brushWeights, detMix);
 
                 for (int v = 0; v < nV; v++)
@@ -382,6 +426,8 @@ namespace CreaseMachine
                         P.Vertices.SetVertex(v, bx[v], by[v], bz[v]);
                         continue;
                     }
+                    if ((momFix == 2 || momFix == 4) && beta > 0 && degenVerts[v]) vel[v] = Vec3.Zero;
+                    if ((momFix == 3 || momFix == 4) && beta > 0 && detMix < 0.5 && (g * vel[v]) > 0.0) vel[v] = Vec3.Zero;
                     vel[v] = beta * vel[v] - t * g;
                     double vl = vel[v].Length;
                     if (vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);

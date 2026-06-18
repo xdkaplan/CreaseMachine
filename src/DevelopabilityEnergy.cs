@@ -31,6 +31,56 @@ namespace CreaseMachine
 
     public static class DevelopabilityEnergy
     {
+        // EXPERIMENTAL (default OFF -> shipping behavior is byte-identical): adaptive per-vertex
+        // DetMix. When enabled, the lambda_min/det blend `a` is raised toward 1 at vertices whose
+        // tangent eigenvalues are near-degenerate (lambda_min ~ lambda_max), where the picked
+        // eigenvector x_min is direction-arbitrary and injects a spurious tangential "force". A
+        // real crease (lambda_min << lambda_max) keeps a ~ 0 (paper-faithful). Blend driver:
+        //   sep = (lmax - lmin)/(lmax + lmin) in [0,1]   (0 = degenerate, 1 = well separated)
+        //   a_degeneracy = (1 - sep)^AdaptiveDetMixPower
+        //   a_effective = max(detMix, a_degeneracy)
+        public static bool AdaptiveDetMix = false;
+        public static double AdaptiveDetMixPower = 2.0;
+
+        // EXPERIMENTAL (default OFF): harmonic-mean / det-over-trace developability energy
+        //   E = lambda_min * lambda_max / (lambda_min + lambda_max)
+        // This is the "mode 2" hinted at in TangentEigenpairs' comments. Unlike a linear DetMix
+        // blend it is a FIXED smooth function of the eigenvalues, so its gradient
+        //   dE/dl_min = l_max^2/(l_min+l_max)^2 ,  dE/dl_max = l_min^2/(l_min+l_max)^2
+        // is EXACT through the existing two-pass (x_min, x_max) machinery (no frozen-coefficient
+        // approximation). It -> lambda_min when l_min << l_max (creases like the paper energy) and
+        // -> lambda/2 with basis-invariant gradient at degeneracy (l_min ~ l_max), so it removes
+        // the arbitrary-eigenvector tangential "force" at symmetric vertices WITHOUT abandoning
+        // creasing. Overrides the DetMix blend when enabled. NOT YET FD-bench-verified.
+        public static bool HarmonicEnergy = false;
+
+        // deCraze L1 smoothing band (radians). The deCraze penalty is |phi| on the UNSIGNED
+        // dihedral, whose subgradient holds CONSTANT magnitude as phi -> 0 and reverses spatial
+        // direction across the phi=0 cusp - a non-vanishing, direction-flipping force that makes
+        // near-flat regions buzz/jitter under Nesterov momentum instead of settling. Huber-smoothing
+        // replaces |phi| with a quadratic for phi < CrazeBand: the force then tapers linearly to 0 at
+        // flat (so flat edges settle into a smooth well), while edges above the band keep the full
+        // linear L1 pull (so real creases stay sparse and untouched). CrazeBand = 0 restores the
+        // original pure-L1 behaviour exactly. Set per-solve from the component's CrazeBand input.
+        public static double CrazeBand = 0.0;
+
+        // Huber-smoothed value h(phi) and derivative h'(phi) of the deCraze L1 dihedral penalty.
+        // With delta = CrazeBand: for phi < delta, h = phi^2/(2*delta) and h' = phi/delta (force
+        // tapers to 0 at flat); for phi >= delta, h = phi - delta/2 and h' = 1 (full L1 pull).
+        // C1-continuous at phi=delta. delta <= 0 -> pure L1 (h = phi, h' = 1), the original behaviour.
+        private static double CrazeHuberVal(double phi)
+        {
+            double d = CrazeBand;
+            if (d <= 0.0) return phi;
+            return (phi < d) ? 0.5 * phi * phi / d : phi - 0.5 * d;
+        }
+        private static double CrazeHuberDeriv(double phi)
+        {
+            double d = CrazeBand;
+            if (d <= 0.0) return 1.0;
+            return (phi < d) ? phi / d : 1.0;
+        }
+
         private static Vec3 Pos(PlanktonVertex v) { return new Vec3(v.X, v.Y, v.Z); }
 
         // Per-(vert, face) trig + frame snapshot shared between the covariance build loop and the
@@ -183,6 +233,7 @@ namespace CreaseMachine
         // wantGrad: when false, skip every gradient-distribution write (covariance grad, factorv
         // loop, max-cov M-term + triple sum, branching, consolidation, L1) - energy is still
         // populated. Use via ComputeHingeEnergy when only the energy array is wanted.
+        // Backward-compatible 12-arg overload: callers that don't need degenVerts are unchanged.
         public static void ComputeHingeEnergyAndGrad(
             PlanktonMesh P,
             out double[] energy,
@@ -197,10 +248,35 @@ namespace CreaseMachine
             double[] brushWeights = null,
             double detMix = 0.0)
         {
+            bool[] _;
+            ComputeHingeEnergyAndGrad(P, out energy, out energyGrad, out isFold, out _,
+                branchWeight, consolidateWeight, useMaxCov, sharpness, crazeWeight,
+                wantGrad, brushWeights, detMix);
+        }
+
+        // Full overload: also returns per-vertex degeneracy flag (sep < 0.1 in paper-faithful mode).
+        // Use in the optimizer to zero momentum at isotropic vertices without touching the gradient.
+        public static void ComputeHingeEnergyAndGrad(
+            PlanktonMesh P,
+            out double[] energy,
+            out Vec3[] energyGrad,
+            out bool[] isFold,
+            out bool[] degenVerts,
+            double branchWeight,
+            double consolidateWeight,
+            bool useMaxCov,
+            double sharpness,
+            double crazeWeight,
+            bool wantGrad = true,
+            double[] brushWeights = null,
+            double detMix = 0.0)
+        {
             int nV = P.Vertices.Count;
             int nF = P.Faces.Count;
 
             energy = new double[nV];
+            degenVerts = new bool[nV];
+            bool[] dv = degenVerts;  // local alias — out params cannot be captured by lambdas
             energyGrad = new Vec3[nV];
             isFold = new bool[nV];
             // Per-vertex CornerWeight cache - filled inside the per-vertex loop, read by the L1
@@ -543,8 +619,27 @@ namespace CreaseMachine
                 // disappears in modes 1/2 because both x_min and x_max contribute.
                 double lambda_min_v, lambda_max_v;
                 Vec3 x_min, x_max;
+                // Mesh-intrinsic tangent seed: first outgoing edge direction from this vertex.
+                // Rotates with the mesh so the eigenvector basis is rotation-invariant, unlike
+                // the world-X/Y fallback in TangentEigenpairs which was the source of
+                // rotation-dependent results (different rotations -> different t1 -> different x_min).
+                Vec3 t1Hint = Vec3.Zero;
+                {
+                    int _oh = P.Vertices[vert].OutgoingHalfedge;
+                    if (_oh >= 0)
+                    {
+                        int _pair = P.Halfedges.GetPairHalfedge(_oh);
+                        if (_pair >= 0)
+                        {
+                            int _nb = P.Halfedges[_pair].StartVertex;
+                            PlanktonVertex _pv = P.Vertices[vert];
+                            PlanktonVertex _pn = P.Vertices[_nb];
+                            t1Hint = new Vec3(_pn.X - _pv.X, _pn.Y - _pv.Y, _pn.Z - _pv.Z);
+                        }
+                    }
+                }
                 TangentEigenpairs(m00, m01, m02, m11, m12, m22, Nv,
-                    out lambda_min_v, out x_min, out lambda_max_v, out x_max);
+                    out lambda_min_v, out x_min, out lambda_max_v, out x_max, t1Hint);
 
                 // Linear blend between paper-faithful lambda_min (detMix=0) and det = lambda_min *
                 // lambda_max (detMix=1). The blend is naturally smooth in detMix; per-pass weights
@@ -554,9 +649,42 @@ namespace CreaseMachine
                 // At detMix=0: w_min=1, w_max=0 (pure mode-0; pass 1 skipped).
                 // At detMix=1: w_min=l_max, w_max=l_min (pure mode-1 det energy).
                 double a = detMix; if (a < 0) a = 0; else if (a > 1) a = 1;
+
+                // In paper-faithful mode (a≈0, no harmonic blend), flag vertices where both
+                // tangent eigenvalues are nearly equal. The min-eigenvector direction is then
+                // numerically arbitrary; the caller can zero momentum there so it cannot
+                // accumulate drift in a random direction.
+                if (a < 0.01 && !HarmonicEnergy)
+                {
+                    double tr_dv = lambda_max_v + lambda_min_v;
+                    double sep_dv = tr_dv > 1e-300 ? (lambda_max_v - lambda_min_v) / tr_dv : 0.0;
+                    if (sep_dv < 0.1) dv[vert] = true;
+                }
+
+                if (AdaptiveDetMix)
+                {
+                    double denom = lambda_max_v + lambda_min_v;
+                    double sep = denom > 1e-300 ? (lambda_max_v - lambda_min_v) / denom : 0.0;
+                    if (sep < 0) sep = 0; else if (sep > 1) sep = 1;
+                    double aDeg = Math.Pow(1.0 - sep, AdaptiveDetMixPower);
+                    if (aDeg > a) a = aDeg;
+                }
                 double eVal = (1.0 - a) * lambda_min_v + a * lambda_min_v * lambda_max_v;
                 double wMin = (1.0 - a) + a * lambda_max_v;
                 double wMax = a * lambda_min_v;
+
+                if (HarmonicEnergy)
+                {
+                    double tr = lambda_min_v + lambda_max_v;
+                    if (tr > 1e-300)
+                    {
+                        double inv = 1.0 / tr;
+                        eVal = lambda_min_v * lambda_max_v * inv;
+                        wMin = lambda_max_v * lambda_max_v * (inv * inv);
+                        wMax = lambda_min_v * lambda_min_v * (inv * inv);
+                    }
+                    else { eVal = 0.0; wMin = 0.0; wMax = 0.0; }
+                }
 
                 energyOut[vert] = cornerWeight * eVal;
 
@@ -1187,9 +1315,13 @@ namespace CreaseMachine
                     if (edgeCraze <= 0) continue;
 
                     double wAvg = 0.5 * (cornerWeights[va] + cornerWeights[vb]);
-                    double edgeScale = edgeCraze * wAvg;
-                    energyOut[va] += 0.5 * cornerWeights[va] * edgeCraze * phi;
-                    energyOut[vb] += 0.5 * cornerWeights[vb] * edgeCraze * phi;
+                    // Huber-smooth |phi| near flat (CrazeBand). hVal feeds the reported energy;
+                    // CrazeHuberDeriv(phi) attenuates the gradient so the force tapers to 0 at flat
+                    // instead of holding constant magnitude across the phi=0 cusp - the jitter fix.
+                    double hVal = CrazeHuberVal(phi);
+                    double edgeScale = edgeCraze * wAvg * CrazeHuberDeriv(phi);
+                    energyOut[va] += 0.5 * cornerWeights[va] * edgeCraze * hVal;
+                    energyOut[vb] += 0.5 * cornerWeights[vb] * edgeCraze * hVal;
                     if (!wantGrad) continue;
 
                     Vec3 crossAB = Vec3.Cross(NA, NB);
@@ -1489,7 +1621,7 @@ namespace CreaseMachine
                     double cosPhi = NA * NB;
                     if (cosPhi > 1.0) cosPhi = 1.0;
                     else if (cosPhi < -1.0) cosPhi = -1.0;
-                    l1 += Math.Acos(cosPhi);
+                    l1 += CrazeHuberVal(Math.Acos(cosPhi));   // Huber-smoothed (CrazeBand) - matches analytic path
                 }
                 weighted += 0.5 * cornerWeightVE * crazeWeight * l1;
             }
@@ -1644,12 +1776,27 @@ namespace CreaseMachine
                                               double m11, double m12, double m22,
                                               Vec3 Nv,
                                               out double lambda_min, out Vec3 x_min,
-                                              out double lambda_max, out Vec3 x_max)
+                                              out double lambda_max, out Vec3 x_max,
+                                              Vec3 t1Hint = default(Vec3))
         {
-            // orthonormal tangent basis perpendicular to Nv
-            Vec3 t1 = Vec3.Cross(Nv, new Vec3(1, 0, 0));
-            if (t1.Length < 1e-6) t1 = Vec3.Cross(Nv, new Vec3(0, 1, 0));
-            t1 = t1.Normalized();
+            // orthonormal tangent basis perpendicular to Nv.
+            // Prefer t1Hint (a mesh edge direction) so the basis is intrinsic to the mesh and
+            // rotates with it. Fall back to world X/Y only when no hint is supplied.
+            Vec3 t1;
+            double hLen = t1Hint.Length;
+            if (hLen > 1e-6)
+            {
+                double dot = t1Hint * Nv;
+                Vec3 proj = new Vec3(t1Hint.X - dot * Nv.X, t1Hint.Y - dot * Nv.Y, t1Hint.Z - dot * Nv.Z);
+                double pLen = proj.Length;
+                t1 = (pLen > 1e-6) ? proj * (1.0 / pLen) : Vec3.Cross(Nv, new Vec3(0, 1, 0)).Normalized();
+            }
+            else
+            {
+                t1 = Vec3.Cross(Nv, new Vec3(1, 0, 0));
+                if (t1.Length < 1e-6) t1 = Vec3.Cross(Nv, new Vec3(0, 1, 0));
+                t1 = t1.Normalized();
+            }
             Vec3 t2 = Vec3.Cross(Nv, t1).Normalized();
 
             double a = QuadForm(m00, m01, m02, m11, m12, m22, t1, t1);

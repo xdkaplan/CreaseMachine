@@ -29,6 +29,26 @@
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
+  <!-- Bake git short-hash + build date into BuildInfo.cs at compile time.
+       The generated file lives in IntermediateOutputPath so it is never checked in.
+       If git is unavailable the constants fall back to "unknown". -->
+  <Target Name="WriteBuildInfo" BeforeTargets="BeforeBuild">
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortHash" />
+    </Exec>
+    <PropertyGroup>
+      <GitShortHash Condition="'$(GitShortHash.Trim())' == ''">unknown</GitShortHash>
+      <BuildDate>$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</BuildDate>
+    </PropertyGroup>
+    <WriteLinesToFile
+      File="$(IntermediateOutputPath)BuildInfo.cs"
+      Lines="namespace CreaseMachine { static class BuildInfo { public const string Hash = &quot;$(GitShortHash.Trim())&quot;%3B public const string Date = &quot;$(BuildDate)&quot;%3B } }"
+      Overwrite="true" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildInfo.cs" />
+    </ItemGroup>
+  </Target>
+
   <Target Name="CopyToGha" AfterTargets="Build">
     <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(TargetDir)$(AssemblyName).gha" />
   </Target>
