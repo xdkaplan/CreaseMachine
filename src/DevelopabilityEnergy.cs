@@ -298,6 +298,14 @@ namespace CreaseMachine
                 pos[vi] = new Vec3(pv.X, pv.Y, pv.Z);
             }
 
+            // Parallelism config, hoisted so the (scatter-free, fully deterministic) face
+            // precompute / adjacency / vertex-normal phases below can share it with the
+            // per-vertex loop. Cap at ProcessorCount-2 (leave the Rhino UI + GH redraw a core).
+            int maxThreads = System.Math.Max(1, System.Environment.ProcessorCount - 2);
+            var parOpts = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = maxThreads };
+            int faceChunk = System.Math.Max(64, (nF + maxThreads * 4 - 1) / (maxThreads * 4));
+            int vertChunk = System.Math.Max(64, (nV + maxThreads * 4 - 1) / (maxThreads * 4));
+
             // --- Precompute face data ---
             // dNdp[3*f + i] = (e_opp_i x N_f) / dA_f - Eq 8's per-face gradient scaffold, computed
             // once. Every block below (covariance gradient, L1, max-cov M-term, max-cov triple sum,
@@ -325,7 +333,10 @@ namespace CreaseMachine
             // Vertex -> incident-faces flat lookup is built after the face precompute below by
             // walking outgoing-halfedge chains directly (no GetVertexFaces allocation).
 
-            for (int f = 0; f < nF; f++)
+            System.Threading.Tasks.Parallel.ForEach(
+                System.Collections.Concurrent.Partitioner.Create(0, nF, faceChunk), parOpts, _fr =>
+            {
+            for (int f = _fr.Item1; f < _fr.Item2; f++)
             {
                 if (P.Faces[f].IsUnused) { faceSliver[f] = true; continue; }
                 int h0 = P.Faces[f].FirstHalfedge;
@@ -390,6 +401,7 @@ namespace CreaseMachine
                     }
                 }
             }
+            });
 
             // Per-vertex incident-face lookup, built by walking outgoing-halfedge chains directly
             // (zero allocations). Order matches Plankton's CCW topological convention - matters
@@ -401,7 +413,10 @@ namespace CreaseMachine
             int vfTotal = 0;
             // First pass: count incident triangular faces per vertex.
             int[] vfCount = new int[nV];
-            for (int v = 0; v < nV; v++)
+            System.Threading.Tasks.Parallel.ForEach(
+                System.Collections.Concurrent.Partitioner.Create(0, nV, vertChunk), parOpts, _vr =>
+            {
+            for (int v = _vr.Item1; v < _vr.Item2; v++)
             {
                 if (P.Vertices[v].IsUnused) continue;
                 int h0 = P.Vertices[v].OutgoingHalfedge;
@@ -419,12 +434,16 @@ namespace CreaseMachine
                     safetyCap--;
                 } while (h != h0 && safetyCap > 0);
             }
+            });
             for (int v = 0; v < nV; v++) { vfStart[v] = vfTotal; vfTotal += vfCount[v]; vfCount[v] = 0; }
             vfStart[nV] = vfTotal;
             int[] vfFace = new int[vfTotal];
             byte[] vfLocal = new byte[vfTotal];   // local index in face is 0/1/2 - byte saves cache
             // Second pass: fill (face, local-index) per vertex.
-            for (int v = 0; v < nV; v++)
+            System.Threading.Tasks.Parallel.ForEach(
+                System.Collections.Concurrent.Partitioner.Create(0, nV, vertChunk), parOpts, _vr =>
+            {
+            for (int v = _vr.Item1; v < _vr.Item2; v++)
             {
                 if (P.Vertices[v].IsUnused) continue;
                 int h0 = P.Vertices[v].OutgoingHalfedge;
@@ -451,6 +470,7 @@ namespace CreaseMachine
                     safetyCap--;
                 } while (h != h0 && safetyCap > 0);
             }
+            });
             long t1 = perf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             if (perf) CHAStats.FacePrecomputeTicks += t1 - t0;
 
@@ -458,7 +478,10 @@ namespace CreaseMachine
             Vec3[] vertNormalsRaw = new Vec3[nV];
             Vec3[] vertNormals = new Vec3[nV];
             double[] vertDA = new double[nV];   // sum of incident double-areas, for the fold guard
-            for (int v = 0; v < nV; v++)
+            System.Threading.Tasks.Parallel.ForEach(
+                System.Collections.Concurrent.Partitioner.Create(0, nV, vertChunk), parOpts, _vr =>
+            {
+            for (int v = _vr.Item1; v < _vr.Item2; v++)
             {
                 if (P.Vertices[v].IsUnused) continue;
                 int vs = vfStart[v], ve = vfStart[v + 1];
@@ -470,6 +493,7 @@ namespace CreaseMachine
                 }
                 vertNormals[v] = vertNormalsRaw[v].Normalized();
             }
+            });
             long t2 = perf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             if (perf) CHAStats.VertNormalsTicks += t2 - t1;
 
@@ -492,12 +516,9 @@ namespace CreaseMachine
             // shared energyGrad sequentially - no lock contention during the parallel block.
             var taskGrads = new List<Vec3[]>();
             object taskGradsLock = new object();
-            // Cap parallelism: leave 2 logical cores free for the Rhino UI thread, GH redraw,
-            // and OS responsiveness so Running=true doesn't lock up the rest of the machine.
-            // Floor at 1 so 1-2 core systems still run (just sequentially).
-            int maxThreads = System.Math.Max(1, System.Environment.ProcessorCount - 2);
-            var parOpts = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = maxThreads };
-            int parChunkSize = System.Math.Max(64, (nV + maxThreads * 4 - 1) / (maxThreads * 4));
+            // maxThreads / parOpts hoisted above (shared with the precompute phases). The
+            // per-vertex chunk size matches vertChunk but is kept named for clarity here.
+            int parChunkSize = vertChunk;
             System.Threading.Tasks.Parallel.ForEach(
                 System.Collections.Concurrent.Partitioner.Create(0, nV, parChunkSize),
                 parOpts,
