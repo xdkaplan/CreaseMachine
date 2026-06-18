@@ -126,12 +126,21 @@ representative input.
 
 ```sh
 dotnet build test/GradCheck.csproj -c Release
-test/bin/Release/net48/GradCheck.exe
+test/bin/Release/net48/GradCheck.exe          # full suite
+test/bin/Release/net48/GradCheck.exe perf     # fast: FD gate + CHA perf + value checksums only
 ```
 
 (`GradCheck.exe` is a net48 executable — run it directly, not via `dotnet`.)
 Some diagnostics look for hardcoded STL files under `C:\Temp`; if they are
 absent those lines are skipped — that is expected.
+
+The `perf` mode times the CHA per-config (per-phase tick breakdown via `CHAStats`)
+on three meshes — `C:\Temp\Bunny {2.5k,5k,20k}.stl` — and prints **value-preservation
+checksums** (`sumE`, `sum|g|`, an index-weighted gradient probe) for the flow config.
+`sumE` is fully deterministic; the gradient sums carry ~1e-13 relative parallel-
+reduction jitter. When optimizing CHA, capture the checksums first and require every
+change to reproduce them to ~1e-9 relative — a real value bug lands far above that.
+See [`docs/PERF-CHA.md`](docs/PERF-CHA.md) for the optimization history and numbers.
 
 ## Vendored dependencies
 
