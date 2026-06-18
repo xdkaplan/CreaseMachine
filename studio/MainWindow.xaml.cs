@@ -30,7 +30,7 @@ namespace CreaseStudio
             InitializeComponent();
 
             _gl = new GLWpfControl();
-            Root.Children.Add(_gl);
+            CenterHost.Children.Add(_gl);   // GL viewport lives in the center cell of the docked layout
             _gl.Start(new GLWpfControlSettings
             {
                 MajorVersion = 3,
@@ -74,18 +74,44 @@ namespace CreaseStudio
                 catch { }
             }
 
-            // Minimal control overlay (top-left, over the viewport): a +10 iter button for now.
-            var bar = new System.Windows.Controls.StackPanel
+            // +10 iter control now lives in the top bar (declared in XAML); keep RunIters wired to it.
+            IterButton.Click += (s, e) => RunIters(10);
+
+            // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
+            LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
+            RightCollapseBtn.Click += (s, e) => ToggleCollapse(RightCol, ref _rightRestore);
+            // Dragging a splitter below the threshold collapses that panel (remembering the width it
+            // had before the drag, to restore to). Above the threshold, drag just resizes normally.
+            LeftSplitter.PreviewMouseLeftButtonDown += (s, e) => _preDragWidth = LeftCol.ActualWidth;
+            LeftSplitter.PreviewMouseLeftButtonUp += (s, e) => AfterSplitterDrag(LeftCol, ref _leftRestore);
+            RightSplitter.PreviewMouseLeftButtonDown += (s, e) => _preDragWidth = RightCol.ActualWidth;
+            RightSplitter.PreviewMouseLeftButtonUp += (s, e) => AfterSplitterDrag(RightCol, ref _rightRestore);
+        }
+
+        // A panel is "collapsed" when its column is narrower than CollapseThreshold (32px). The
+        // chevron button toggles between a thin CollapsedWidth bar and the last expanded width;
+        // dragging the splitter below the threshold also collapses (restoring to the pre-drag width).
+        const double CollapseThreshold = 32;
+        const double CollapsedWidth = 26;
+        double _leftRestore = 220, _rightRestore = 240;
+        double _preDragWidth;
+
+        void ToggleCollapse(System.Windows.Controls.ColumnDefinition col, ref double restore)
+        {
+            if (col.ActualWidth < CollapseThreshold)
+                col.Width = new GridLength(restore >= CollapseThreshold ? restore : 200);    // expand
+            else { restore = col.ActualWidth; col.Width = new GridLength(CollapsedWidth); }   // collapse
+        }
+
+        void AfterSplitterDrag(System.Windows.Controls.ColumnDefinition col, ref double restore)
+        {
+            double w = col.ActualWidth;
+            if (w < CollapseThreshold)
             {
-                Orientation = System.Windows.Controls.Orientation.Horizontal,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(8),
-            };
-            var btn = new System.Windows.Controls.Button { Content = "+10 iter", Padding = new Thickness(12, 5, 12, 5), FontSize = 13 };
-            btn.Click += (s, e) => RunIters(10);
-            bar.Children.Add(btn);
-            Root.Children.Add(bar);
+                if (_preDragWidth >= CollapseThreshold) restore = _preDragWidth;   // came from this width
+                col.Width = new GridLength(CollapsedWidth);
+            }
+            else { restore = w; col.Width = new GridLength(w); }   // pin the dragged width; remember it
         }
 
         // Run n flow steps in-process (cheap; on the UI thread), then flag the mesh for re-upload.

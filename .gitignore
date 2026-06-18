@@ -17,3 +17,6 @@
 # Local-only backup of the pre-netstandard2.0 Plankton.dll (kept for quick restore
 # if the netstandard rebuild ever needs reverting; not committed).
 lib/*.net48bak
+
+# agent worktrees (created by the Agent tool)
+.claude/worktrees/
