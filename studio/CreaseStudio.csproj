@@ -14,4 +14,15 @@
     <PackageReference Include="OpenTK" Version="4.8.2" />
     <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
   </ItemGroup>
+  <!-- same Rhino-free engine the plugin/CLI use, compiled in-process under net8 -->
+  <ItemGroup>
+    <Reference Include="Plankton">
+      <HintPath>..\lib\Plankton.dll</HintPath>
+    </Reference>
+    <Compile Include="..\src\Vec3.cs" />
+    <Compile Include="..\src\DevelopabilityEnergy.cs" />
+    <Compile Include="..\src\MeshOps.cs" />
+    <Compile Include="..\src\Session.cs" />
+    <Compile Include="..\src\MeshIO.cs" />
+  </ItemGroup>
 </Project>
