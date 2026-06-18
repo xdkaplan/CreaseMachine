@@ -177,6 +177,34 @@ keep their own loop copies on purpose: diagnostic harnesses, not under a sync co
 in-process GUI will hold a persistent `FlowSession` rather than the per-step transient the
 plugin/CLI wrap today.
 
+## In-process GUI — `studio/` (in active development)
+
+`studio/` (`CreaseStudio` → `CreaseStudio.exe`) is the real interactive viewer, heading toward a
+brush-to-freeze-creases design tool. Build:
+
+```sh
+dotnet build studio/CreaseStudio.csproj -c Release && studio/bin/Release/net8.0-windows/CreaseStudio.exe
+```
+
+Settled architecture (decided deliberately — don't drift from it without reason):
+
+- **net8 WPF, engine in-process.** The studio targets `net8.0-windows` and compiles the SAME
+  Rhino-free engine sources (`Vec3`/`DevelopabilityEnergy`/`MeshOps`/`Session`/`MeshIO`) directly,
+  driving a persistent (eventually) `FlowSession` in-process — no subprocess, no IPC. This is why
+  Plankton was retargeted to `netstandard2.0` (loads in both the net48 plugin and net8 here).
+- **WPF, not web/React.** The 3D viewport + in-process engine coupling (live re-upload each bake,
+  upcoming brush picking on per-vertex fields) is the dominant constraint; a JS boundary or a
+  WebView-over-GL airspace split would be a regression. Decision: native WPF all the way.
+- **3D via OpenTK + GLWpfControl** (`MeshView.cs`): MatCap / lit-sphere shader, Z-up (Rhino)
+  orbit camera. GLWpfControl's framebuffer is colour-only, so the studio attaches its own depth
+  renderbuffer each frame (a missing-depth bug, now fixed). Smooth shading uses plain area-weighted
+  vertex normals + a camera-orient in the shader (winding-independent).
+- **MVVM for the chrome** (`SimSettings.cs`): panel controls two-way bind to a view-model, NOT
+  code-behind, so the UI stays manageable as panels fill in. 4-panel docked layout (fixed top/bottom
+  bars, drag-resizable + chevron-collapsible left/right panels, center viewport).
+
+End goal and the open design notes live in the user's memory (`project-gui-northstar`).
+
 ## Vendored dependencies
 
 `lib/PlanktonGh.dll` is stock, unmodified upstream
