@@ -175,10 +175,14 @@ class (planned for the in-process GUI) removes the CLI↔production drift risk e
 
 ## Vendored dependencies
 
-`lib/Plankton.dll` and `lib/PlanktonGh.dll` are stock, unmodified upstream
+`lib/PlanktonGh.dll` is stock, unmodified upstream
 [Plankton](https://github.com/meshmash/Plankton) (0.4.3) by Daniel Piker and
-Will Pearson, vendored so the project builds without a separate Plankton
-checkout. Plankton is LGPL — see `NOTICE.md`.
+Will Pearson. `lib/Plankton.dll` is that same unmodified 0.4.3 source recompiled
+to **netstandard2.0** (zero code changes, same `0.4.3.0` version) so one assembly
+serves both the net48 plugin and a future net8 headless GUI; net48 loads it
+transparently and `PlanktonGh.dll` binds to it unchanged. Vendored so the project
+builds without a separate Plankton checkout. Plankton is LGPL — see
+[`docs/NOTICE.md`](docs/NOTICE.md) for the netstandard2.0 rebuild recipe.
 
 ## License
 

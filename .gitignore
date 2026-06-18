@@ -14,3 +14,6 @@
 
 # NOTE: lib/*.dll is intentionally NOT ignored — the vendored Plankton
 # assemblies must be committed so the project builds without a Plankton checkout.
+# Local-only backup of the pre-netstandard2.0 Plankton.dll (kept for quick restore
+# if the netstandard rebuild ever needs reverting; not committed).
+lib/*.net48bak

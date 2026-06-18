@@ -46,13 +46,32 @@ degenerate vertices (symmetric quads, icosahedral corners) and is documented in
 
 ## Plankton
 
-`lib/Plankton.dll` and `lib/PlanktonGh.dll` are stock, unmodified builds of
-upstream **Plankton** (0.4.3):
+`lib/PlanktonGh.dll` is a stock, unmodified upstream **Plankton** (0.4.3) build.
+`lib/Plankton.dll` is the unmodified upstream Plankton 0.4.3 **source recompiled to
+`netstandard2.0`** (zero source changes) so one assembly serves both the net48
+Grasshopper plugin and a net8 headless GUI. The assembly version is unchanged
+(`0.4.3.0`), so `PlanktonGh.dll` binds to it exactly as before, and net48 loads
+netstandard2.0 transparently.
 
 > Plankton — a flexible and efficient library for handling polygon meshes
 > (half-edge data structure) for .NET.
 > Copyright © Daniel Piker and Will Pearson.
 > https://github.com/meshmash/Plankton
+
+To reproduce `lib/Plankton.dll`: clone upstream at tag `v0.4.3` and build
+`src/Plankton` with this SDK-style project (the only added file — no code touched):
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <AssemblyName>Plankton</AssemblyName>
+    <RootNamespace>Plankton</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+</Project>
+```
 
 Plankton is licensed under the **GNU Lesser General Public License (LGPL)**.
 LGPL is compatible with this project's GPL-v2 license: GPL-v2 code may link
