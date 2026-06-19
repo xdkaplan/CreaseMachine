@@ -6,6 +6,33 @@
     <Window.Resources>
         <!-- sidebar-collapse glyph (from sidebar-collapse.svg, 800x800); evenodd (F0). Mirrored
              with ScaleX=-1 for the right panel. -->
+        <!-- Dark, flat tab headers (the default WPF TabItem renders light/3D, clashing with the
+             hand-styled dark panels). Implicit style -> applies to every TabItem in the window. -->
+        <Style TargetType="TabItem">
+            <Setter Property="Foreground" Value="#8A8A98" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="hdr" Padding="9,4" Margin="0,0,2,0" Background="Transparent"
+                                BorderThickness="0,0,0,2" BorderBrush="Transparent">
+                            <ContentPresenter ContentSource="Header" HorizontalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="hdr" Property="BorderBrush" Value="#6A9FE0" />
+                                <Setter Property="Foreground" Value="#E0E0E8" />
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#C8C8D0" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Geometry x:Key="CollapseIcon">F0 m375.35 316.42l-82.33 82.33 82.33 82.34c4.97 4.62 7.84 11.06 7.96 17.85 0.12 6.78-2.52 13.32-7.32 18.11-4.8 4.8-11.34 7.44-18.12 7.32-6.78-0.12-13.22-2.99-17.85-7.95l-100-100c-2.32-2.32-4.16-5.08-5.41-8.11-1.25-3.03-1.9-6.28-1.9-9.56 0-3.28 0.65-6.53 1.9-9.56 1.25-3.03 3.09-5.78 5.41-8.1l100-100c4.74-4.42 11.01-6.82 17.49-6.71 6.47 0.11 12.65 2.74 17.23 7.32 4.58 4.58 7.21 10.76 7.32 17.24 0.11 6.47-2.29 12.74-6.71 17.48z m125 66.67c-7.66 0-15.25 1.51-22.32 4.44-7.08 2.93-13.51 7.23-18.93 12.64-5.41 5.42-9.71 11.85-12.64 18.93-2.93 7.07-4.44 14.66-4.44 22.32v550c0 32.2 26.13 58.33 58.33 58.33h550c7.66 0 15.25-1.51 22.32-4.44 7.08-2.93 13.51-7.23 18.93-12.64 5.41-5.42 9.71-11.85 12.64-18.93 2.93-7.07 4.44-14.66 4.44-22.32v-550c0-7.66-1.51-15.25-4.44-22.32-2.93-7.08-7.23-13.51-12.64-18.93-5.42-5.41-11.85-9.71-18.93-12.64-7.07-2.93-14.66-4.44-22.32-4.44zm-8.33 58.33q0-1.66 0.63-3.19 0.64-1.53 1.81-2.7 1.17-1.17 2.7-1.81 1.53-0.63 3.19-0.63h375v566.66h-375q-1.66 0-3.19-0.63-1.53-0.64-2.7-1.81-1.17-1.17-1.81-2.7-0.63-1.53-0.63-3.19zm433.33 558.33v-566.66h125q1.66 0 3.19 0.63 1.53 0.64 2.7 1.81 1.17 1.17 1.81 2.7 0.63 1.53 0.63 3.19v550q0 1.66-0.63 3.19-0.64 1.53-1.81 2.7-1.17 1.17-2.7 1.81-1.53 0.63-3.19 0.63z</Geometry>
     </Window.Resources>
     <!-- Standard 4-panel docked chrome: fixed top/bottom bars, drag-resizable + collapsible
@@ -20,10 +47,17 @@
         <!-- TOP bar (full width, 32px) -->
         <Border Grid.Row="0" Background="#2D2D30">
             <DockPanel LastChildFill="False" Margin="8,0">
-                <TextBlock DockPanel.Dock="Left" Text="Top bar" Foreground="#C8C8C8"
+                <TextBlock DockPanel.Dock="Left" Text="CreaseStudio" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
+                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | +N iter. -->
                 <Button x:Name="IterButton" DockPanel.Dock="Right" Content="{Binding IterLabel}"
-                        Padding="12,2" FontSize="12" VerticalAlignment="Center" />
+                        Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center" />
+                <Button x:Name="SubdivideButton" DockPanel.Dock="Right" Content="SubD"
+                        Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
+                        ToolTip="One 1-to-4 subdivision (refine, then keep flowing)" />
+                <Button x:Name="ResetButton" DockPanel.Dock="Right" Content="Reset"
+                        Padding="10,2" FontSize="12" VerticalAlignment="Center"
+                        ToolTip="Reload the input mesh and reset the flow" />
             </DockPanel>
         </Border>
 
@@ -66,67 +100,19 @@
                           Background="#3F3F46" ShowsPreview="False"
                           ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
 
-            <!-- RIGHT panel: simulation settings (bound to SimSettings view-model); collapse chevron
-                 at top-LEFT (inner) corner, icon mirrored -->
+            <!-- RIGHT panel: SIMULATION / DISPLAY tabs (bound to SimSettings view-model). Collapse
+                 chevron sits in its own thin strip at the top-LEFT (inner) corner, icon mirrored;
+                 the tab strip + content fill the rest. -->
             <Border Grid.Column="4" Background="#2A2A2E" ClipToBounds="True">
                 <Grid>
-                    <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,30,0,8">
-                        <StackPanel Margin="10,0,10,0">
-                            <TextBlock Text="SIMULATION" Foreground="#7A7A88" FontSize="10"
-                                       FontWeight="Bold" Margin="2,0,0,8" />
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="26" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
 
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="Iter / run" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding IterPerRun}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="1" Maximum="100" Value="{Binding IterPerRun}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="Step" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Step, StringFormat=0.###}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="0" Maximum="0.2" Value="{Binding Step}" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="Momentum" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Momentum, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="0" Maximum="0.95" Value="{Binding Momentum}" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="deCraze" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DeCraze, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="0" Maximum="1" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="CrazeBand" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding CrazeBand, StringFormat=0.###}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="0" Maximum="0.5" Value="{Binding CrazeBand}" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="Sharpness" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Sharpness, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="0" Maximum="8" Value="{Binding Sharpness}" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="DetMix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DetMix, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="0" Maximum="1" Value="{Binding DetMix}" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-
-                            <DockPanel Margin="0,3,0,0">
-                                <TextBlock DockPanel.Dock="Left" Text="MomFix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MomFix}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                <Slider Minimum="1" Maximum="4" Value="{Binding MomFix}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
-                            </DockPanel>
-                        </StackPanel>
-                    </ScrollViewer>
-
-                    <Button x:Name="RightCollapseBtn" HorizontalAlignment="Left" VerticalAlignment="Top"
-                            Width="24" Height="24" Margin="4,4,0,0" Background="Transparent"
+                    <!-- chevron strip -->
+                    <Button x:Name="RightCollapseBtn" Grid.Row="0" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Width="24" Height="24" Margin="4,2,0,0" Background="Transparent"
                             BorderThickness="0" Cursor="Hand" ToolTip="Collapse / expand panel">
                         <Viewbox Width="15" Height="15">
                             <Path Data="{StaticResource CollapseIcon}" Fill="#A0A6AE"
@@ -137,6 +123,69 @@
                             </Path>
                         </Viewbox>
                     </Button>
+
+                    <TabControl Grid.Row="1" Background="Transparent" BorderThickness="0" Padding="0">
+                        <TabItem Header="SIMULATION">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,8">
+                                <StackPanel Margin="10,0,10,0">
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Iter / run" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding IterPerRun}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="1" Maximum="100" Value="{Binding IterPerRun}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Step" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Step, StringFormat=0.###}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="0.2" Value="{Binding Step}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Momentum" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Momentum, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="0.95" Value="{Binding Momentum}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="deCraze" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DeCraze, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="1" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="CrazeBand" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding CrazeBandDeg, StringFormat={}{0:0.#}°}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="30" Value="{Binding CrazeBandDeg}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Sharpness" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Sharpness, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="8" Value="{Binding Sharpness}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="DetMix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DetMix, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="1" Value="{Binding DetMix}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="MomFix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MomFix}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="1" Maximum="4" Value="{Binding MomFix}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="DISPLAY">
+                            <StackPanel Margin="12,14,12,0">
+                                <TextBlock Text="MatCap, background, wireframe and energy-colour controls will live here."
+                                           Foreground="#8A8A98" FontSize="11" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </TabItem>
+                    </TabControl>
                 </Grid>
             </Border>
         </Grid>

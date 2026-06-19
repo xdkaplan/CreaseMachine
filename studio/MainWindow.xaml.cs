@@ -15,6 +15,7 @@ namespace CreaseStudio
         MeshView _view;
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
+        string _meshPath;            // source mesh path, so Reset can reload the input from disk
         bool _glInit, _meshDirty;
         long _totalIters;
         byte[] _matcapPx; int _matcapW, _matcapH;   // matcap texture pixels (BGRA, GL row order)
@@ -49,7 +50,7 @@ namespace CreaseStudio
             string def = @"C:\Temp\Bunny 5k.stl";
             if (System.IO.File.Exists(def))
             {
-                try { _session = new FlowSession(MeshIO.Load(def)); Title = "CreaseStudio — " + System.IO.Path.GetFileName(def); }
+                try { _session = new FlowSession(MeshIO.Load(def)); _meshPath = def; Title = "CreaseStudio — " + System.IO.Path.GetFileName(def); }
                 catch (Exception ex) { Title = "CreaseStudio — load failed: " + ex.Message; }
             }
             else Title = "CreaseStudio — (no mesh at " + def + ")";
@@ -76,8 +77,10 @@ namespace CreaseStudio
                 catch { }
             }
 
-            // +10 iter control now lives in the top bar (declared in XAML); keep RunIters wired to it.
+            // Top-bar actions (declared in XAML): run N flow steps, one subdivision, reset.
             IterButton.Click += (s, e) => RunIters(_sim.IterPerRun);
+            SubdivideButton.Click += (s, e) => Subdivide();
+            ResetButton.Click += (s, e) => ResetMesh();
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -131,6 +134,30 @@ namespace CreaseStudio
             _totalIters += n;
             _meshDirty = true;
             Title = "CreaseStudio — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
+            _gl?.InvalidateVisual();
+        }
+
+        // One 1->4 subdivision of the live mesh (geometry-preserving), then re-upload. Momentum
+        // resets inside FlowSession.Subdivide (vertex indices are renumbered). Camera unchanged.
+        void Subdivide()
+        {
+            if (_session == null) return;
+            _session.Subdivide();
+            _meshDirty = true;
+            Title = "CreaseStudio — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
+            _gl?.InvalidateVisual();
+        }
+
+        // Reload the input mesh from disk and reset the flow (fresh velocity, iteration count 0).
+        // Same mesh bounds as the initial load, so the camera framing stays valid.
+        void ResetMesh()
+        {
+            if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;
+            try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
+            catch (Exception ex) { Title = "CreaseStudio — reset failed: " + ex.Message; return; }
+            _totalIters = 0;
+            _meshDirty = true;
+            Title = "CreaseStudio — " + System.IO.Path.GetFileName(_meshPath);
             _gl?.InvalidateVisual();
         }
 
