@@ -275,7 +275,7 @@ namespace CreaseStudio
         void SaveSession()
         {
             var dlg = new Microsoft.Win32.SaveFileDialog
-            { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*", FileName = "session.journal" };
+            { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*", FileName = "session.journal", InitialDirectory = @"C:\Temp" };
             if (dlg.ShowDialog() != true) return;
             var lines = new System.Collections.Generic.List<string> { "# CreaseStudio session journal" };
             foreach (var c in _journal) lines.Add(c.Serialize());
@@ -285,7 +285,7 @@ namespace CreaseStudio
 
         void OpenAndReplay()
         {
-            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*" };
+            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*", InitialDirectory = @"C:\Temp" };
             if (dlg.ShowDialog() != true) return;
             var cmds = new System.Collections.Generic.List<StudioCommand>();
             try { foreach (var ln in System.IO.File.ReadAllLines(dlg.FileName)) { var c = StudioCommand.Parse(ln); if (c != null) cmds.Add(c); } }

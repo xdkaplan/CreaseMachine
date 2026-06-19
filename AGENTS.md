@@ -202,6 +202,18 @@ Settled architecture (decided deliberately — don't drift from it without reaso
 - **MVVM for the chrome** (`SimSettings.cs`): panel controls two-way bind to a view-model, NOT
   code-behind, so the UI stays manageable as panels fill in. 4-panel docked layout (fixed top/bottom
   bars, drag-resizable + chevron-collapsible left/right panels, center viewport).
+- **Command sink + journal harness** (`Journal.cs`): every action (load/run/subdivide/reset/shading/
+  matcap) routes through one `Execute(StudioCommand, record)` chokepoint — the architectural spine
+  for record/replay (and, later, undo). A recorded session saves to a `.journal` and replays live
+  against the GUI one command per timer tick, logging per-command ms + `FlowMetrics` (sumE/panels/
+  maxDih) — a *soft* perf/value drift signal across commits (GUI-inclusive: includes the mesh
+  re-upload), not a hard gate. Run commands carry a full `FlowParams` snapshot, so they replay
+  identically regardless of slider state. The `.journal` grammar is a **superset of the CLI's
+  run-param vocabulary**, so the same file drives both harnesses — headed studio (visual/workflow)
+  and headless `crease.exe` (value/perf CI); verified by running a studio-format journal through the
+  CLI with no unknown-param warnings. Display controls sync on replay via a suppress flag (no
+  re-record). Camera orbit is intentionally not journaled (high-frequency/noisy); golden-image
+  render diffing and hard assertions are deferred.
 
 End goal and the open design notes live in the user's memory (`project-gui-northstar`).
 
