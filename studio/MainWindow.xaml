@@ -315,33 +315,42 @@
             </Border>
         </Grid>
 
-        <!-- BOTTOM bar (full width, 64px): brushes (square tiles, word inside). Live perf/status
-             readout on the right. Session transport lives in the Console window. -->
+        <!-- BOTTOM bar (full width, 64px): brush tiles in a horizontally-scrollable strip (the roster
+             is growing). Live perf/status readout pinned on the right. Session transport is in the Console. -->
         <Border Grid.Row="3" Background="#2D2D30">
-            <DockPanel Margin="8,0" LastChildFill="False">
-                <ToggleButton x:Name="NoiseBrushButton" DockPanel.Dock="Left" Content="NOISE"
-                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="NOISE — ± normal Perlin displacement. Left-drag paints. [ ] size, Ctrl+Shift+[ ] soften/harden." />
-                <ToggleButton x:Name="CreaseBrushButton" DockPanel.Dock="Left" Content="CREASE"
-                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="CREASE — carves an inward valley/fold line to seed a panel boundary (Softness = width). [prototype]" />
-                <ToggleButton x:Name="FlattenBrushButton" DockPanel.Dock="Left" Content="FLATTEN"
-                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="FLATTEN — presses the area onto the plane you start the stroke on -> a clean flat panel. [prototype]" />
-                <ToggleButton x:Name="SmoothBrushButton" DockPanel.Dock="Left" Content="SMOOTH"
-                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="SMOOTH — Laplacian relax toward the neighbour average: denoise / soften wrinkles. [prototype]" />
-                <ToggleButton x:Name="PolishBrushButton" DockPanel.Dock="Left" Content="POLISH"
-                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="POLISH — developability flow with crease-preserving deCraze (Huber band): cleans panels, keeps sharp creases." />
-                <ToggleButton x:Name="BuffBrushButton" DockPanel.Dock="Left" Content="BUFF"
-                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="BUFF — same deCraze flow but with no Huber band (pure L1): rounds / softens creases." />
-                <ToggleButton x:Name="SharpenBrushButton" DockPanel.Dock="Left" Content="SHARPEN"
-                              Width="54" Height="48" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="SHARPEN — developability burst with max-covariance: forces straighter rulings / clearer panel structure. [prototype]" />
+            <DockPanel Margin="8,0">
                 <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="" Foreground="#8A8A98"
-                           VerticalAlignment="Center" FontSize="11" />
+                           VerticalAlignment="Center" FontSize="11" Margin="8,0,0,0" />
+                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <ToggleButton x:Name="NoiseBrushButton" Content="NOISE" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="NOISE — ± normal Perlin displacement. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                        <ToggleButton x:Name="InflateBrushButton" Content="INFLATE" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="INFLATE — push the surface outward along normals (puff / ridge). [prototype]" />
+                        <ToggleButton x:Name="CreaseBrushButton" Content="CREASE" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="CREASE — carves an inward valley/fold line to seed a panel boundary (Softness = width). [prototype]" />
+                        <ToggleButton x:Name="FlattenBrushButton" Content="FLATTEN" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="FLATTEN — presses the area onto the plane you start the stroke on -> a clean flat panel. [prototype]" />
+                        <ToggleButton x:Name="ScrapeBrushButton" Content="SCRAPE" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="SCRAPE — flatten only the high spots onto the plane (carve peaks, leave valleys) -> crisp facet tops. [prototype]" />
+                        <ToggleButton x:Name="FillBrushButton" Content="FILL" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="FILL — flatten only the low spots up onto the plane (fill valleys, leave peaks). [prototype]" />
+                        <ToggleButton x:Name="SmoothBrushButton" Content="SMOOTH" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="SMOOTH — Laplacian relax toward the neighbour average: denoise / soften wrinkles (also rounds creases). [prototype]" />
+                        <ToggleButton x:Name="RelaxBrushButton" Content="RELAX" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="RELAX — tangential-only smoothing: improves mesh quality WITHOUT softening creases. [prototype]" />
+                        <ToggleButton x:Name="PolishBrushButton" Content="POLISH" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="POLISH — developability flow with crease-preserving deCraze (Huber band): cleans panels, keeps sharp creases." />
+                        <ToggleButton x:Name="BuffBrushButton" Content="BUFF" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="BUFF — same deCraze flow but no Huber band (pure L1): rounds / softens creases." />
+                        <ToggleButton x:Name="SharpenBrushButton" Content="SHARPEN" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="SHARPEN — developability burst with max-covariance: straighter rulings / clearer panel structure. [prototype]" />
+                        <ToggleButton x:Name="PanelBrushButton" Content="PANEL" Width="54" Height="48" Margin="0,0,5,0" FontSize="10" FontWeight="Bold"
+                                      ToolTip="PANEL — burst with B.2 consolidation (deConsolidate 0.5): merges within-patch normals into one clean flat panel, keeps the borders. Strongest panel-separator. [prototype]" />
+                        <ToggleButton x:Name="UnforkBrushButton" Content="UNFORK" Width="54" Height="48" FontSize="10" FontWeight="Bold"
+                                      ToolTip="UNFORK — burst with B.5.1 anti-branching (deBranch 0.7) + max-covariance: resolves forked/branching seams into one clean straight crease. [prototype]" />
+                    </StackPanel>
+                </ScrollViewer>
             </DockPanel>
         </Border>
     </Grid>

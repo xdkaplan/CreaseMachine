@@ -51,7 +51,8 @@ namespace CreaseStudio
         // Brushes (the editors). One active at a time; left-drag paints, right-drag still orbits.
         // Polish = deCraze w/ Huber band (clean creases); Buff = no band (rounds them); Sharpen = burst
         // w/ max-covariance (straight rulings). Crease/Flatten/Smooth are direct geometric offsets.
-        enum BrushKind { None, Noise, Polish, Buff, Sharpen, Crease, Flatten, Smooth }
+        enum BrushKind { None, Noise, Polish, Buff, Sharpen, Crease, Flatten, Smooth,
+                         Inflate, Scrape, Fill, Relax, Panel, Unfork }
         BrushKind _brush = BrushKind.None;
         bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
@@ -223,6 +224,12 @@ namespace CreaseStudio
             WireBrushTile(CreaseBrushButton, BrushKind.Crease);
             WireBrushTile(FlattenBrushButton, BrushKind.Flatten);
             WireBrushTile(SmoothBrushButton, BrushKind.Smooth);
+            WireBrushTile(InflateBrushButton, BrushKind.Inflate);
+            WireBrushTile(ScrapeBrushButton, BrushKind.Scrape);
+            WireBrushTile(FillBrushButton, BrushKind.Fill);
+            WireBrushTile(RelaxBrushButton, BrushKind.Relax);
+            WireBrushTile(PanelBrushButton, BrushKind.Panel);
+            WireBrushTile(UnforkBrushButton, BrushKind.Unfork);
         }
 
         // A tile selects its brush on check, and clears to None when toggled off.
@@ -245,6 +252,12 @@ namespace CreaseStudio
             CreaseBrushButton.IsChecked = k == BrushKind.Crease;
             FlattenBrushButton.IsChecked = k == BrushKind.Flatten;
             SmoothBrushButton.IsChecked = k == BrushKind.Smooth;
+            InflateBrushButton.IsChecked = k == BrushKind.Inflate;
+            ScrapeBrushButton.IsChecked = k == BrushKind.Scrape;
+            FillBrushButton.IsChecked = k == BrushKind.Fill;
+            RelaxBrushButton.IsChecked = k == BrushKind.Relax;
+            PanelBrushButton.IsChecked = k == BrushKind.Panel;
+            UnforkBrushButton.IsChecked = k == BrushKind.Unfork;
             _suppressBrushUi = false;
             if (k == BrushKind.None) _previewDot.Visibility = Visibility.Collapsed;
         }
@@ -744,6 +757,17 @@ namespace CreaseStudio
                     D[i] = nrm[i] * (float)(-amp);
                 }
             }
+            else if (_brush == BrushKind.Inflate)
+            {
+                // Constant outward (+normal) push -> raise a ridge/dome (mirror of Crease).
+                double amp = 1.5 * RepEdge(P) * (strength / 30.0);
+                Vector3[] nrm = VertexNormals(P);
+                for (int i = 0; i < nv; i++)
+                {
+                    if (P.Vertices[i].IsUnused) continue;
+                    D[i] = nrm[i] * (float)amp;
+                }
+            }
             else if (_brush == BrushKind.Smooth)
             {
                 // Umbrella-Laplacian relax toward the 1-ring average -> denoise, smooth out wrinkles.
@@ -763,42 +787,77 @@ namespace CreaseStudio
                     D[i] = (sum[i] / cnt[i] - new Vector3(pv.X, pv.Y, pv.Z)) * (float)scale;
                 }
             }
-            else if (_brush == BrushKind.Flatten && hasHit)
+            else if (_brush == BrushKind.Relax)
             {
-                // Project onto the plane fit to the footprint at the stroke-start point -> a clean flat
-                // panel. (Far-from-plane verts get a big D, but only brushed verts ever move.)
+                // Tangential-only Laplacian: relax IN the surface (strip the normal component) so it
+                // improves triangle quality WITHOUT softening creases (unlike Smooth, which rounds them).
+                double scale = Math.Min(1.0, strength / 30.0);
+                var sum = new Vector3[nv]; var cnt = new int[nv];
+                int nh = P.Halfedges.Count;
+                for (int h = 0; h < nh; h++)
+                {
+                    if (P.Halfedges[h].IsUnused) continue;
+                    int a = P.Halfedges[h].StartVertex, b = P.Halfedges[h ^ 1].StartVertex;
+                    sum[a] += V(P, b); cnt[a]++;
+                }
                 Vector3[] nrm = VertexNormals(P);
-                double R = _sim.BrushSize, R2 = R * R, sigma = Math.Max(0.05, _sim.BrushSoftness) * R, twoSig2 = 2.0 * sigma * sigma;
-                Vector3 nAcc = Vector3.Zero;
                 for (int i = 0; i < nv; i++)
                 {
                     var pv = P.Vertices[i];
-                    if (pv.IsUnused) continue;
-                    double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z, d2 = dx * dx + dy * dy + dz * dz;
-                    if (d2 > R2) continue;
-                    nAcc += nrm[i] * (float)Math.Exp(-d2 / twoSig2);
+                    if (pv.IsUnused || P.Vertices.IsBoundary(i) || cnt[i] == 0) continue;
+                    Vector3 u = sum[i] / cnt[i] - new Vector3(pv.X, pv.Y, pv.Z);
+                    Vector3 n = nrm[i];
+                    D[i] = (u - n * Vector3.Dot(u, n)) * (float)scale;   // tangential component only
                 }
-                Vector3 N = nAcc.LengthSquared > 1e-12f ? Vector3.Normalize(nAcc) : Vector3.UnitZ;
+            }
+            else if ((_brush == BrushKind.Flatten || _brush == BrushKind.Scrape || _brush == BrushKind.Fill) && hasHit)
+            {
+                // Project the footprint onto the plane fit at the stroke-start point. Flatten = both
+                // sides; Scrape = push only the high spots down; Fill = push only the low spots up.
+                Vector3[] nrm = VertexNormals(P);
+                Vector3 N = FootprintPlaneNormal(hit, nrm);
                 for (int i = 0; i < nv; i++)
                 {
                     var pv = P.Vertices[i];
                     if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
-                    Vector3 rel = new Vector3(pv.X, pv.Y, pv.Z) - hit;
-                    D[i] = N * (-Vector3.Dot(rel, N));   // displacement onto the plane
+                    float sd = Vector3.Dot(new Vector3(pv.X, pv.Y, pv.Z) - hit, N);   // signed distance to the plane
+                    if (_brush == BrushKind.Scrape && sd <= 0f) continue;   // carve only peaks
+                    if (_brush == BrushKind.Fill && sd >= 0f) continue;     // fill only valleys
+                    D[i] = N * (-sd);
                 }
             }
-            else if (_brush == BrushKind.Polish) ComputeBuffTarget(D, band, false);   // Huber band: keeps sharp creases
-            else if (_brush == BrushKind.Buff) ComputeBuffTarget(D, 0.0, false);       // no band (pure L1): rounds creases
-            else if (_brush == BrushKind.Sharpen) ComputeBuffTarget(D, band, true);    // max-covariance: straighter rulings / clearer panels
+            else if (_brush == BrushKind.Polish) ComputeBuffTarget(D, 0.0, 0.0, false, BuffDeCraze, band);   // crease-preserving
+            else if (_brush == BrushKind.Buff) ComputeBuffTarget(D, 0.0, 0.0, false, BuffDeCraze, 0.0);       // rounds creases
+            else if (_brush == BrushKind.Sharpen) ComputeBuffTarget(D, 0.0, 0.0, true, BuffDeCraze, band);    // straight rulings
+            else if (_brush == BrushKind.Panel) ComputeBuffTarget(D, 0.0, 0.5, false, BuffDeCraze, band);     // B.2 consolidation: merge into clean panels
+            else if (_brush == BrushKind.Unfork) ComputeBuffTarget(D, 0.7, 0.0, true, BuffDeCraze, band);     // B.5.1 anti-branch + maxCov: un-fork seams
             return D;
         }
 
-        // Polish/Buff target: run K (= Strength) developability iterations (covariance + a fixed
-        // BuffDeCraze consolidation weight, with the given CrazeBand) on the live mesh, record the
-        // per-vertex displacement, then restore the mesh. The expensive flow runs once here per stroke;
-        // the dabs that paint it in are cheap. crazeBand>0 (Polish) preserves creases; 0 (Buff) rounds them;
-        // useMaxCov (Sharpen) forces normals onto one arc -> straighter rulings / clearer panels.
-        void ComputeBuffTarget(Vector3[] D, double crazeBand, bool useMaxCov)
+        // Gaussian-weighted average vertex normal over the footprint at `hit` (the local plane normal).
+        Vector3 FootprintPlaneNormal(Vector3 hit, Vector3[] nrm)
+        {
+            var P = _session.Mesh;
+            int nv = P.Vertices.Count;
+            double R = _sim.BrushSize, R2 = R * R, sigma = Math.Max(0.05, _sim.BrushSoftness) * R, twoSig2 = 2.0 * sigma * sigma;
+            Vector3 nAcc = Vector3.Zero;
+            for (int i = 0; i < nv; i++)
+            {
+                var pv = P.Vertices[i];
+                if (pv.IsUnused) continue;
+                double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z, d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > R2) continue;
+                nAcc += nrm[i] * (float)Math.Exp(-d2 / twoSig2);
+            }
+            return nAcc.LengthSquared > 1e-12f ? Vector3.Normalize(nAcc) : Vector3.UnitZ;
+        }
+
+        // Developability-burst target: run K (= Strength) gradient iterations on the live mesh with the
+        // given energy levers, record the per-vertex displacement, then restore the mesh. The expensive
+        // flow runs once here per stroke; the dabs that paint it in are cheap. Levers (per the engine):
+        // deBranch = B.5.1 anti-branching (un-fork seams ~0.5-1.0), deConsolidate = B.2 merge into clean
+        // panels (~0.5), useMaxCov = straight rulings, deCraze + crazeBand = crease sparsity / preservation.
+        void ComputeBuffTarget(Vector3[] D, double deBranch, double deConsolidate, bool useMaxCov, double deCraze, double crazeBand)
         {
             var P = _session.Mesh;
             int nv = P.Vertices.Count;
@@ -813,7 +872,7 @@ namespace CreaseStudio
             for (int k = 0; k < K; k++)
             {
                 DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
-                    0.0, 0.0, useMaxCov, _sim.Sharpness, BuffDeCraze, true, null, _sim.DetMix);
+                    deBranch, deConsolidate, useMaxCov, _sim.Sharpness, deCraze, true, null, _sim.DetMix);
                 for (int i = 0; i < nv; i++)
                 {
                     var pv = P.Vertices[i];
