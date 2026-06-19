@@ -56,7 +56,7 @@ namespace CreaseStudio
         readonly Perlin _noise = new Perlin();
         double _strokeAmp;                // noise bump height for the current stroke (~edge length)
         double[] _strokeCov;              // per-vertex coverage this stroke (NOISE opacity/flow accumulation)
-        System.Windows.Threading.DispatcherTimer _brushTimer;   // applies dabs while held (flow over time)
+        double _dabAccum;                 // screen-px traveled since the last dab (path-spacing accumulator)
         System.Windows.Point _lastHover;  // last hover position, to refresh the preview after a size change
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -100,17 +100,6 @@ namespace CreaseStudio
             };
             CenterHost.Children.Add(_previewDot);
             _gl.MouseLeave += (s, e) => _previewDot.Visibility = Visibility.Collapsed;
-
-            // While an Edit (brush) drag is held, keep dabbing at the cursor on a timer so scrubbing —
-            // or just holding still — accumulates effect over time (flow). Self-throttles (a tick won't
-            // re-enter while the previous dab is still running). BUFF self-damps, so it settles where
-            // already developable; NOISE fills to its coverage ceiling and stops.
-            _brushTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
-            _brushTimer.Tick += (s, e) =>
-            {
-                if (_drag == DragMode.Edit && _brush != BrushKind.None && _session != null
-                    && PickSurface(_lastMouse, out var hit)) ApplyDab(hit);
-            };
 
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
@@ -492,9 +481,9 @@ namespace CreaseStudio
                 if (_brush != BrushKind.None && _session != null)
                 {
                     _strokeCov = new double[_session.Mesh.Vertices.Count];   // fresh coverage for this stroke
+                    _dabAccum = 0;                                            // reset path-spacing accumulator
                     if (_brush == BrushKind.Noise) _strokeAmp = 2.0 * RepEdge(_session.Mesh);   // noise bump height
-                    if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);
-                    _brushTimer.Start();   // keep accumulating while held (flow over time)
+                    if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);   // initial dab at the down point
                 }
             }
             else return;
@@ -503,7 +492,6 @@ namespace CreaseStudio
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
-            _brushTimer?.Stop();
             if (_drag == DragMode.Edit && _brush != BrushKind.None && _session != null)
                 _session.ZeroMomentum();   // a manual edit invalidates the stale Nesterov velocity
             _drag = DragMode.None;
@@ -519,6 +507,12 @@ namespace CreaseStudio
                 if (_brush != BrushKind.None) UpdatePreview(p);   // brush-footprint preview on hover
                 return;
             }
+            if (_drag == DragMode.Edit)
+            {
+                if (_brush != BrushKind.None) BrushStrokeTo(p);   // a dab every `spacing` px along the path
+                _lastMouse = p;
+                return;
+            }
             float dx = (float)(p.X - _lastMouse.X), dy = (float)(p.Y - _lastMouse.Y);
             _lastMouse = p;
             switch (_drag)
@@ -531,10 +525,34 @@ namespace CreaseStudio
                 case DragMode.Pan:
                     PanCamera(dx, dy);
                     break;
-                case DragMode.Edit:
-                    // Position only — the brush timer applies dabs at _lastMouse (flow over time).
-                    break;
             }
+        }
+
+        // Place a dab every `spacing` screen-pixels along the stroke path (a -> b), so dab count tracks
+        // path LENGTH, not time — moving slow or fast over the same path lays the same dabs, and holding
+        // still places none. _dabAccum carries the leftover distance across moves.
+        void BrushStrokeTo(System.Windows.Point b)
+        {
+            double dx = b.X - _lastMouse.X, dy = b.Y - _lastMouse.Y;
+            double seg = Math.Sqrt(dx * dx + dy * dy);
+            if (seg < 1e-6) return;
+            double spacing = BrushSpacingPx(b);
+            double pos = spacing - _dabAccum;        // distance from a to the first dab on this segment
+            while (pos <= seg)
+            {
+                double t = pos / seg;
+                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit))
+                    ApplyDab(hit);
+                pos += spacing;
+            }
+            _dabAccum = seg - (pos - spacing);       // leftover since the last dab placed
+        }
+
+        // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
+        double BrushSpacingPx(System.Windows.Point screen)
+        {
+            if (_session != null && PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
+            return 8.0;   // fallback when the cursor isn't over the mesh
         }
 
         // Translate the orbit target in the camera's screen plane (Shift+right-drag). Speed scales
@@ -743,15 +761,21 @@ namespace CreaseStudio
         {
             if (_brush == BrushKind.None || _session == null || !PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
+            double rpx = ScreenRadiusPx(hit);
+            _previewDot.Width = _previewDot.Height = 2.0 * rpx;
+            _previewDot.Margin = new Thickness(cursor.X - rpx, cursor.Y - rpx, 0, 0);
+            _previewDot.Visibility = Visibility.Visible;
+        }
+
+        // The brush's world radius projected to screen pixels at the given surface point's depth.
+        double ScreenRadiusPx(Vector3 hit)
+        {
             Vector3 dir = CamDir();
             Vector3 eye = _target + dir * _distance;
             double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
             double h = Math.Max(1, _gl.ActualHeight);
             double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
-            double rpx = _sim.BrushSize * h / (2.0 * dist * tanH);
-            _previewDot.Width = _previewDot.Height = 2.0 * rpx;
-            _previewDot.Margin = new Thickness(cursor.X - rpx, cursor.Y - rpx, 0, 0);
-            _previewDot.Visibility = Visibility.Visible;
+            return _sim.BrushSize * h / (2.0 * dist * tanH);
         }
 
         void InvalidateView() { _gl?.InvalidateVisual(); }
