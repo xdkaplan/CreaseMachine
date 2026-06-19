@@ -264,9 +264,10 @@
                             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,8">
                                 <StackPanel Margin="10,0,10,0">
                                     <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Strength" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushStrength, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="20" Value="{Binding BrushStrength}" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Left" Text="Strength" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Buff: developability iterations per stroke (K). Noise: amplitude." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushStrength, StringFormat=0}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="1" Maximum="60" Value="{Binding BrushStrength}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">

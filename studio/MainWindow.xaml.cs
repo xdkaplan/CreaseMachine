@@ -57,7 +57,7 @@ namespace CreaseStudio
         Vector3[] _strokeOffset;          // per-vertex target offset frozen at stroke start (NOISE noise / BUFF burst)
         double[] _strokeCov;              // per-vertex coverage this stroke (Flow builds it toward Strength)
         double _dabAccum;                 // screen-px traveled since the last dab (path-spacing accumulator)
-        const int BuffBurstIters = 30;    // developability iterations in the BUFF target burst (once per stroke)
+        const double BuffDeCraze = 0.05;  // fixed deCraze weight used by the BUFF burst (the "how much craze")
 
         System.Windows.Threading.DispatcherTimer _flowTimer;   // runs the flow continuously while Space is held
         bool _spaceHeld;
@@ -681,7 +681,7 @@ namespace CreaseStudio
             double R = _sim.BrushSize, R2 = R * R;
             double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
             double twoSig2 = 2.0 * sigma * sigma;
-            double strength = _sim.BrushStrength, flow = _sim.BrushFlow;   // coverage ceiling / build rate
+            double flow = _sim.BrushFlow;   // build rate; coverage ceiling is 100% (full target)
             for (int i = 0; i < nv; i++)
             {
                 var pv = P.Vertices[i];
@@ -690,7 +690,7 @@ namespace CreaseStudio
                 double d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 > R2) continue;
                 double gw = Math.Exp(-d2 / twoSig2);
-                double dcov = Math.Min(strength - _strokeCov[i], flow * gw);
+                double dcov = Math.Min(1.0 - _strokeCov[i], flow * gw);
                 if (dcov <= 1e-9) continue;
                 _strokeCov[i] += dcov;
                 Vector3 o = _strokeOffset[i];
@@ -711,7 +711,7 @@ namespace CreaseStudio
             var D = new Vector3[nv];
             if (_brush == BrushKind.Noise)
             {
-                double amp = 2.0 * RepEdge(P);
+                double amp = 2.0 * RepEdge(P) * (_sim.BrushStrength / 30.0);   // 2·edge at the default Strength (30)
                 double freq = 2.0 / _sim.BrushSize;                 // a few bumps across the footprint
                 Vector3[] nrm = VertexNormals(P);
                 for (int i = 0; i < nv; i++)
@@ -729,9 +729,9 @@ namespace CreaseStudio
             return D;
         }
 
-        // BUFF target: run K developability iterations (covariance + the deCraze weight from the slider)
-        // on the live mesh, record the per-vertex displacement, then restore the mesh. The expensive flow
-        // runs once here per stroke; the dabs that paint it in are cheap.
+        // BUFF target: run K (= Strength) developability iterations (covariance + a fixed BuffDeCraze
+        // consolidation weight) on the live mesh, record the per-vertex displacement, then restore the
+        // mesh. The expensive flow runs once here per stroke; the dabs that paint it in are cheap.
         void ComputeBuffTarget(Vector3[] D)
         {
             var P = _session.Mesh;
@@ -742,12 +742,12 @@ namespace CreaseStudio
             double L = RepEdge(P);
             double t = Math.Max(1e-9, _sim.Step) * L * L;
             double capLen = L;
-            double deCraze = _sim.DeCraze * _sim.DeCrazeMax;     // the consolidation weight you dialed
+            int K = Math.Max(1, (int)Math.Round(_sim.BrushStrength));   // Strength = iterations in the burst
             DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
-            for (int k = 0; k < BuffBurstIters; k++)
+            for (int k = 0; k < K; k++)
             {
                 DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
-                    0.0, 0.0, false, _sim.Sharpness, deCraze, true, null, _sim.DetMix);
+                    0.0, 0.0, false, _sim.Sharpness, BuffDeCraze, true, null, _sim.DetMix);
                 for (int i = 0; i < nv; i++)
                 {
                     var pv = P.Vertices[i];
