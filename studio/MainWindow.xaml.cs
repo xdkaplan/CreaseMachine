@@ -44,7 +44,8 @@ namespace CreaseStudio
         float _azimuth = 0.6f, _elevation = 0.4f, _distance = 3f;
         Vector3 _target = Vector3.Zero;
         System.Windows.Point _lastMouse;
-        bool _dragging;
+        enum DragMode { None, Orbit, Pan, Edit }
+        DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = edit (brush)
 
         public MainWindow()
         {
@@ -68,8 +69,8 @@ namespace CreaseStudio
                 Profile = OpenTK.Windowing.Common.ContextProfile.Core,
             });
             _gl.Render += OnRender;
-            _gl.MouseDown += (s, e) => { _dragging = e.LeftButton == MouseButtonState.Pressed; _lastMouse = e.GetPosition(_gl); };
-            _gl.MouseUp += (s, e) => _dragging = false;
+            _gl.MouseDown += OnMouseDown;
+            _gl.MouseUp += OnMouseUp;
             _gl.MouseMove += OnMouseMove;
             _gl.MouseWheel += (s, e) => { _distance *= MathF.Pow(0.999f, e.Delta); InvalidateView(); };
 
@@ -401,14 +402,59 @@ namespace CreaseStudio
             return flip;
         }
 
+        // Mouse scheme: right-drag = orbit, Shift+right-drag = pan, left-drag = Edit (the active
+        // editor; the brush is the only one, and it isn't built yet). Wheel = zoom (wired in ctor).
+        void OnMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            _lastMouse = e.GetPosition(_gl);
+            if (e.ChangedButton == MouseButton.Right)
+                _drag = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
+            else if (e.ChangedButton == MouseButton.Left)
+                _drag = DragMode.Edit;
+            else return;
+            _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
+        }
+
+        void OnMouseUp(object sender, MouseButtonEventArgs e)
+        {
+            _drag = DragMode.None;
+            _gl.ReleaseMouseCapture();
+        }
+
         void OnMouseMove(object sender, MouseEventArgs e)
         {
-            if (!_dragging) return;
+            if (_drag == DragMode.None) return;
             var p = e.GetPosition(_gl);
             float dx = (float)(p.X - _lastMouse.X), dy = (float)(p.Y - _lastMouse.Y);
             _lastMouse = p;
-            _azimuth -= dx * 0.01f;
-            _elevation = Math.Clamp(_elevation + dy * 0.01f, -1.5f, 1.5f);
+            switch (_drag)
+            {
+                case DragMode.Orbit:
+                    _azimuth -= dx * 0.01f;
+                    _elevation = Math.Clamp(_elevation + dy * 0.01f, -1.5f, 1.5f);
+                    InvalidateView();
+                    break;
+                case DragMode.Pan:
+                    PanCamera(dx, dy);
+                    break;
+                case DragMode.Edit:
+                    // Left-drag editing (NOISE brush paint) plugs in here once the brush exists.
+                    break;
+            }
+        }
+
+        // Translate the orbit target in the camera's screen plane (Shift+right-drag). Speed scales
+        // with zoom distance so the feel is consistent at any zoom.
+        void PanCamera(float dx, float dy)
+        {
+            Vector3 dir = new Vector3(
+                MathF.Cos(_elevation) * MathF.Sin(_azimuth),
+                MathF.Cos(_elevation) * MathF.Cos(_azimuth),
+                MathF.Sin(_elevation));                                  // eye = target + dir*distance
+            Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitZ, dir));   // camera-right in world
+            Vector3 up = Vector3.Normalize(Vector3.Cross(dir, right));              // camera-up in world
+            float scale = _distance * 0.0015f;
+            _target += (-dx * right + dy * up) * scale;
             InvalidateView();
         }
 
