@@ -1,9 +1,12 @@
 <Window x:Class="CreaseStudio.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:CreaseStudio"
         Title="CreaseStudio" Height="700" Width="1000"
         Background="#1E1E1E">
     <Window.Resources>
+        <!-- Reusable: remaps a slider's value within [min,max] to a 0-100% readout. -->
+        <local:RangeToPercentConverter x:Key="RangeToPercent" />
         <!-- sidebar-collapse glyph (from sidebar-collapse.svg, 800x800); evenodd (F0). Mirrored
              with ScaleX=-1 for the right panel. -->
         <!-- Dark, flat tab headers (the default WPF TabItem renders light/3D, clashing with the
@@ -156,8 +159,16 @@
 
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Step" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Step, StringFormat=0.###}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="0.2" Value="{Binding Step}" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock.Text>
+                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
+                                                    <Binding Path="Value" ElementName="StepSlider" />
+                                                    <Binding Path="Minimum" ElementName="StepSlider" />
+                                                    <Binding Path="Maximum" ElementName="StepSlider" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                        <Slider x:Name="StepSlider" Minimum="0.001" Maximum="0.05" Value="{Binding Step}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">
