@@ -14,7 +14,7 @@ namespace CreaseStudio
     sealed class MeshView : IDisposable
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
-        int _uMvp, _uNormalMat, _uMatcap, _uHasMatcap;
+        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness;
         int _tex;
         bool _hasMatcap;
         int _indexCount;
@@ -22,25 +22,35 @@ namespace CreaseStudio
 
         public Vector3 Center { get; private set; }
         public float Radius { get; private set; } = 1f;
+        public float Sharpness = 1f;     // 0 = smooth, 1 = faceted; set per frame from the Facet slider
 
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 uniform mat4 uMvp;
+uniform mat4 uView;
 uniform mat3 uNormalMat;
 out vec3 vN;
+out vec3 vViewPos;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
-    vN = uNormalMat * aNormal;   // -> view space
+    vN = uNormalMat * aNormal;            // smooth (averaged) normal -> view space
+    vViewPos = (uView * vec4(aPos, 1.0)).xyz;   // view-space position, for the faceted normal
 }";
 
         const string FRAG = @"#version 330 core
 in vec3 vN;
+in vec3 vViewPos;
 out vec4 FragColor;
 uniform sampler2D uMatcap;
 uniform int uHasMatcap;
+uniform float uSharpness;     // 0 = smooth (averaged normal), 1 = faceted (per-face normal)
 void main() {
-    vec3 n = normalize(vN);
+    vec3 sn = normalize(vN);
+    // Geometric face normal from screen-space derivatives = the 'unwelded' normal, for free.
+    vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
+    if (dot(fn, sn) < 0.0) fn = -fn;       // align with the smooth normal before blending
+    vec3 n = normalize(mix(sn, fn, clamp(uSharpness, 0.0, 1.0)));
     if (n.z < 0.0) n = -n;       // orient toward camera (view looks down -z) - winding-independent
     if (uHasMatcap == 1) {
         vec2 uv = n.xy * 0.5 + 0.5;
@@ -58,9 +68,11 @@ void main() {
             if (_prog != 0) return;
             _prog = Link(VERT, FRAG);
             _uMvp = GL.GetUniformLocation(_prog, "uMvp");
+            _uView = GL.GetUniformLocation(_prog, "uView");
             _uNormalMat = GL.GetUniformLocation(_prog, "uNormalMat");
             _uMatcap = GL.GetUniformLocation(_prog, "uMatcap");
             _uHasMatcap = GL.GetUniformLocation(_prog, "uHasMatcap");
+            _uSharpness = GL.GetUniformLocation(_prog, "uSharpness");
         }
 
         public void SetMatcap(byte[] bgra, int w, int h)
@@ -78,9 +90,10 @@ void main() {
             _hasMatcap = true;
         }
 
-        // flat = false -> welded/smooth (shared verts, averaged normals); true -> unwelded/faceted
-        // (each triangle its own 3 verts + face normal), which reveals the planar panels.
-        public void Upload(PlanktonMesh P, bool flat = false)
+        // Always uploads the welded/smooth mesh (shared verts + area-averaged normals). The faceted
+        // look is produced in the shader from screen-space derivatives, blended by uSharpness — so
+        // there's no separate unwelded upload, and "facet amount" is a live shader knob.
+        public void Upload(PlanktonMesh P)
         {
             EnsureProgram();
             int nV = P.Vertices.Count;
@@ -114,55 +127,29 @@ void main() {
                 tris.Add((a, b, c));
             }
 
-            // Build vertex/normal/index buffers. No winding re-orientation: there's no evidence the
-            // welded mesh has inconsistent winding (the earlier "reversed" look was the missing depth
-            // buffer, now fixed), and the fragment shader orients each normal toward the camera anyway.
-            float[] posF, nrmF;
-            uint[] indices;
-            if (!flat)
+            // Area-weighted averaged vertex normals -> smooth shading. No winding re-orientation: the
+            // welded mesh has no proven inconsistent winding, and the fragment shader orients each
+            // normal toward the camera anyway. (The faceted look is the shader's job, not the upload's.)
+            var nrm = new Vector3[used];
+            foreach (var (a0, b0, c0) in tris)
             {
-                // WELDED / smooth: area-weighted averaged vertex normals -> soft shading across edges.
-                var nrm = new Vector3[used];
-                foreach (var (a0, b0, c0) in tris)
-                {
-                    Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); // 2*area * unit normal
-                    nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn;
-                }
-                posF = new float[used * 3];
-                nrmF = new float[used * 3];
-                for (int i = 0; i < used; i++)
-                {
-                    posF[i * 3] = pos[i].X; posF[i * 3 + 1] = pos[i].Y; posF[i * 3 + 2] = pos[i].Z;
-                    Vector3 n = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.UnitZ;
-                    nrmF[i * 3] = n.X; nrmF[i * 3 + 1] = n.Y; nrmF[i * 3 + 2] = n.Z;
-                }
-                indices = new uint[tris.Count * 3];
-                for (int t = 0; t < tris.Count; t++)
-                {
-                    indices[t * 3] = (uint)tris[t].a;
-                    indices[t * 3 + 1] = (uint)tris[t].b;
-                    indices[t * 3 + 2] = (uint)tris[t].c;
-                }
+                Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); // 2*area * unit normal
+                nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn;
             }
-            else
+            var posF = new float[used * 3];
+            var nrmF = new float[used * 3];
+            for (int i = 0; i < used; i++)
             {
-                // UNWELDED / flat: expand each triangle to its own 3 verts sharing the face normal
-                // -> hard facets that expose the planar panels the developability flow is forming.
-                int n3 = tris.Count * 3;
-                posF = new float[n3 * 3];
-                nrmF = new float[n3 * 3];
-                indices = new uint[n3];
-                int k = 0;
-                foreach (var (a0, b0, c0) in tris)
-                {
-                    Vector3 pa = pos[a0], pb = pos[b0], pc = pos[c0];
-                    Vector3 fn = Vector3.Cross(pb - pa, pc - pa);
-                    fn = fn.LengthSquared > 1e-20f ? Vector3.Normalize(fn) : Vector3.UnitZ;
-                    posF[k] = pa.X; posF[k + 1] = pa.Y; posF[k + 2] = pa.Z; nrmF[k] = fn.X; nrmF[k + 1] = fn.Y; nrmF[k + 2] = fn.Z; k += 3;
-                    posF[k] = pb.X; posF[k + 1] = pb.Y; posF[k + 2] = pb.Z; nrmF[k] = fn.X; nrmF[k + 1] = fn.Y; nrmF[k + 2] = fn.Z; k += 3;
-                    posF[k] = pc.X; posF[k + 1] = pc.Y; posF[k + 2] = pc.Z; nrmF[k] = fn.X; nrmF[k + 1] = fn.Y; nrmF[k + 2] = fn.Z; k += 3;
-                }
-                for (int i = 0; i < n3; i++) indices[i] = (uint)i;
+                posF[i * 3] = pos[i].X; posF[i * 3 + 1] = pos[i].Y; posF[i * 3 + 2] = pos[i].Z;
+                Vector3 n = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.UnitZ;
+                nrmF[i * 3] = n.X; nrmF[i * 3 + 1] = n.Y; nrmF[i * 3 + 2] = n.Z;
+            }
+            var indices = new uint[tris.Count * 3];
+            for (int t = 0; t < tris.Count; t++)
+            {
+                indices[t * 3] = (uint)tris[t].a;
+                indices[t * 3 + 1] = (uint)tris[t].b;
+                indices[t * 3 + 2] = (uint)tris[t].c;
             }
             _indexCount = indices.Length;
 
@@ -189,7 +176,9 @@ void main() {
             Matrix3 normalMat = new Matrix3(view);     // rigid view -> rotation is the normal transform
             GL.UseProgram(_prog);
             GL.UniformMatrix4(_uMvp, false, ref mvp);
+            GL.UniformMatrix4(_uView, false, ref view);   // for the view-space position (faceted normal)
             GL.UniformMatrix3(_uNormalMat, false, ref normalMat);
+            GL.Uniform1(_uSharpness, Sharpness);
             GL.Uniform1(_uHasMatcap, _hasMatcap ? 1 : 0);
             if (_hasMatcap)
             {

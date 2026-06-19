@@ -215,14 +215,12 @@
                         <TabItem Header="DISPLAY">
                             <StackPanel Margin="10,12,10,0">
                                 <TextBlock Text="SHADING" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
-                                <StackPanel Orientation="Horizontal" Margin="2,0,0,2">
-                                    <RadioButton x:Name="WeldedRadio" Content="Welded" GroupName="shading"
-                                                 Foreground="#C8C8C8" FontSize="11" VerticalContentAlignment="Center" Margin="0,0,16,0"
-                                                 ToolTip="Smooth: shared vertices, averaged normals" />
-                                    <RadioButton x:Name="UnweldedRadio" Content="Unwelded" GroupName="shading" IsChecked="True"
-                                                 Foreground="#C8C8C8" FontSize="11" VerticalContentAlignment="Center"
-                                                 ToolTip="Faceted: per-face normals - reveals the planar panels" />
-                                </StackPanel>
+                                <DockPanel Margin="0,3,0,0">
+                                    <TextBlock DockPanel.Dock="Left" Text="Facet" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                               ToolTip="0% = smooth (averaged normals) · 100% = faceted (per-face). Shader-blended, live." />
+                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Facet, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                    <Slider Minimum="0" Maximum="1" Value="{Binding Facet}" VerticalAlignment="Center" Margin="6,0" />
+                                </DockPanel>
 
                                 <TextBlock Text="MATCAP" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <ListBox x:Name="MatcapList" Background="Transparent" BorderThickness="0" Padding="0"

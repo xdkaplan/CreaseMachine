@@ -4,7 +4,7 @@ using CreaseMachine;
 
 namespace CreaseStudio
 {
-    enum CmdKind { Load, Run, Subdivide, Reset, Shading, Matcap }
+    enum CmdKind { Load, Run, Subdivide, Reset, Matcap }
 
     // One recorded studio action - a semantic INTENT, not raw input. Robust to UI changes and
     // deterministic to replay. A Run carries a full FlowParams snapshot so replay reproduces the
@@ -15,7 +15,6 @@ namespace CreaseStudio
     {
         public CmdKind Kind;
         public int N;            // Run: iteration count | Matcap: index
-        public bool Flag;        // Shading: flat (unwelded)?
         public string Path;      // Load: mesh path
         public FlowParams P;     // Run: parameter snapshot
 
@@ -23,7 +22,6 @@ namespace CreaseStudio
         public static StudioCommand Run(int n, FlowParams p) => new StudioCommand { Kind = CmdKind.Run, N = n, P = p };
         public static StudioCommand Subdiv() => new StudioCommand { Kind = CmdKind.Subdivide };
         public static StudioCommand Reset() => new StudioCommand { Kind = CmdKind.Reset };
-        public static StudioCommand Shading(bool flat) => new StudioCommand { Kind = CmdKind.Shading, Flag = flat };
         public static StudioCommand Matcap(int i) => new StudioCommand { Kind = CmdKind.Matcap, N = i };
 
         static string F(double v) => v.ToString("R", CultureInfo.InvariantCulture);
@@ -41,7 +39,6 @@ namespace CreaseStudio
                     F(P.deBranch), F(P.deConsolidate), P.UseMaxCov ? 1 : 0, P.MomFix);
                 case CmdKind.Subdivide: return "subdivide";
                 case CmdKind.Reset: return "reset";
-                case CmdKind.Shading: return "shading " + (Flag ? "unwelded" : "welded");
                 case CmdKind.Matcap: return "matcap " + N;
             }
             return "";
@@ -60,7 +57,6 @@ namespace CreaseStudio
                 case "subdivide":
                 case "subd": return Subdiv();
                 case "reset": return Reset();
-                case "shading": return Shading(tok.Length > 1 && tok[1].Equals("unwelded", StringComparison.OrdinalIgnoreCase));
                 case "matcap": return Matcap(tok.Length > 1 ? ParseInt(tok[1]) : 0);
                 case "run":
                     int n = tok.Length > 1 ? ParseInt(tok[1]) : 0;

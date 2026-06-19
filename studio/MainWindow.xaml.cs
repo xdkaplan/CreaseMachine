@@ -22,8 +22,7 @@ namespace CreaseStudio
         long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
-        // Display state (render-only, owned here rather than in SimSettings, which stays flow-only):
-        bool _flatShading = true;                   // false = welded/smooth, true = unwelded/faceted (default)
+        // Display state (render-only). Facet (smooth<->faceted) is a shader uniform from _sim.Facet.
         string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
         byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
         bool _matcapDirty;                          // re-upload the matcap texture on the next render
@@ -153,11 +152,10 @@ namespace CreaseStudio
             RightSplitter.PreviewMouseLeftButtonDown += (s, e) => _preDragWidth = RightCol.ActualWidth;
             RightSplitter.PreviewMouseLeftButtonUp += (s, e) => AfterSplitterDrag(RightCol, ref _rightRestore);
 
-            // DISPLAY tab: welded/unwelded + matcap switcher. Recorded too; the _suppressUi guard stops
-            // the programmatic control-sync during replay from re-recording.
-            WeldedRadio.Checked += (s, e) => { if (!_suppressUi) Execute(StudioCommand.Shading(false), record: true); };
-            UnweldedRadio.Checked += (s, e) => { if (!_suppressUi) Execute(StudioCommand.Shading(true), record: true); };
+            // DISPLAY tab: matcap switcher (recorded; _suppressUi stops replay-sync re-recording). The
+            // Facet slider binds straight to the view-model; a render is kicked when it changes.
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
+            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet)) _gl?.InvalidateVisual(); };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
             _console.SaveButton.Click += (s, e) => SaveSession();
@@ -301,7 +299,6 @@ namespace CreaseStudio
                 case CmdKind.Run: ApplyRun(c.N, c.P); break;
                 case CmdKind.Subdivide: ApplySubdivide(); break;
                 case CmdKind.Reset: ApplyReset(); break;
-                case CmdKind.Shading: ApplyShading(c.Flag); break;
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
             }
             if (record) { _journal.Add(c); Log(c.Serialize()); }
@@ -319,8 +316,7 @@ namespace CreaseStudio
             _suppressUi = true;
             try
             {
-                if (c.Kind == CmdKind.Shading) { if (c.Flag) UnweldedRadio.IsChecked = true; else WeldedRadio.IsChecked = true; }
-                else if (c.Kind == CmdKind.Matcap && c.N >= 0 && c.N < MatcapList.Items.Count) MatcapList.SelectedIndex = c.N;
+                if (c.Kind == CmdKind.Matcap && c.N >= 0 && c.N < MatcapList.Items.Count) MatcapList.SelectedIndex = c.N;
                 else if (c.Kind == CmdKind.Run)
                 {
                     // show the replayed run's parameters on the sliders (cosmetic; the run used c.P).
@@ -389,15 +385,6 @@ namespace CreaseStudio
             _totalIters = 0;
             _meshDirty = true;
             Title = "CreaseStudio — " + System.IO.Path.GetFileName(_meshPath);
-            _gl?.InvalidateVisual();
-        }
-
-        // Welded (smooth) <-> unwelded (faceted) shading. Render-only: re-uploads the same mesh.
-        void ApplyShading(bool flat)
-        {
-            if (_flatShading == flat) return;
-            _flatShading = flat;
-            _meshDirty = true;
             _gl?.InvalidateVisual();
         }
 
@@ -839,7 +826,7 @@ namespace CreaseStudio
             if (_meshDirty && _session != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                _view.Upload(_session.Mesh, _flatShading);
+                _view.Upload(_session.Mesh);
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;
@@ -893,7 +880,7 @@ namespace CreaseStudio
                 MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
-            _view?.Draw(view, proj);
+            if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.Draw(view, proj); }   // Facet -> shader
         }
     }
 }

@@ -37,6 +37,11 @@ namespace CreaseStudio
         // here so the 0.04 isn't a magic number duplicated across the brush and the panel.
         public double DeCrazeMax => 0.04;
 
+        // Shading facet (display): 0 = smooth (averaged normals), 1 = faceted (per-face normals). The
+        // shader blends between them, so this is continuous and live. Default faceted.
+        double _facet = 1.0;
+        public double Facet { get => _facet; set => Set(ref _facet, value); }
+
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";
 
