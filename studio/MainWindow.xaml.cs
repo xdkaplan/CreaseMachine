@@ -274,7 +274,10 @@ namespace CreaseStudio
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
             }
             if (record) { _journal.Add(c); Log(c.Serialize()); }
-            SyncControls(c);
+            else SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
+                                    // LIVE run the controls are already the source of truth, and
+                                    // re-writing them here round-trips params lossily (it collapsed the
+                                    // deCraze slider by ×DeCrazeMax every iteration).
         }
 
         // Reflect a command's state in the input controls without re-recording (_suppressUi guards the
@@ -291,7 +294,8 @@ namespace CreaseStudio
                 {
                     // show the replayed run's parameters on the sliders (cosmetic; the run used c.P).
                     _sim.IterPerRun = c.N; _sim.Step = c.P.Step; _sim.Momentum = c.P.Momentum;
-                    _sim.DeCraze = c.P.deCraze; _sim.CrazeBandDeg = c.P.CrazeBand * 180.0 / Math.PI;
+                    _sim.DeCraze = c.P.deCraze / _sim.DeCrazeMax;   // weight -> fraction (inverse of ToFlowParams)
+                    _sim.CrazeBandDeg = c.P.CrazeBand * 180.0 / Math.PI;
                     _sim.Sharpness = c.P.Sharpness; _sim.DetMix = c.P.DetMix; _sim.MomFix = c.P.MomFix;
                 }
             }
