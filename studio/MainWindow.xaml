@@ -262,11 +262,16 @@
             </Border>
         </Grid>
 
-        <!-- BOTTOM bar (full width, 64px): live perf/status readout. Session transport (Save/Replay/
-             Clear) lives in the Console window, with the log. -->
+        <!-- BOTTOM bar (full width, 64px): brushes (square tiles, word inside). Live perf/status
+             readout on the right. Session transport lives in the Console window. -->
         <Border Grid.Row="3" Background="#2D2D30">
-            <TextBlock x:Name="StatusText" Text="" Foreground="#8A8A98"
-                       VerticalAlignment="Center" HorizontalAlignment="Left" Margin="12,0" FontSize="11" />
+            <DockPanel Margin="8,0" LastChildFill="False">
+                <ToggleButton x:Name="NoiseBrushButton" DockPanel.Dock="Left" Content="NOISE"
+                              Width="48" Height="48" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                              ToolTip="NOISE brush — ± normal Perlin displacement. Left-drag paints. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="" Foreground="#8A8A98"
+                           VerticalAlignment="Center" FontSize="11" />
+            </DockPanel>
         </Border>
     </Grid>
 </Window>

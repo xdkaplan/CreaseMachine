@@ -1,6 +1,7 @@
 using System;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
 using OpenTK.Wpf;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -48,6 +49,15 @@ namespace CreaseStudio
         enum DragMode { None, Orbit, Pan, Edit }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = edit (brush)
 
+        // NOISE brush (the only editor for now). Left-drag paints when active; right-drag still orbits.
+        readonly Perlin _noise = new Perlin();
+        bool _noiseActive;
+        double _brushSize = 10.0;         // influence radius, world units; [ / ] shrink / grow
+        double _brushSigmaFrac = 0.25;    // Gaussian sigma as a fraction of size; Ctrl+Shift+[ / ] soften / harden
+        double _strokeAmp;                // bump height for the current stroke (~edge length)
+        System.Windows.Point _lastHover;  // last hover position, to refresh the preview after a size change
+        System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
+
         public MainWindow()
         {
             InitializeComponent();
@@ -74,6 +84,20 @@ namespace CreaseStudio
             _gl.MouseUp += OnMouseUp;
             _gl.MouseMove += OnMouseMove;
             _gl.MouseWheel += (s, e) => { _distance *= MathF.Pow(0.999f, e.Delta); InvalidateView(); };
+
+            // Brush-footprint preview: a circle over the viewport, shown on hover (mouse not down),
+            // hidden on drag and when the cursor leaves. IsHitTestVisible=false so it passes clicks through.
+            _previewDot = new System.Windows.Shapes.Ellipse
+            {
+                Stroke = new SolidColorBrush(Color.FromArgb(210, 235, 235, 240)),
+                StrokeThickness = 1.5,
+                IsHitTestVisible = false,
+                Visibility = Visibility.Collapsed,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+            };
+            CenterHost.Children.Add(_previewDot);
+            _gl.MouseLeave += (s, e) => _previewDot.Visibility = Visibility.Collapsed;
 
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
@@ -141,7 +165,27 @@ namespace CreaseStudio
             {
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
+                else if (e.Key == Key.OemCloseBrackets)   // ]  = grow brush  /  Ctrl+Shift = harden
+                {
+                    if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) HardenBrush();
+                    else if (Keyboard.Modifiers == ModifierKeys.None) ResizeBrush(1.2);
+                    else return;
+                    if (_noiseActive) UpdatePreview(_lastHover);
+                    e.Handled = true;
+                }
+                else if (e.Key == Key.OemOpenBrackets)    // [  = shrink brush  /  Ctrl+Shift = soften
+                {
+                    if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) SoftenBrush();
+                    else if (Keyboard.Modifiers == ModifierKeys.None) ResizeBrush(1.0 / 1.2);
+                    else return;
+                    if (_noiseActive) UpdatePreview(_lastHover);
+                    e.Handled = true;
+                }
             };
+
+            // NOISE brush tile (bottom bar): toggles paint mode on left-drag.
+            NoiseBrushButton.Checked += (s, e) => _noiseActive = true;
+            NoiseBrushButton.Unchecked += (s, e) => { _noiseActive = false; _previewDot.Visibility = Visibility.Collapsed; };
         }
 
         // ===================== window menu: Console + About (both non-modal) =====================
@@ -408,24 +452,39 @@ namespace CreaseStudio
         void OnMouseDown(object sender, MouseButtonEventArgs e)
         {
             _lastMouse = e.GetPosition(_gl);
+            _previewDot.Visibility = Visibility.Collapsed;   // hide the footprint preview while dragging
             if (e.ChangedButton == MouseButton.Right)
                 _drag = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
             else if (e.ChangedButton == MouseButton.Left)
+            {
                 _drag = DragMode.Edit;
+                if (_noiseActive && _session != null)
+                {
+                    _strokeAmp = 2.0 * RepEdge(_session.Mesh);                 // bump height for this stroke
+                    if (PickSurface(_lastMouse, out var hit)) ApplyNoiseDab(hit);
+                }
+            }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
         }
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
+            if (_drag == DragMode.Edit && _noiseActive && _session != null)
+                _session.ZeroMomentum();   // a manual edit invalidates the stale Nesterov velocity
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
         {
-            if (_drag == DragMode.None) return;
             var p = e.GetPosition(_gl);
+            if (_drag == DragMode.None)
+            {
+                _lastHover = p;
+                if (_noiseActive) UpdatePreview(p);   // brush-footprint preview on hover
+                return;
+            }
             float dx = (float)(p.X - _lastMouse.X), dy = (float)(p.Y - _lastMouse.Y);
             _lastMouse = p;
             switch (_drag)
@@ -439,24 +498,171 @@ namespace CreaseStudio
                     PanCamera(dx, dy);
                     break;
                 case DragMode.Edit:
-                    // Left-drag editing (NOISE brush paint) plugs in here once the brush exists.
+                    if (_noiseActive && PickSurface(p, out var hit)) ApplyNoiseDab(hit);
                     break;
             }
         }
 
         // Translate the orbit target in the camera's screen plane (Shift+right-drag). Speed scales
         // with zoom distance so the feel is consistent at any zoom.
+        // Unit vector from the orbit target toward the eye (eye = target + dir*distance). Z-up.
+        Vector3 CamDir() => new Vector3(
+            MathF.Cos(_elevation) * MathF.Sin(_azimuth),
+            MathF.Cos(_elevation) * MathF.Cos(_azimuth),
+            MathF.Sin(_elevation));
+
         void PanCamera(float dx, float dy)
         {
-            Vector3 dir = new Vector3(
-                MathF.Cos(_elevation) * MathF.Sin(_azimuth),
-                MathF.Cos(_elevation) * MathF.Cos(_azimuth),
-                MathF.Sin(_elevation));                                  // eye = target + dir*distance
+            Vector3 dir = CamDir();                                                  // eye = target + dir*distance
             Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitZ, dir));   // camera-right in world
             Vector3 up = Vector3.Normalize(Vector3.Cross(dir, right));              // camera-up in world
             float scale = _distance * 0.0015f;
             _target += (-dx * right + dy * up) * scale;
             InvalidateView();
+        }
+
+        // ===================== NOISE brush =====================
+
+        void ResizeBrush(double factor) => _brushSize = Math.Clamp(_brushSize * factor, 0.1, 100000.0);
+        void HardenBrush() => _brushSigmaFrac = Math.Clamp(_brushSigmaFrac * 0.85, 0.05, 1.0);   // sharper falloff
+        void SoftenBrush() => _brushSigmaFrac = Math.Clamp(_brushSigmaFrac / 0.85, 0.05, 1.0);   // softer falloff
+
+        // Build a pick ray from the camera params (convention-independent) and intersect the mesh.
+        bool PickSurface(System.Windows.Point screen, out Vector3 hit)
+        {
+            hit = default;
+            if (_session == null) return false;
+            double w = Math.Max(1, _gl.ActualWidth), h = Math.Max(1, _gl.ActualHeight);
+            Vector3 dir = CamDir();
+            Vector3 eye = _target + dir * _distance;
+            Vector3 forward = -dir;
+            Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitZ));
+            Vector3 up = Vector3.Cross(right, forward);
+            float tanH = MathF.Tan(MathHelper.DegreesToRadians(45f) * 0.5f);   // matches the 45° proj FOV
+            float aspect = (float)(w / h);
+            float ndcX = (float)(2.0 * screen.X / w - 1.0);
+            float ndcY = (float)(1.0 - 2.0 * screen.Y / h);
+            Vector3 rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
+            return RayMeshHit(eye, rd, out hit);
+        }
+
+        // Nearest ray-triangle hit over the live mesh (linear scan; double-sided since winding is mixed).
+        bool RayMeshHit(Vector3 ro, Vector3 rd, out Vector3 hit)
+        {
+            hit = default;
+            var P = _session.Mesh;
+            double best = double.MaxValue;
+            bool found = false;
+            int nf = P.Faces.Count;
+            for (int f = 0; f < nf; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f);
+                if (fv.Length != 3) continue;
+                if (RayTri(ro, rd, V(P, fv[0]), V(P, fv[1]), V(P, fv[2]), out double t) && t < best)
+                { best = t; hit = ro + rd * (float)t; found = true; }
+            }
+            return found;
+        }
+
+        static bool RayTri(Vector3 ro, Vector3 rd, Vector3 a, Vector3 b, Vector3 c, out double t)
+        {
+            t = 0;
+            Vector3 e1 = b - a, e2 = c - a;
+            Vector3 pv = Vector3.Cross(rd, e2);
+            float det = Vector3.Dot(e1, pv);
+            if (MathF.Abs(det) < 1e-12f) return false;
+            float inv = 1f / det;
+            Vector3 tv = ro - a;
+            float u = Vector3.Dot(tv, pv) * inv;
+            if (u < 0f || u > 1f) return false;
+            Vector3 qv = Vector3.Cross(tv, e1);
+            float v = Vector3.Dot(rd, qv) * inv;
+            if (v < 0f || u + v > 1f) return false;
+            t = Vector3.Dot(e2, qv) * inv;
+            return t > 1e-6;
+        }
+
+        static Vector3 V(PlanktonMesh P, int i) { var v = P.Vertices[i]; return new Vector3(v.X, v.Y, v.Z); }
+
+        // Displace vertices within the brush footprint along their normals by ±Perlin noise, with a
+        // Gaussian falloff from the hit point. Boundaries / unused verts are held fixed (as the flow does).
+        void ApplyNoiseDab(Vector3 hit)
+        {
+            var P = _session.Mesh;
+            double R = _brushSize, R2 = R * R;
+            double sigma = Math.Max(1e-6, _brushSigmaFrac * R);
+            double twoSig2 = 2.0 * sigma * sigma;
+            double freq = 2.0 / R;                                  // a few bumps across the footprint
+            double amp = _strokeAmp > 0 ? _strokeAmp : 2.0 * RepEdge(P);
+            Vector3[] nrm = VertexNormals(P);
+            int nv = P.Vertices.Count;
+            for (int i = 0; i < nv; i++)
+            {
+                var pv = P.Vertices[i];
+                if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
+                double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z;
+                double d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > R2) continue;
+                double wgt = Math.Exp(-d2 / twoSig2);
+                double n = _noise.Noise(pv.X * freq, pv.Y * freq, pv.Z * freq);
+                double disp = amp * wgt * n;
+                Vector3 nn = nrm[i];
+                P.Vertices.SetVertex(i, pv.X + nn.X * disp, pv.Y + nn.Y * disp, pv.Z + nn.Z * disp);
+            }
+            _meshDirty = true;
+            _gl?.InvalidateVisual();
+        }
+
+        static Vector3[] VertexNormals(PlanktonMesh P)
+        {
+            int nv = P.Vertices.Count;
+            var nrm = new Vector3[nv];
+            int nf = P.Faces.Count;
+            for (int f = 0; f < nf; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f);
+                if (fv.Length != 3) continue;
+                Vector3 a = V(P, fv[0]), b = V(P, fv[1]), c = V(P, fv[2]);
+                Vector3 fn = Vector3.Cross(b - a, c - a);   // area-weighted (length ∝ 2·area)
+                nrm[fv[0]] += fn; nrm[fv[1]] += fn; nrm[fv[2]] += fn;
+            }
+            for (int i = 0; i < nv; i++)
+                nrm[i] = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.Zero;
+            return nrm;
+        }
+
+        static double RepEdge(PlanktonMesh P)
+        {
+            double sum = 0; int n = 0;
+            int nh = P.Halfedges.Count;
+            for (int h = 0; h < nh; h += 2)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                var a = P.Vertices[P.Halfedges[h].StartVertex];
+                var b = P.Vertices[P.Halfedges[h + 1].StartVertex];
+                double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+                sum += Math.Sqrt(dx * dx + dy * dy + dz * dz); n++;
+            }
+            return n > 0 ? sum / n : 1.0;
+        }
+
+        // Position + size the footprint preview circle: project the world brush radius to screen
+        // pixels at the hit depth. Hidden when the cursor isn't over the mesh.
+        void UpdatePreview(System.Windows.Point cursor)
+        {
+            if (!_noiseActive || _session == null || !PickSurface(cursor, out var hit))
+            { _previewDot.Visibility = Visibility.Collapsed; return; }
+            Vector3 dir = CamDir();
+            Vector3 eye = _target + dir * _distance;
+            double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
+            double h = Math.Max(1, _gl.ActualHeight);
+            double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
+            double rpx = _brushSize * h / (2.0 * dist * tanH);
+            _previewDot.Width = _previewDot.Height = 2.0 * rpx;
+            _previewDot.Margin = new Thickness(cursor.X - rpx, cursor.Y - rpx, 0, 0);
+            _previewDot.Visibility = Visibility.Visible;
         }
 
         void InvalidateView() { _gl?.InvalidateVisual(); }
@@ -519,10 +725,7 @@ namespace CreaseStudio
             float aspect = (float)(w / h);
 
             // Z-up (Rhino convention): elevation raises +Z, up vector is +Z.
-            Vector3 dir = new Vector3(
-                MathF.Cos(_elevation) * MathF.Sin(_azimuth),
-                MathF.Cos(_elevation) * MathF.Cos(_azimuth),
-                MathF.Sin(_elevation));
+            Vector3 dir = CamDir();
             Vector3 eye = _target + dir * _distance;
             Matrix4 view = Matrix4.LookAt(eye, _target, Vector3.UnitZ);
             float r = _view != null ? _view.Radius : 1f;
