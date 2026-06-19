@@ -143,7 +143,7 @@ static class Program
     static void CmdSubdivide()
     {
         if (P == null) { Console.WriteLine("  ! load a mesh first"); return; }
-        P = UniformSubdivide(P);
+        P = MeshOps.UniformSubdivide(P);    // shared canonical 1->4 subdivision (src/MeshOps)
         vel = new Vec3[P.Vertices.Count];   // indices renumbered -> momentum reset (topology change)
         Console.WriteLine("  subdivided -> " + P.Vertices.Count + " verts, " + P.Faces.Count + " faces (momentum reset)");
     }
@@ -291,32 +291,4 @@ static class Program
     static string Fmt(double d) { return d.ToString("0.###", CultureInfo.InvariantCulture); }
     static string JoinPath(string[] tok) { return string.Join(" ", tok, 1, tok.Length - 1).Trim('"'); }
 
-    // ============================ mesh helpers ============================
-
-    // 1->4 midpoint subdivision (mirrors CreaseMachine.UniformSubdivide; geometry-preserving).
-    static PlanktonMesh UniformSubdivide(PlanktonMesh Pin)
-    {
-        var S = new PlanktonMesh();
-        int nV = Pin.Vertices.Count, nE = Pin.Halfedges.Count / 2, nF = Pin.Faces.Count;
-        for (int v = 0; v < nV; v++) { var pv = Pin.Vertices[v]; S.Vertices.Add(pv.X, pv.Y, pv.Z); }
-        int[] mid = new int[nE];
-        for (int e = 0; e < nE; e++)
-        {
-            if (Pin.Halfedges[2 * e].IsUnused) { mid[e] = -1; continue; }
-            var pa = Pin.Vertices[Pin.Halfedges[2 * e].StartVertex];
-            var pb = Pin.Vertices[Pin.Halfedges[2 * e + 1].StartVertex];
-            mid[e] = S.Vertices.Add(0.5f * (pa.X + pb.X), 0.5f * (pa.Y + pb.Y), 0.5f * (pa.Z + pb.Z));
-        }
-        for (int f = 0; f < nF; f++)
-        {
-            if (Pin.Faces[f].IsUnused) continue;
-            int[] hes = Pin.Faces.GetHalfedges(f);
-            if (hes.Length != 3) continue;
-            int v0 = Pin.Halfedges[hes[0]].StartVertex, v1 = Pin.Halfedges[hes[1]].StartVertex, v2 = Pin.Halfedges[hes[2]].StartVertex;
-            int m0 = mid[hes[0] / 2], m1 = mid[hes[1] / 2], m2 = mid[hes[2] / 2];
-            if (m0 < 0 || m1 < 0 || m2 < 0) continue;
-            S.Faces.AddFace(v0, m0, m2); S.Faces.AddFace(m0, v1, m1); S.Faces.AddFace(m2, m1, v2); S.Faces.AddFace(m0, m1, m2);
-        }
-        return S;
-    }
 }

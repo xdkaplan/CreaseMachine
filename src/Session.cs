@@ -55,6 +55,17 @@ namespace CreaseMachine
             if (BrushWeights != null) BrushWeights = new double[n];
         }
 
+        /// <summary>
+        /// One 1->4 midpoint subdivision of the live mesh (the paper's refine step). Swaps in the
+        /// subdivided mesh and resets per-vertex state, since the vertex list is renumbered. Per the
+        /// paper: subdivide after the flow settles, then keep flowing to sharpen creases at hi-res.
+        /// </summary>
+        public void Subdivide()
+        {
+            Mesh = MeshOps.UniformSubdivide(Mesh);
+            OnTopologyChanged();   // Vel (+ brush field) renumbered -> momentum reset
+        }
+
         /// <summary>Heal short edges; returns true if topology changed.</summary>
         public bool CollapseShort(double frac = 0.2)
         {

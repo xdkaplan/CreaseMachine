@@ -10,6 +10,48 @@ namespace CreaseMachine
     public static class MeshOps
     {
         /// <summary>
+        /// One 1->4 midpoint subdivision: each triangle becomes 3 corner triangles + 1 central,
+        /// with one shared midpoint vertex per edge. Geometry-preserving (midpoints are linear),
+        /// winding-preserving, manifold-safe. Original vertex indices are preserved; midpoints are
+        /// appended. Non-triangle / unused faces are skipped. Returns a fresh mesh (caller swaps it
+        /// in and resets any per-vertex state, since the vertex list is renumbered/extended).
+        ///
+        /// This is the canonical copy. The CLI and the in-process studio both call it; the GH
+        /// component still keeps its own (Rhino-side) copy in CreaseMachine.UniformSubdivide.
+        /// </summary>
+        public static PlanktonMesh UniformSubdivide(PlanktonMesh Pin)
+        {
+            var S = new PlanktonMesh();
+            int nV = Pin.Vertices.Count, nE = Pin.Halfedges.Count / 2, nF = Pin.Faces.Count;
+
+            // copy original vertices (indices preserved)
+            for (int v = 0; v < nV; v++) { var pv = Pin.Vertices[v]; S.Vertices.Add(pv.X, pv.Y, pv.Z); }
+
+            // one shared midpoint vertex per edge
+            int[] mid = new int[nE];
+            for (int e = 0; e < nE; e++)
+            {
+                if (Pin.Halfedges[2 * e].IsUnused) { mid[e] = -1; continue; }
+                var pa = Pin.Vertices[Pin.Halfedges[2 * e].StartVertex];
+                var pb = Pin.Vertices[Pin.Halfedges[2 * e + 1].StartVertex];
+                mid[e] = S.Vertices.Add(0.5f * (pa.X + pb.X), 0.5f * (pa.Y + pb.Y), 0.5f * (pa.Z + pb.Z));
+            }
+
+            // each triangle -> 3 corner triangles + 1 central, preserving winding
+            for (int f = 0; f < nF; f++)
+            {
+                if (Pin.Faces[f].IsUnused) continue;
+                int[] hes = Pin.Faces.GetHalfedges(f);
+                if (hes.Length != 3) continue; // only subdivide triangles
+                int v0 = Pin.Halfedges[hes[0]].StartVertex, v1 = Pin.Halfedges[hes[1]].StartVertex, v2 = Pin.Halfedges[hes[2]].StartVertex;
+                int m0 = mid[hes[0] / 2], m1 = mid[hes[1] / 2], m2 = mid[hes[2] / 2];
+                if (m0 < 0 || m1 < 0 || m2 < 0) continue;
+                S.Faces.AddFace(v0, m0, m2); S.Faces.AddFace(m0, v1, m1); S.Faces.AddFace(m2, m1, v2); S.Faces.AddFace(m0, m1, m2);
+            }
+            return S;
+        }
+
+        /// <summary>
         /// Collapse every edge shorter than <paramref name="frac"/> x the mean edge length, to
         /// remove the slivers / near-degenerate triangles the flow can create (the source of the
         /// 1/area gradient spikes). Reuses Plankton's <c>CollapseEdge</c>, which self-guards
