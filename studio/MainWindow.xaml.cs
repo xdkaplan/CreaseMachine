@@ -430,7 +430,7 @@ namespace CreaseStudio
             switch (_drag)
             {
                 case DragMode.Orbit:
-                    _azimuth -= dx * 0.01f;
+                    _azimuth += dx * 0.01f;
                     _elevation = Math.Clamp(_elevation + dy * 0.01f, -1.5f, 1.5f);
                     InvalidateView();
                     break;
