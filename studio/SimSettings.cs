@@ -32,6 +32,11 @@ namespace CreaseStudio
         public double BrushSize { get => _brushSize; set => Set(ref _brushSize, value); }
         public double BrushSoftness { get => _brushSoftness; set => Set(ref _brushSoftness, value); }
 
+        // The canonical "100%" deCraze weight — the top of the 0-100% scale shared by the deCraze
+        // slider (its Maximum) and the BUFF brush (deCraze = BrushStrength * DeCrazeMax). Defined once
+        // here so the 0.04 isn't a magic number duplicated across the brush and the panel.
+        public double DeCrazeMax => 0.04;
+
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";
 

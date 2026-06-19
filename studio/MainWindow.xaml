@@ -179,8 +179,16 @@
 
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="deCraze" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DeCraze, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="1" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock.Text>
+                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
+                                                    <Binding Path="Value" ElementName="DeCrazeSlider" />
+                                                    <Binding Path="Minimum" ElementName="DeCrazeSlider" />
+                                                    <Binding Path="Maximum" ElementName="DeCrazeSlider" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                        <Slider x:Name="DeCrazeSlider" Minimum="0" Maximum="{Binding DeCrazeMax}" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">

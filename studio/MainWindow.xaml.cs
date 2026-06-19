@@ -623,11 +623,12 @@ namespace CreaseStudio
             double L = RepEdge(P);
             double t = Math.Max(1e-9, _sim.Step) * L * L;       // step like the flow (Step·L²)
             double capLen = L;
-            double intensity = _sim.BrushStrength * _sim.BrushFlow;   // per-dab step scale (buff self-damps,
-                                                                      // so no coverage ceiling is needed)
+            double deCraze = _sim.BrushStrength * _sim.DeCrazeMax;    // Strength (0-100%) drives the deCraze weight
+            double intensity = _sim.BrushFlow;                        // Flow (speed) = per-dab step scale; buff
+                                                                      // self-damps, so no coverage ceiling is needed
             DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
             DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
-                0.0, 0.0, false, _sim.Sharpness, 0.04, true, null, _sim.DetMix);   // deCraze = 0.04 (the "secret")
+                0.0, 0.0, false, _sim.Sharpness, deCraze, true, null, _sim.DetMix);
 
             int nv = P.Vertices.Count;
             for (int i = 0; i < nv; i++)
