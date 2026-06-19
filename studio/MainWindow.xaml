@@ -221,6 +221,12 @@
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Facet, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="0" Maximum="1" Value="{Binding Facet}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
+                                <DockPanel Margin="0,3,0,0">
+                                    <TextBlock DockPanel.Dock="Left" Text="Curve" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                               ToolTip="Facet response exponent: blend = Facet^Curve. 1 = linear; higher keeps facets soft until high Facet, then sharpens." />
+                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding FacetExp, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                    <Slider Minimum="1" Maximum="30" Value="{Binding FacetExp}" VerticalAlignment="Center" Margin="6,0" />
+                                </DockPanel>
 
                                 <TextBlock Text="MATCAP" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <ListBox x:Name="MatcapList" Background="Transparent" BorderThickness="0" Padding="0"

@@ -42,6 +42,11 @@ namespace CreaseStudio
         double _facet = 1.0;
         public double Facet { get => _facet; set => Set(ref _facet, value); }
 
+        // Facet response curve: the shader blends by pow(Facet, FacetExp). 1 = linear; higher keeps
+        // facets soft until Facet is high, then sharpens quickly.
+        double _facetExp = 1.0;
+        public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
+
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";
 

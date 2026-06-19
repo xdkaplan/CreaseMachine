@@ -155,7 +155,7 @@ namespace CreaseStudio
             // DISPLAY tab: matcap switcher (recorded; _suppressUi stops replay-sync re-recording). The
             // Facet slider binds straight to the view-model; a render is kicked when it changes.
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
-            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet)) _gl?.InvalidateVisual(); };
+            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual(); };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
             _console.SaveButton.Click += (s, e) => SaveSession();
@@ -880,7 +880,7 @@ namespace CreaseStudio
                 MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
-            if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.Draw(view, proj); }   // Facet -> shader
+            if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp; _view.Draw(view, proj); }   // Facet -> shader
         }
     }
 }

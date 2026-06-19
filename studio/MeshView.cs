@@ -14,7 +14,7 @@ namespace CreaseStudio
     sealed class MeshView : IDisposable
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
-        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness;
+        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp;
         int _tex;
         bool _hasMatcap;
         int _indexCount;
@@ -23,6 +23,7 @@ namespace CreaseStudio
         public Vector3 Center { get; private set; }
         public float Radius { get; private set; } = 1f;
         public float Sharpness = 1f;     // 0 = smooth, 1 = faceted; set per frame from the Facet slider
+        public float FacetExp = 1f;      // facet response exponent (Curve slider)
 
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
@@ -45,12 +46,14 @@ out vec4 FragColor;
 uniform sampler2D uMatcap;
 uniform int uHasMatcap;
 uniform float uSharpness;     // 0 = smooth (averaged normal), 1 = faceted (per-face normal)
+uniform float uFacetExp;      // response curve: blend = pow(sharpness, exp). 1 = linear
 void main() {
     vec3 sn = normalize(vN);
     // Geometric face normal from screen-space derivatives = the 'unwelded' normal, for free.
     vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
     if (dot(fn, sn) < 0.0) fn = -fn;       // align with the smooth normal before blending
-    vec3 n = normalize(mix(sn, fn, clamp(uSharpness, 0.0, 1.0)));
+    float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
+    vec3 n = normalize(mix(sn, fn, s));
     if (n.z < 0.0) n = -n;       // orient toward camera (view looks down -z) - winding-independent
     if (uHasMatcap == 1) {
         vec2 uv = n.xy * 0.5 + 0.5;
@@ -73,6 +76,7 @@ void main() {
             _uMatcap = GL.GetUniformLocation(_prog, "uMatcap");
             _uHasMatcap = GL.GetUniformLocation(_prog, "uHasMatcap");
             _uSharpness = GL.GetUniformLocation(_prog, "uSharpness");
+            _uFacetExp = GL.GetUniformLocation(_prog, "uFacetExp");
         }
 
         public void SetMatcap(byte[] bgra, int w, int h)
@@ -179,6 +183,7 @@ void main() {
             GL.UniformMatrix4(_uView, false, ref view);   // for the view-space position (faceted normal)
             GL.UniformMatrix3(_uNormalMat, false, ref normalMat);
             GL.Uniform1(_uSharpness, Sharpness);
+            GL.Uniform1(_uFacetExp, FacetExp);
             GL.Uniform1(_uHasMatcap, _hasMatcap ? 1 : 0);
             if (_hasMatcap)
             {
