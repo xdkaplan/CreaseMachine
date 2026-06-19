@@ -1,0 +1,12 @@
+<Window x:Class="CreaseStudio.ConsoleWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Console" Height="360" Width="480" Background="#1E1E20"
+        ShowInTaskbar="False" WindowStartupLocation="CenterOwner">
+    <!-- The session log (recorded commands + replay timings). Non-modal tool window; the main
+         window writes here via AppendLine. Closing just hides it (the owner reuses the instance). -->
+    <TextBox x:Name="LogBox" Margin="6" IsReadOnly="True" IsReadOnlyCaretVisible="False"
+             Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
+             FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap"
+             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+</Window>

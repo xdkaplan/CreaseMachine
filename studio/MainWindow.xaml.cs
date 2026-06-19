@@ -36,6 +36,10 @@ namespace CreaseStudio
         int _replayPos;
         double _lastRunMs, _lastUploadMs;           // perf readout (engine flow time / GL upload time)
 
+        ConsoleWindow _console;                     // non-modal log window (Window > Console / Ctrl+Shift+J)
+        AboutWindow _about;                         // non-modal about window (Help > About)
+        bool _shuttingDown;                         // main window closing -> let tool windows actually close
+
         // orbit camera
         float _azimuth = 0.6f, _elevation = 0.4f, _distance = 3f;
         Vector3 _target = Vector3.Zero;
@@ -46,6 +50,14 @@ namespace CreaseStudio
         {
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
+
+            // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
+            // hidden by default. Created now so Log() works from startup; its Owner is set lazily on
+            // first show (a Window's Owner must already be shown). Closing hides it (the instance is
+            // reused) unless the app itself is shutting down.
+            _console = new ConsoleWindow();
+            _console.Closing += (s, e) => { if (!_shuttingDown) { e.Cancel = true; _console.Hide(); MenuConsole.IsChecked = false; } };
+            Closing += (s, e) => _shuttingDown = true;
 
             _gl = new GLWpfControl();
             CenterHost.Children.Add(_gl);   // GL viewport lives in the center cell of the docked layout
@@ -117,7 +129,44 @@ namespace CreaseStudio
             // Bottom-bar transport: save the recorded session, replay a journal file, clear recording.
             SaveSessionButton.Click += (s, e) => SaveSession();
             ReplayButton.Click += (s, e) => OpenAndReplay();
-            ClearJournalButton.Click += (s, e) => { _journal.Clear(); SessionLog.Clear(); Log("journal cleared"); };
+            ClearJournalButton.Click += (s, e) => { _journal.Clear(); _console?.ClearLog(); Log("journal cleared"); };
+
+            // Menu bar + keyboard shortcuts (Ctrl+S = Save As, Ctrl+Shift+J = toggle Console).
+            MenuSaveAs.Click += (s, e) => SaveSession();
+            MenuAbout.Click += (s, e) => ShowAbout();
+            MenuConsole.Click += (s, e) => ShowConsole(MenuConsole.IsChecked);   // IsCheckable flips first
+            PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
+                else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
+            };
+        }
+
+        // ===================== window menu: Console + About (both non-modal) =====================
+
+        void ShowConsole(bool show)
+        {
+            if (_console == null) return;
+            if (show)
+            {
+                if (_console.Owner == null) { try { _console.Owner = this; } catch { } }   // owner must be shown first
+                _console.Show(); _console.Activate();
+            }
+            else _console.Hide();
+            MenuConsole.IsChecked = show;
+        }
+
+        void ToggleConsole() => ShowConsole(!(_console != null && _console.IsVisible));
+
+        void ShowAbout()
+        {
+            if (_about == null)
+            {
+                _about = new AboutWindow();
+                _about.Closing += (s, e) => { if (!_shuttingDown) { e.Cancel = true; _about.Hide(); } };
+            }
+            if (_about.Owner == null) { try { _about.Owner = this; } catch { } }
+            _about.Show(); _about.Activate();
         }
 
         // A panel is "collapsed" when its column is narrower than CollapseThreshold (32px). The
@@ -327,12 +376,7 @@ namespace CreaseStudio
                 "{0,3}/{1}  {2}  [{3:0.0} ms]{4}", _replayPos, _replayQueue.Count, c.Serialize(), sw.Elapsed.TotalMilliseconds, extra));
         }
 
-        void Log(string msg)
-        {
-            if (SessionLog == null) return;
-            SessionLog.AppendText(msg + Environment.NewLine);
-            SessionLog.ScrollToEnd();
-        }
+        void Log(string msg) => _console?.AppendLine(msg);
 
         void UpdateStatus()
         {

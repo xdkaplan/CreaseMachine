@@ -33,19 +33,39 @@
             </Setter>
         </Style>
 
+        <!-- Dark menu items (the default WPF menu renders light, clashing with the dark chrome). -->
+        <Style TargetType="MenuItem">
+            <Setter Property="Foreground" Value="#C8C8C8" />
+            <Setter Property="Background" Value="#2D2D30" />
+        </Style>
+
         <Geometry x:Key="CollapseIcon">F0 m375.35 316.42l-82.33 82.33 82.33 82.34c4.97 4.62 7.84 11.06 7.96 17.85 0.12 6.78-2.52 13.32-7.32 18.11-4.8 4.8-11.34 7.44-18.12 7.32-6.78-0.12-13.22-2.99-17.85-7.95l-100-100c-2.32-2.32-4.16-5.08-5.41-8.11-1.25-3.03-1.9-6.28-1.9-9.56 0-3.28 0.65-6.53 1.9-9.56 1.25-3.03 3.09-5.78 5.41-8.1l100-100c4.74-4.42 11.01-6.82 17.49-6.71 6.47 0.11 12.65 2.74 17.23 7.32 4.58 4.58 7.21 10.76 7.32 17.24 0.11 6.47-2.29 12.74-6.71 17.48z m125 66.67c-7.66 0-15.25 1.51-22.32 4.44-7.08 2.93-13.51 7.23-18.93 12.64-5.41 5.42-9.71 11.85-12.64 18.93-2.93 7.07-4.44 14.66-4.44 22.32v550c0 32.2 26.13 58.33 58.33 58.33h550c7.66 0 15.25-1.51 22.32-4.44 7.08-2.93 13.51-7.23 18.93-12.64 5.41-5.42 9.71-11.85 12.64-18.93 2.93-7.07 4.44-14.66 4.44-22.32v-550c0-7.66-1.51-15.25-4.44-22.32-2.93-7.08-7.23-13.51-12.64-18.93-5.42-5.41-11.85-9.71-18.93-12.64-7.07-2.93-14.66-4.44-22.32-4.44zm-8.33 58.33q0-1.66 0.63-3.19 0.64-1.53 1.81-2.7 1.17-1.17 2.7-1.81 1.53-0.63 3.19-0.63h375v566.66h-375q-1.66 0-3.19-0.63-1.53-0.64-2.7-1.81-1.17-1.17-1.81-2.7-0.63-1.53-0.63-3.19zm433.33 558.33v-566.66h125q1.66 0 3.19 0.63 1.53 0.64 2.7 1.81 1.17 1.17 1.81 2.7 0.63 1.53 0.63 3.19v550q0 1.66-0.63 3.19-0.64 1.53-1.81 2.7-1.17 1.17-2.7 1.81-1.53 0.63-3.19 0.63z</Geometry>
     </Window.Resources>
-    <!-- Standard 4-panel docked chrome: fixed top/bottom bars, drag-resizable + collapsible
-         left/right panels (chevron button + drag-below-32px), center hosts the GL viewport. -->
+    <!-- Standard 4-panel docked chrome: Windows-style menu bar, fixed top/bottom bars, drag-resizable
+         + collapsible left/right panels (chevron + drag-below-32px), center hosts the GL viewport. -->
     <Grid x:Name="Root">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="32" />
             <RowDefinition Height="*" />
             <RowDefinition Height="64" />
         </Grid.RowDefinitions>
 
+        <!-- MENU bar (Windows-style). Shortcuts shown via InputGestureText are bound in code-behind. -->
+        <Menu Grid.Row="0" Background="#2D2D30" Foreground="#C8C8C8" Padding="2,1">
+            <MenuItem Header="_File">
+                <MenuItem x:Name="MenuSaveAs" Header="Save Session _As…" InputGestureText="Ctrl+S" />
+            </MenuItem>
+            <MenuItem Header="_Window">
+                <MenuItem x:Name="MenuConsole" Header="_Console" IsCheckable="True" InputGestureText="Ctrl+Shift+J" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem x:Name="MenuAbout" Header="_About" />
+            </MenuItem>
+        </Menu>
+
         <!-- TOP bar (full width, 32px) -->
-        <Border Grid.Row="0" Background="#2D2D30">
+        <Border Grid.Row="1" Background="#2D2D30">
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="CreaseStudio" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
@@ -62,7 +82,7 @@
         </Border>
 
         <!-- MIDDLE row: left panel | splitter | center | splitter | right panel -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition x:Name="LeftCol" Width="220" MinWidth="26" />
                 <ColumnDefinition x:Name="LeftSplitCol" Width="6" />
@@ -71,27 +91,17 @@
                 <ColumnDefinition x:Name="RightCol" Width="240" MinWidth="26" />
             </Grid.ColumnDefinitions>
 
-            <!-- LEFT panel: session log (recorded commands + replay timings). Collapse chevron at the
-                 top-RIGHT (inner) corner. -->
+            <!-- LEFT panel: placeholder (the session log now lives in the toggleable Console window;
+                 Window > Console or Ctrl+Shift+J). Collapse chevron at the top-RIGHT (inner) corner. -->
             <Border Grid.Column="0" Background="#252526" ClipToBounds="True">
                 <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="26" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="SESSION LOG" Foreground="#7A7A88" FontSize="10"
-                               FontWeight="Bold" Margin="10,7,0,0" />
-                    <Button x:Name="LeftCollapseBtn" Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top"
-                            Width="24" Height="24" Margin="0,2,4,0" Background="Transparent"
+                    <Button x:Name="LeftCollapseBtn" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Width="24" Height="24" Margin="0,4,4,0" Background="Transparent"
                             BorderThickness="0" Cursor="Hand" ToolTip="Collapse / expand panel">
                         <Viewbox Width="15" Height="15">
                             <Path Data="{StaticResource CollapseIcon}" Fill="#A0A6AE" />
                         </Viewbox>
                     </Button>
-                    <TextBox x:Name="SessionLog" Grid.Row="1" Margin="6,2,6,6" IsReadOnly="True"
-                             Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
-                             FontFamily="Consolas" FontSize="10" TextWrapping="NoWrap" IsReadOnlyCaretVisible="False"
-                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
                 </Grid>
             </Border>
 
@@ -242,7 +252,7 @@
         </Grid>
 
         <!-- BOTTOM bar (full width, 64px): session-journal transport + live perf readout -->
-        <Border Grid.Row="2" Background="#2D2D30">
+        <Border Grid.Row="3" Background="#2D2D30">
             <DockPanel Margin="10,0" LastChildFill="False">
                 <TextBlock DockPanel.Dock="Left" Text="Session" Foreground="#9090A0"
                            VerticalAlignment="Center" FontSize="11" Margin="0,0,12,0" />
