@@ -22,4 +22,15 @@ namespace CreaseStudio
         public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
             => throw new NotSupportedException();
     }
+
+    // Shows a fraction directly as a percent (value × 100), e.g. 1.0 -> "100%", 3.0 -> "300%". For
+    // sliders whose value IS the fraction (Strength, Flow, Softness, deCraze) and may exceed 100%.
+    public sealed class FractionToPercentConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+            => value is double d ? (int)Math.Round(d * 100) + "%" : "";
+
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotSupportedException();
+    }
 }

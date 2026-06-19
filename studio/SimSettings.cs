@@ -44,7 +44,7 @@ namespace CreaseStudio
         {
             Step = Step,
             Momentum = Momentum,
-            deCraze = DeCraze,
+            deCraze = DeCraze * DeCrazeMax,   // DeCraze is a fraction of DeCrazeMax (slider 0-300%)
             CrazeBand = CrazeBandDeg * System.Math.PI / 180.0,   // degrees (UI) -> radians (engine)
             Sharpness = Sharpness,
             DetMix = DetMix,

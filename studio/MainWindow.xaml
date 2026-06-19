@@ -7,6 +7,8 @@
     <Window.Resources>
         <!-- Reusable: remaps a slider's value within [min,max] to a 0-100% readout. -->
         <local:RangeToPercentConverter x:Key="RangeToPercent" />
+        <!-- Shows a fraction directly as a percent (value × 100), allowing >100% (e.g. deCraze to 300%). -->
+        <local:FractionToPercentConverter x:Key="FractionToPercent" />
         <!-- sidebar-collapse glyph (from sidebar-collapse.svg, 800x800); evenodd (F0). Mirrored
              with ScaleX=-1 for the right panel. -->
         <!-- Dark, flat tab headers (the default WPF TabItem renders light/3D, clashing with the
@@ -179,16 +181,8 @@
 
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="deCraze" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
-                                            <TextBlock.Text>
-                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
-                                                    <Binding Path="Value" ElementName="DeCrazeSlider" />
-                                                    <Binding Path="Minimum" ElementName="DeCrazeSlider" />
-                                                    <Binding Path="Maximum" ElementName="DeCrazeSlider" />
-                                                </MultiBinding>
-                                            </TextBlock.Text>
-                                        </TextBlock>
-                                        <Slider x:Name="DeCrazeSlider" Minimum="0" Maximum="{Binding DeCrazeMax}" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DeCraze, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="3" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">
@@ -271,16 +265,8 @@
                                 <StackPanel Margin="10,0,10,0">
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Strength" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
-                                            <TextBlock.Text>
-                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
-                                                    <Binding Path="Value" ElementName="StrengthSlider" />
-                                                    <Binding Path="Minimum" ElementName="StrengthSlider" />
-                                                    <Binding Path="Maximum" ElementName="StrengthSlider" />
-                                                </MultiBinding>
-                                            </TextBlock.Text>
-                                        </TextBlock>
-                                        <Slider x:Name="StrengthSlider" Minimum="0" Maximum="1" Value="{Binding BrushStrength}" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushStrength, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="3" Value="{Binding BrushStrength}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">
