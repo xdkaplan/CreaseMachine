@@ -16,7 +16,7 @@ namespace CreaseStudio
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         string _meshPath;            // source mesh path, so Reset can reload the input from disk
-        bool _glInit, _meshDirty;
+        bool _glInit, _meshDirty, _reframe;         // _reframe: re-fit the camera on the next upload
         long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
@@ -25,6 +25,16 @@ namespace CreaseStudio
         string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
         byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
         bool _matcapDirty;                          // re-upload the matcap texture on the next render
+
+        // Journal harness: every action routes through Execute(), which records the semantic command
+        // (record/replay), so a saved .journal replays the live workflow and times each step for
+        // perf/value drift across commits. Display state is synced on replay (suppress -> no re-record).
+        readonly System.Collections.Generic.List<StudioCommand> _journal = new System.Collections.Generic.List<StudioCommand>();
+        bool _suppressUi;                           // programmatic UI sync in progress -> don't re-record
+        System.Windows.Threading.DispatcherTimer _replayTimer;
+        System.Collections.Generic.List<StudioCommand> _replayQueue;
+        int _replayPos;
+        double _lastRunMs, _lastUploadMs;           // perf readout (engine flow time / GL upload time)
 
         // orbit camera
         float _azimuth = 0.6f, _elevation = 0.4f, _distance = 3f;
@@ -51,13 +61,10 @@ namespace CreaseStudio
             _gl.MouseMove += OnMouseMove;
             _gl.MouseWheel += (s, e) => { _distance *= MathF.Pow(0.999f, e.Delta); InvalidateView(); };
 
-            // Load a default mesh on the CPU now; upload happens once the GL context is live.
+            // Load the default mesh as the first journal entry, so recordings are self-contained
+            // (they begin with the load). The GL upload itself happens once the context is live.
             string def = @"C:\Temp\Bunny 5k.stl";
-            if (System.IO.File.Exists(def))
-            {
-                try { _session = new FlowSession(MeshIO.Load(def)); _meshPath = def; Title = "CreaseStudio — " + System.IO.Path.GetFileName(def); }
-                catch (Exception ex) { Title = "CreaseStudio — load failed: " + ex.Message; }
-            }
+            if (System.IO.File.Exists(def)) Execute(StudioCommand.Load(def), record: true);
             else Title = "CreaseStudio — (no mesh at " + def + ")";
 
             // DISPLAY tab: bundled matcaps (assets/matcaps, copied next to the exe). Thumbnails feed
@@ -82,12 +89,14 @@ namespace CreaseStudio
                 catch { }
             }
             MatcapList.ItemsSource = thumbs;
-            if (_matcapPaths.Length > 0) { MatcapList.SelectedIndex = 0; SelectMatcap(0); }
+            // Initial matcap applied (not recorded) before the SelectionChanged handler is wired, so
+            // setting the index here doesn't fire a recorded command.
+            if (_matcapPaths.Length > 0) { MatcapList.SelectedIndex = 0; ApplyMatcap(0); }
 
-            // Top-bar actions (declared in XAML): run N flow steps, one subdivision, reset.
-            IterButton.Click += (s, e) => RunIters(_sim.IterPerRun);
-            SubdivideButton.Click += (s, e) => Subdivide();
-            ResetButton.Click += (s, e) => ResetMesh();
+            // Top-bar actions route through Execute() so each is recorded to the session journal.
+            IterButton.Click += (s, e) => Execute(StudioCommand.Run(_sim.IterPerRun, _sim.ToFlowParams()), record: true);
+            SubdivideButton.Click += (s, e) => Execute(StudioCommand.Subdiv(), record: true);
+            ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -99,10 +108,16 @@ namespace CreaseStudio
             RightSplitter.PreviewMouseLeftButtonDown += (s, e) => _preDragWidth = RightCol.ActualWidth;
             RightSplitter.PreviewMouseLeftButtonUp += (s, e) => AfterSplitterDrag(RightCol, ref _rightRestore);
 
-            // DISPLAY tab: welded/unwelded shading toggle + matcap switcher.
-            WeldedRadio.Checked += (s, e) => SetShading(false);
-            UnweldedRadio.Checked += (s, e) => SetShading(true);
-            MatcapList.SelectionChanged += (s, e) => { if (MatcapList.SelectedIndex >= 0) SelectMatcap(MatcapList.SelectedIndex); };
+            // DISPLAY tab: welded/unwelded + matcap switcher. Recorded too; the _suppressUi guard stops
+            // the programmatic control-sync during replay from re-recording.
+            WeldedRadio.Checked += (s, e) => { if (!_suppressUi) Execute(StudioCommand.Shading(false), record: true); };
+            UnweldedRadio.Checked += (s, e) => { if (!_suppressUi) Execute(StudioCommand.Shading(true), record: true); };
+            MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
+
+            // Bottom-bar transport: save the recorded session, replay a journal file, clear recording.
+            SaveSessionButton.Click += (s, e) => SaveSession();
+            ReplayButton.Click += (s, e) => OpenAndReplay();
+            ClearJournalButton.Click += (s, e) => { _journal.Clear(); SessionLog.Clear(); Log("journal cleared"); };
         }
 
         // A panel is "collapsed" when its column is narrower than CollapseThreshold (32px). The
@@ -131,11 +146,68 @@ namespace CreaseStudio
             else { restore = w; col.Width = new GridLength(w); }   // pin the dragged width; remember it
         }
 
-        // Run n flow steps in-process (cheap; on the UI thread), then flag the mesh for re-upload.
-        void RunIters(int n)
+        // ===================== command sink (the journal chokepoint) =====================
+
+        // The single entry point for every studio action. Performs the side effect (Apply*), records
+        // the semantic command when asked, and syncs the display controls (so replay reflects state).
+        // Every UI handler and the replay loop go through here, so the journal is the complete,
+        // authoritative record of what happened - and replay drives the exact same code paths.
+        void Execute(StudioCommand c, bool record)
         {
-            if (_session == null) return;
-            var p = _sim.ToFlowParams();   // snapshot the right-panel settings for this run
+            switch (c.Kind)
+            {
+                case CmdKind.Load: ApplyLoad(c.Path); break;
+                case CmdKind.Run: ApplyRun(c.N, c.P); break;
+                case CmdKind.Subdivide: ApplySubdivide(); break;
+                case CmdKind.Reset: ApplyReset(); break;
+                case CmdKind.Shading: ApplyShading(c.Flag); break;
+                case CmdKind.Matcap: ApplyMatcap(c.N); break;
+            }
+            if (record) { _journal.Add(c); Log(c.Serialize()); }
+            SyncControls(c);
+        }
+
+        // Reflect a command's state in the input controls without re-recording (_suppressUi guards the
+        // control event handlers). Only meaningful during replay; for user actions the control is
+        // already in the target state, so these sets are no-ops.
+        void SyncControls(StudioCommand c)
+        {
+            _suppressUi = true;
+            try
+            {
+                if (c.Kind == CmdKind.Shading) { if (c.Flag) UnweldedRadio.IsChecked = true; else WeldedRadio.IsChecked = true; }
+                else if (c.Kind == CmdKind.Matcap && c.N >= 0 && c.N < MatcapList.Items.Count) MatcapList.SelectedIndex = c.N;
+                else if (c.Kind == CmdKind.Run)
+                {
+                    // show the replayed run's parameters on the sliders (cosmetic; the run used c.P).
+                    _sim.IterPerRun = c.N; _sim.Step = c.P.Step; _sim.Momentum = c.P.Momentum;
+                    _sim.DeCraze = c.P.deCraze; _sim.CrazeBandDeg = c.P.CrazeBand * 180.0 / Math.PI;
+                    _sim.Sharpness = c.P.Sharpness; _sim.DetMix = c.P.DetMix; _sim.MomFix = c.P.MomFix;
+                }
+            }
+            finally { _suppressUi = false; }
+        }
+
+        // ===================== Apply* : the actual side effects (no recording) =====================
+
+        void ApplyLoad(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { Title = "CreaseStudio — missing: " + path; return; }
+            try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
+            catch (Exception ex) { Title = "CreaseStudio — load failed: " + ex.Message; return; }
+            _totalIters = 0;
+            _reframe = true;          // new mesh -> re-fit the camera on the next upload
+            _meshDirty = true;
+            Title = "CreaseStudio — " + System.IO.Path.GetFileName(path);
+            _gl?.InvalidateVisual();
+        }
+
+        // Run n flow steps in-process (on the UI thread). Uses the supplied params (NOT live sliders),
+        // so a recorded run replays identically. Times the flow loop for the perf-drift readout.
+        void ApplyRun(int n, FlowParams p)
+        {
+            if (_session == null || n <= 0) return;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < n; i++)
             {
                 _session.CollapseShort();
@@ -143,15 +215,18 @@ namespace CreaseStudio
                 _session.NesterovStep(p, out bool[] fold);
                 _session.HealFolds(fold);
             }
+            sw.Stop();
+            _lastRunMs = sw.Elapsed.TotalMilliseconds;
             _totalIters += n;
             _meshDirty = true;
             Title = "CreaseStudio — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
+            UpdateStatus();
             _gl?.InvalidateVisual();
         }
 
-        // One 1->4 subdivision of the live mesh (geometry-preserving), then re-upload. Momentum
-        // resets inside FlowSession.Subdivide (vertex indices are renumbered). Camera unchanged.
-        void Subdivide()
+        // One 1->4 subdivision of the live mesh (geometry-preserving; momentum resets inside
+        // FlowSession.Subdivide as indices are renumbered). Camera unchanged.
+        void ApplySubdivide()
         {
             if (_session == null) return;
             _session.Subdivide();
@@ -160,9 +235,8 @@ namespace CreaseStudio
             _gl?.InvalidateVisual();
         }
 
-        // Reload the input mesh from disk and reset the flow (fresh velocity, iteration count 0).
-        // Same mesh bounds as the initial load, so the camera framing stays valid.
-        void ResetMesh()
+        // Reload the current mesh from disk and reset the flow. Same bounds -> camera kept (no reframe).
+        void ApplyReset()
         {
             if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
@@ -173,9 +247,8 @@ namespace CreaseStudio
             _gl?.InvalidateVisual();
         }
 
-        // Welded (smooth) <-> unwelded (faceted) shading. Render-only: re-uploads the same mesh in
-        // the new form, doesn't touch the flow.
-        void SetShading(bool flat)
+        // Welded (smooth) <-> unwelded (faceted) shading. Render-only: re-uploads the same mesh.
+        void ApplyShading(bool flat)
         {
             if (_flatShading == flat) return;
             _flatShading = flat;
@@ -185,7 +258,7 @@ namespace CreaseStudio
 
         // Decode matcap[i] to BGRA (GL row order) and queue it for upload next render. GL texture
         // calls must run with the context current (inside OnRender), so we only stage the pixels here.
-        void SelectMatcap(int i)
+        void ApplyMatcap(int i)
         {
             if (_matcapPaths == null || i < 0 || i >= _matcapPaths.Length) return;
             try
@@ -195,6 +268,78 @@ namespace CreaseStudio
                 _gl?.InvalidateVisual();
             }
             catch { }
+        }
+
+        // ===================== journal save / replay =====================
+
+        void SaveSession()
+        {
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*", FileName = "session.journal" };
+            if (dlg.ShowDialog() != true) return;
+            var lines = new System.Collections.Generic.List<string> { "# CreaseStudio session journal" };
+            foreach (var c in _journal) lines.Add(c.Serialize());
+            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands -> " + System.IO.Path.GetFileName(dlg.FileName)); }
+            catch (Exception ex) { Log("save failed: " + ex.Message); }
+        }
+
+        void OpenAndReplay()
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*" };
+            if (dlg.ShowDialog() != true) return;
+            var cmds = new System.Collections.Generic.List<StudioCommand>();
+            try { foreach (var ln in System.IO.File.ReadAllLines(dlg.FileName)) { var c = StudioCommand.Parse(ln); if (c != null) cmds.Add(c); } }
+            catch (Exception ex) { Log("load failed: " + ex.Message); return; }
+            ReplayJournal(cmds);
+        }
+
+        // Replay a command list against the live GUI, one command per timer tick (so the viewport
+        // repaints between steps). Each command is timed; runs also log FlowMetrics, giving numbers
+        // directly comparable to the CLI baseline - the soft perf/value drift signal across commits.
+        void ReplayJournal(System.Collections.Generic.List<StudioCommand> cmds)
+        {
+            if (cmds == null || cmds.Count == 0) { Log("nothing to replay"); return; }
+            _replayQueue = cmds; _replayPos = 0;
+            Log("--- replay: " + cmds.Count + " commands ---");
+            if (_replayTimer == null)
+            {
+                _replayTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
+                _replayTimer.Tick += ReplayTick;
+            }
+            _replayTimer.Start();
+        }
+
+        void ReplayTick(object sender, EventArgs e)
+        {
+            if (_replayQueue == null || _replayPos >= _replayQueue.Count) { _replayTimer.Stop(); Log("--- replay done ---"); return; }
+            var c = _replayQueue[_replayPos++];
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Execute(c, record: false);
+            sw.Stop();
+            string extra = "";
+            if (c.Kind == CmdKind.Run && _session != null)
+            {
+                var m = FlowMetrics.Compute(_session.Mesh, c.P.CrazeBand, c.P.UseMaxCov, c.P.Sharpness);
+                extra = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "  sumE={0:0.000} panels={1} maxDih={2:0.0}", m.SumE, m.Panels, m.MaxDihDeg);
+            }
+            Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0,3}/{1}  {2}  [{3:0.0} ms]{4}", _replayPos, _replayQueue.Count, c.Serialize(), sw.Elapsed.TotalMilliseconds, extra));
+        }
+
+        void Log(string msg)
+        {
+            if (SessionLog == null) return;
+            SessionLog.AppendText(msg + Environment.NewLine);
+            SessionLog.ScrollToEnd();
+        }
+
+        void UpdateStatus()
+        {
+            if (StatusText == null) return;
+            int v = _session != null ? _session.Mesh.Vertices.Count : 0;
+            StatusText.Text = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "flow {0:0.0} ms · upload {1:0.0} ms · {2} verts", _lastRunMs, _lastUploadMs, v);
         }
 
         static byte[] DecodeMatcapBgra(string path, out int w, out int h)
@@ -227,23 +372,23 @@ namespace CreaseStudio
 
         void OnRender(TimeSpan delta)
         {
-            if (!_glInit)
-            {
-                _view = new MeshView();
-                if (_session != null)
-                {
-                    _view.Upload(_session.Mesh, _flatShading);
-                    _target = _view.Center;
-                    _distance = _view.Radius * 3f;
-                }
-                _glInit = true;
-            }
+            if (!_glInit) { _view = new MeshView(); _glInit = true; }
 
             // apply a queued matcap texture (GL thread = here)
             if (_matcapDirty && _view != null && _matcapPx != null) { _view.SetMatcap(_matcapPx, _matcapW, _matcapH); _matcapDirty = false; }
 
-            // re-upload when the mesh changed (a run / subdivide / reset) or the shading mode toggled
-            if (_meshDirty && _session != null) { _view.Upload(_session.Mesh, _flatShading); _meshDirty = false; }
+            // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
+            // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
+            if (_meshDirty && _session != null)
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                _view.Upload(_session.Mesh, _flatShading);
+                sw.Stop();
+                _lastUploadMs = sw.Elapsed.TotalMilliseconds;
+                _meshDirty = false;
+                if (_reframe) { _target = _view.Center; _distance = _view.Radius * 3f; _reframe = false; }
+                UpdateStatus();
+            }
 
             // Depth state EVERY frame: GLWpfControl rebinds its own framebuffer / resets GL state
             // each render, so a one-time enable doesn't stick. Without this there's no depth test and

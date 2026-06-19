@@ -71,17 +71,27 @@
                 <ColumnDefinition x:Name="RightCol" Width="240" MinWidth="26" />
             </Grid.ColumnDefinitions>
 
-            <!-- LEFT panel: collapse chevron at its top-RIGHT (inner) corner -->
+            <!-- LEFT panel: session log (recorded commands + replay timings). Collapse chevron at the
+                 top-RIGHT (inner) corner. -->
             <Border Grid.Column="0" Background="#252526" ClipToBounds="True">
                 <Grid>
-                    <TextBlock Text="Left panel" Foreground="#9090A0" Margin="10,8,0,0" FontSize="12" />
-                    <Button x:Name="LeftCollapseBtn" HorizontalAlignment="Right" VerticalAlignment="Top"
-                            Width="24" Height="24" Margin="0,4,4,0" Background="Transparent"
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="26" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Text="SESSION LOG" Foreground="#7A7A88" FontSize="10"
+                               FontWeight="Bold" Margin="10,7,0,0" />
+                    <Button x:Name="LeftCollapseBtn" Grid.Row="0" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Width="24" Height="24" Margin="0,2,4,0" Background="Transparent"
                             BorderThickness="0" Cursor="Hand" ToolTip="Collapse / expand panel">
                         <Viewbox Width="15" Height="15">
                             <Path Data="{StaticResource CollapseIcon}" Fill="#A0A6AE" />
                         </Viewbox>
                     </Button>
+                    <TextBox x:Name="SessionLog" Grid.Row="1" Margin="6,2,6,6" IsReadOnly="True"
+                             Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
+                             FontFamily="Consolas" FontSize="10" TextWrapping="NoWrap" IsReadOnlyCaretVisible="False"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
                 </Grid>
             </Border>
 
@@ -231,10 +241,23 @@
             </Border>
         </Grid>
 
-        <!-- BOTTOM bar (full width, 64px) -->
+        <!-- BOTTOM bar (full width, 64px): session-journal transport + live perf readout -->
         <Border Grid.Row="2" Background="#2D2D30">
-            <TextBlock Text="Bottom bar" Foreground="#C8C8C8"
-                       VerticalAlignment="Center" Margin="10,0" FontSize="12" />
+            <DockPanel Margin="10,0" LastChildFill="False">
+                <TextBlock DockPanel.Dock="Left" Text="Session" Foreground="#9090A0"
+                           VerticalAlignment="Center" FontSize="11" Margin="0,0,12,0" />
+                <Button x:Name="SaveSessionButton" DockPanel.Dock="Left" Content="Save…"
+                        Padding="10,3" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="11"
+                        ToolTip="Save the recorded session to a .journal file" />
+                <Button x:Name="ReplayButton" DockPanel.Dock="Left" Content="Replay…"
+                        Padding="10,3" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="11"
+                        ToolTip="Load a .journal and replay it live, timing each command" />
+                <Button x:Name="ClearJournalButton" DockPanel.Dock="Left" Content="Clear"
+                        Padding="10,3" VerticalAlignment="Center" FontSize="11"
+                        ToolTip="Clear the current recording and log" />
+                <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text=""
+                           Foreground="#8A8A98" VerticalAlignment="Center" FontSize="11" />
+            </DockPanel>
         </Border>
     </Grid>
 </Window>
