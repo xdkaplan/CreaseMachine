@@ -39,12 +39,12 @@ namespace CreaseStudio
 
         // Shading facet (display): 0 = smooth (averaged normals), 1 = faceted (per-face normals). The
         // shader blends between them, so this is continuous and live. Default faceted.
-        double _facet = 1.0;
+        double _facet = 0.9;
         public double Facet { get => _facet; set => Set(ref _facet, value); }
 
         // Facet response curve: the shader blends by pow(Facet, FacetExp). 1 = linear; higher keeps
         // facets soft until Facet is high, then sharpens quickly.
-        double _facetExp = 1.0;
+        double _facetExp = 4.0;
         public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
 
         // convenience for the run button caption
