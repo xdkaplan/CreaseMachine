@@ -49,7 +49,9 @@ namespace CreaseStudio
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = edit (brush)
 
         // Brushes (the editors). One active at a time; left-drag paints, right-drag still orbits.
-        enum BrushKind { None, Noise, Polish, Buff }   // Polish = deCraze w/ Huber band (clean creases); Buff = no band (rounds them)
+        // Polish = deCraze w/ Huber band (clean creases); Buff = no band (rounds them); Sharpen = burst
+        // w/ max-covariance (straight rulings). Crease/Flatten/Smooth are direct geometric offsets.
+        enum BrushKind { None, Noise, Polish, Buff, Sharpen, Crease, Flatten, Smooth }
         BrushKind _brush = BrushKind.None;
         bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
@@ -214,12 +216,20 @@ namespace CreaseStudio
             Deactivated += (s, e) => { if (_spaceHeld) { _spaceHeld = false; _flowTimer.Stop(); } };   // safety if focus is lost mid-hold
 
             // Brush tiles (bottom bar): mutually exclusive; selecting one paints on left-drag.
-            NoiseBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Noise); };
-            NoiseBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Noise) SetBrush(BrushKind.None); };
-            PolishBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Polish); };
-            PolishBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Polish) SetBrush(BrushKind.None); };
-            BuffBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Buff); };
-            BuffBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Buff) SetBrush(BrushKind.None); };
+            WireBrushTile(NoiseBrushButton, BrushKind.Noise);
+            WireBrushTile(PolishBrushButton, BrushKind.Polish);
+            WireBrushTile(BuffBrushButton, BrushKind.Buff);
+            WireBrushTile(SharpenBrushButton, BrushKind.Sharpen);
+            WireBrushTile(CreaseBrushButton, BrushKind.Crease);
+            WireBrushTile(FlattenBrushButton, BrushKind.Flatten);
+            WireBrushTile(SmoothBrushButton, BrushKind.Smooth);
+        }
+
+        // A tile selects its brush on check, and clears to None when toggled off.
+        void WireBrushTile(System.Windows.Controls.Primitives.ToggleButton btn, BrushKind kind)
+        {
+            btn.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(kind); };
+            btn.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == kind) SetBrush(BrushKind.None); };
         }
 
         // Activate a brush (or none), keeping the tiles mutually exclusive. _suppressBrushUi stops
@@ -231,6 +241,10 @@ namespace CreaseStudio
             NoiseBrushButton.IsChecked = k == BrushKind.Noise;
             PolishBrushButton.IsChecked = k == BrushKind.Polish;
             BuffBrushButton.IsChecked = k == BrushKind.Buff;
+            SharpenBrushButton.IsChecked = k == BrushKind.Sharpen;
+            CreaseBrushButton.IsChecked = k == BrushKind.Crease;
+            FlattenBrushButton.IsChecked = k == BrushKind.Flatten;
+            SmoothBrushButton.IsChecked = k == BrushKind.Smooth;
             _suppressBrushUi = false;
             if (k == BrushKind.None) _previewDot.Visibility = Visibility.Collapsed;
         }
@@ -502,8 +516,9 @@ namespace CreaseStudio
                 {
                     _strokeCov = new double[_session.Mesh.Vertices.Count];   // fresh coverage for this stroke
                     _dabAccum = 0;                                            // reset path-spacing accumulator
-                    _strokeOffset = ComputeBrushOffset();                     // freeze the target (BUFF burst runs here)
-                    if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);   // initial dab at the down point
+                    bool hasHit = PickSurface(_lastMouse, out var hit);
+                    _strokeOffset = ComputeBrushOffset(hasHit, hit);          // freeze the target (burst brushes compute here)
+                    if (hasHit) ApplyDab(hit);                                // initial dab at the down point
                 }
             }
             else return;
@@ -694,15 +709,20 @@ namespace CreaseStudio
         // once, so the pattern doesn't drift as the surface moves). BUFF: the displacement produced by a
         // burst of K developability iterations — "where each vertex goes if you fully buff" — which the
         // dabs then paint in locally. Computed ONCE per stroke (the expensive flow doesn't run per dab).
-        Vector3[] ComputeBrushOffset()
+        // Build the frozen per-vertex target offset for the stroke (D[v]); the dabs blend toward it.
+        // hit = the surface point under the cursor at stroke start (used by Flatten's plane fit).
+        Vector3[] ComputeBrushOffset(bool hasHit, Vector3 hit)
         {
             var P = _session.Mesh;
             int nv = P.Vertices.Count;
             var D = new Vector3[nv];
+            double strength = _sim.BrushStrength;
+            double band = _sim.CrazeBandDeg * Math.PI / 180.0;
+
             if (_brush == BrushKind.Noise)
             {
-                double amp = 2.0 * RepEdge(P) * (_sim.BrushStrength / 30.0);   // 2·edge at the default Strength (30)
-                double freq = 2.0 / _sim.BrushSize;                 // a few bumps across the footprint
+                double amp = 2.0 * RepEdge(P) * (strength / 30.0);   // 2·edge at the default Strength (30)
+                double freq = 2.0 / _sim.BrushSize;                  // a few bumps across the footprint
                 Vector3[] nrm = VertexNormals(P);
                 for (int i = 0; i < nv; i++)
                 {
@@ -712,18 +732,73 @@ namespace CreaseStudio
                     D[i] = nrm[i] * (float)(amp * n);
                 }
             }
-            else if (_brush == BrushKind.Polish)
-                ComputeBuffTarget(D, _sim.CrazeBandDeg * Math.PI / 180.0);   // Huber band: near-flat edges settle -> keeps sharp creases
-            else if (_brush == BrushKind.Buff)
-                ComputeBuffTarget(D, 0.0);                                   // no band (pure L1): the flatten force never vanishes -> rounds creases
+            else if (_brush == BrushKind.Crease)
+            {
+                // Constant inward (-normal) pull -> dragging carves a valley/fold line that seeds a
+                // panel boundary. Softness controls its width; the flow/Polish can sharpen it after.
+                double amp = 1.5 * RepEdge(P) * (strength / 30.0);
+                Vector3[] nrm = VertexNormals(P);
+                for (int i = 0; i < nv; i++)
+                {
+                    if (P.Vertices[i].IsUnused) continue;
+                    D[i] = nrm[i] * (float)(-amp);
+                }
+            }
+            else if (_brush == BrushKind.Smooth)
+            {
+                // Umbrella-Laplacian relax toward the 1-ring average -> denoise, smooth out wrinkles.
+                double scale = Math.Min(1.0, strength / 30.0);
+                var sum = new Vector3[nv]; var cnt = new int[nv];
+                int nh = P.Halfedges.Count;
+                for (int h = 0; h < nh; h++)
+                {
+                    if (P.Halfedges[h].IsUnused) continue;
+                    int a = P.Halfedges[h].StartVertex, b = P.Halfedges[h ^ 1].StartVertex;  // h goes a -> b
+                    sum[a] += V(P, b); cnt[a]++;
+                }
+                for (int i = 0; i < nv; i++)
+                {
+                    var pv = P.Vertices[i];
+                    if (pv.IsUnused || P.Vertices.IsBoundary(i) || cnt[i] == 0) continue;
+                    D[i] = (sum[i] / cnt[i] - new Vector3(pv.X, pv.Y, pv.Z)) * (float)scale;
+                }
+            }
+            else if (_brush == BrushKind.Flatten && hasHit)
+            {
+                // Project onto the plane fit to the footprint at the stroke-start point -> a clean flat
+                // panel. (Far-from-plane verts get a big D, but only brushed verts ever move.)
+                Vector3[] nrm = VertexNormals(P);
+                double R = _sim.BrushSize, R2 = R * R, sigma = Math.Max(0.05, _sim.BrushSoftness) * R, twoSig2 = 2.0 * sigma * sigma;
+                Vector3 nAcc = Vector3.Zero;
+                for (int i = 0; i < nv; i++)
+                {
+                    var pv = P.Vertices[i];
+                    if (pv.IsUnused) continue;
+                    double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z, d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > R2) continue;
+                    nAcc += nrm[i] * (float)Math.Exp(-d2 / twoSig2);
+                }
+                Vector3 N = nAcc.LengthSquared > 1e-12f ? Vector3.Normalize(nAcc) : Vector3.UnitZ;
+                for (int i = 0; i < nv; i++)
+                {
+                    var pv = P.Vertices[i];
+                    if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
+                    Vector3 rel = new Vector3(pv.X, pv.Y, pv.Z) - hit;
+                    D[i] = N * (-Vector3.Dot(rel, N));   // displacement onto the plane
+                }
+            }
+            else if (_brush == BrushKind.Polish) ComputeBuffTarget(D, band, false);   // Huber band: keeps sharp creases
+            else if (_brush == BrushKind.Buff) ComputeBuffTarget(D, 0.0, false);       // no band (pure L1): rounds creases
+            else if (_brush == BrushKind.Sharpen) ComputeBuffTarget(D, band, true);    // max-covariance: straighter rulings / clearer panels
             return D;
         }
 
         // Polish/Buff target: run K (= Strength) developability iterations (covariance + a fixed
         // BuffDeCraze consolidation weight, with the given CrazeBand) on the live mesh, record the
         // per-vertex displacement, then restore the mesh. The expensive flow runs once here per stroke;
-        // the dabs that paint it in are cheap. crazeBand>0 (Polish) preserves creases; 0 (Buff) rounds them.
-        void ComputeBuffTarget(Vector3[] D, double crazeBand)
+        // the dabs that paint it in are cheap. crazeBand>0 (Polish) preserves creases; 0 (Buff) rounds them;
+        // useMaxCov (Sharpen) forces normals onto one arc -> straighter rulings / clearer panels.
+        void ComputeBuffTarget(Vector3[] D, double crazeBand, bool useMaxCov)
         {
             var P = _session.Mesh;
             int nv = P.Vertices.Count;
@@ -738,7 +813,7 @@ namespace CreaseStudio
             for (int k = 0; k < K; k++)
             {
                 DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
-                    0.0, 0.0, false, _sim.Sharpness, BuffDeCraze, true, null, _sim.DetMix);
+                    0.0, 0.0, useMaxCov, _sim.Sharpness, BuffDeCraze, true, null, _sim.DetMix);
                 for (int i = 0; i < nv; i++)
                 {
                     var pv = P.Vertices[i];

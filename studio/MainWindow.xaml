@@ -320,14 +320,26 @@
         <Border Grid.Row="3" Background="#2D2D30">
             <DockPanel Margin="8,0" LastChildFill="False">
                 <ToggleButton x:Name="NoiseBrushButton" DockPanel.Dock="Left" Content="NOISE"
-                              Width="48" Height="48" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
-                              ToolTip="NOISE brush — ± normal Perlin displacement. Left-drag paints. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="NOISE — ± normal Perlin displacement. Left-drag paints. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                <ToggleButton x:Name="CreaseBrushButton" DockPanel.Dock="Left" Content="CREASE"
+                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="CREASE — carves an inward valley/fold line to seed a panel boundary (Softness = width). [prototype]" />
+                <ToggleButton x:Name="FlattenBrushButton" DockPanel.Dock="Left" Content="FLATTEN"
+                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="FLATTEN — presses the area onto the plane you start the stroke on -> a clean flat panel. [prototype]" />
+                <ToggleButton x:Name="SmoothBrushButton" DockPanel.Dock="Left" Content="SMOOTH"
+                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="SMOOTH — Laplacian relax toward the neighbour average: denoise / soften wrinkles. [prototype]" />
                 <ToggleButton x:Name="PolishBrushButton" DockPanel.Dock="Left" Content="POLISH"
-                              Width="48" Height="48" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
                               ToolTip="POLISH — developability flow with crease-preserving deCraze (Huber band): cleans panels, keeps sharp creases." />
                 <ToggleButton x:Name="BuffBrushButton" DockPanel.Dock="Left" Content="BUFF"
-                              Width="48" Height="48" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              Width="54" Height="48" Margin="0,0,5,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
                               ToolTip="BUFF — same deCraze flow but with no Huber band (pure L1): rounds / softens creases." />
+                <ToggleButton x:Name="SharpenBrushButton" DockPanel.Dock="Left" Content="SHARPEN"
+                              Width="54" Height="48" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="SHARPEN — developability burst with max-covariance: forces straighter rulings / clearer panel structure. [prototype]" />
                 <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="" Foreground="#8A8A98"
                            VerticalAlignment="Center" FontSize="11" />
             </DockPanel>
