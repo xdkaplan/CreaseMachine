@@ -58,6 +58,10 @@ namespace CreaseStudio
         double[] _strokeCov;              // per-vertex coverage this stroke (Flow builds it toward Strength)
         double _dabAccum;                 // screen-px traveled since the last dab (path-spacing accumulator)
         const int BuffBurstIters = 30;    // developability iterations in the BUFF target burst (once per stroke)
+
+        System.Windows.Threading.DispatcherTimer _flowTimer;   // runs the flow continuously while Space is held
+        bool _spaceHeld;
+        long _spaceIters;                 // iterations run during the current Space-hold (journaled on release)
         System.Windows.Point _lastHover;  // last hover position, to refresh the preview after a size change
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -184,7 +188,32 @@ namespace CreaseStudio
                     if (_brush != BrushKind.None) UpdatePreview(_lastHover);
                     e.Handled = true;
                 }
+                else if (e.Key == Key.Space)              // hold to run the flow continuously
+                {
+                    if (!_spaceHeld) { _spaceHeld = true; _spaceIters = 0; _flowTimer.Start(); }
+                    e.Handled = true;   // also stops Space from "clicking" a focused button
+                }
             };
+
+            // Hold Space: run one developability iteration per tick until released. On release, record
+            // the held run as a single Run(N) in the journal (so it stays replayable) without re-running.
+            _flowTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+            _flowTimer.Tick += (s, e) =>
+            {
+                if (_session == null) { _flowTimer.Stop(); return; }
+                ApplyRun(1, _sim.ToFlowParams());   // ApplyRun doesn't journal (Execute does), so no flooding
+                _spaceIters++;
+            };
+            PreviewKeyUp += (s, e) =>
+            {
+                if (e.Key == Key.Space && _spaceHeld)
+                {
+                    _spaceHeld = false; _flowTimer.Stop();
+                    if (_spaceIters > 0) { var c = StudioCommand.Run((int)_spaceIters, _sim.ToFlowParams()); _journal.Add(c); Log(c.Serialize() + "   (held space)"); }
+                    e.Handled = true;
+                }
+            };
+            Deactivated += (s, e) => { if (_spaceHeld) { _spaceHeld = false; _flowTimer.Stop(); } };   // safety if focus is lost mid-hold
 
             // Brush tiles (bottom bar): mutually exclusive; selecting one paints on left-drag.
             NoiseBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Noise); };

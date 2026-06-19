@@ -12,7 +12,7 @@ namespace CreaseStudio
         int _iterPerRun = 10, _momFix = 4;
         // CrazeBand is shown to the user in DEGREES (more intuitive than radians); the engine wants
         // radians, so ToFlowParams() converts. 5.7 deg == the engine's documented 0.1 rad default.
-        double _step = 0.01, _momentum = 0.9, _deCraze = 0.0, _crazeBandDeg = 5.7, _sharpness = 4.0, _detMix = 0.0;
+        double _step = 0.01, _momentum = 0.9, _deCraze = 0.0, _crazeBandDeg = 5.7, _sharpness = 4.0, _detMix = 0.05;
 
         public int IterPerRun { get => _iterPerRun; set { if (Set(ref _iterPerRun, value)) OnChanged(nameof(IterLabel)); } }
         public double Step { get => _step; set => Set(ref _step, value); }
