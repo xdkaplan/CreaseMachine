@@ -52,11 +52,13 @@ namespace CreaseStudio
         // Polish = deCraze w/ Huber band (clean creases); Buff = no band (rounds them); Sharpen = burst
         // w/ max-covariance (straight rulings). Crease/Flatten/Smooth are direct geometric offsets.
         enum BrushKind { None, Noise, Polish, Buff, Sharpen, Crease, Flatten, Smooth,
-                         Inflate, Scrape, Fill, Relax, Panel, Unfork }
+                         Inflate, Scrape, Fill, Relax, Panel, Unfork, Fold }
         BrushKind _brush = BrushKind.None;
         bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
         Vector3[] _strokeOffset;          // per-vertex target offset frozen at stroke start (NOISE noise / BUFF burst)
+        Vector3[] _strokeNormals;         // frozen vertex normals (directional brushes, e.g. FOLD)
+        Vector3 _lastDabHit;              // previous dab's surface point, for the FOLD line direction
         double[] _strokeCov;              // per-vertex coverage this stroke (Flow builds it toward Strength)
         double _dabAccum;                 // screen-px traveled since the last dab (path-spacing accumulator)
         const double BuffDeCraze = 0.05;  // fixed deCraze weight used by the BUFF burst (the "how much craze")
@@ -230,6 +232,7 @@ namespace CreaseStudio
             WireBrushTile(RelaxBrushButton, BrushKind.Relax);
             WireBrushTile(PanelBrushButton, BrushKind.Panel);
             WireBrushTile(UnforkBrushButton, BrushKind.Unfork);
+            WireBrushTile(FoldBrushButton, BrushKind.Fold);
         }
 
         // A tile selects its brush on check, and clears to None when toggled off.
@@ -258,6 +261,7 @@ namespace CreaseStudio
             RelaxBrushButton.IsChecked = k == BrushKind.Relax;
             PanelBrushButton.IsChecked = k == BrushKind.Panel;
             UnforkBrushButton.IsChecked = k == BrushKind.Unfork;
+            FoldBrushButton.IsChecked = k == BrushKind.Fold;
             _suppressBrushUi = false;
             if (k == BrushKind.None) _previewDot.Visibility = Visibility.Collapsed;
         }
@@ -531,7 +535,7 @@ namespace CreaseStudio
                     _dabAccum = 0;                                            // reset path-spacing accumulator
                     bool hasHit = PickSurface(_lastMouse, out var hit);
                     _strokeOffset = ComputeBrushOffset(hasHit, hit);          // freeze the target (burst brushes compute here)
-                    if (hasHit) ApplyDab(hit);                                // initial dab at the down point
+                    if (hasHit) { _lastDabHit = hit; ApplyDab(hit, Vector3.Zero); }   // initial dab at the down point
                 }
             }
             else return;
@@ -590,7 +594,12 @@ namespace CreaseStudio
             {
                 double t = pos / seg;
                 if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit))
-                    ApplyDab(hit);
+                {
+                    Vector3 sd = hit - _lastDabHit;                       // world-space stroke direction for FOLD
+                    Vector3 sdir = sd.LengthSquared > 1e-12f ? Vector3.Normalize(sd) : Vector3.Zero;
+                    ApplyDab(hit, sdir);
+                    _lastDabHit = hit;
+                }
                 pos += spacing;
             }
             _dabAccum = seg - (pos - spacing);       // leftover since the last dab placed
@@ -691,15 +700,19 @@ namespace CreaseStudio
         // (_strokeOffset), using the shared coverage model — Flow builds coverage toward the Strength
         // ceiling (gaussian-shaped per dab), the move is offset × coverage-increment. Both brushes share
         // this; they differ only in how _strokeOffset is computed at stroke start. Cheap (no CHA here).
-        void ApplyDab(Vector3 hit)
+        void ApplyDab(Vector3 hit, Vector3 dir)
         {
             var P = _session.Mesh;
             int nv = P.Vertices.Count;
-            if (_strokeOffset == null || _strokeOffset.Length != nv || _strokeCov == null || _strokeCov.Length != nv) return;
+            if (_strokeCov == null || _strokeCov.Length != nv) return;
+            bool fold = _brush == BrushKind.Fold;   // per-dab offset: a valley across the stroke line
+            if (!fold && (_strokeOffset == null || _strokeOffset.Length != nv)) return;
+            if (fold && (_strokeNormals == null || _strokeNormals.Length != nv)) return;
             double R = _sim.BrushSize, R2 = R * R;
             double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
             double twoSig2 = 2.0 * sigma * sigma;
             double flow = _sim.BrushFlow;   // build rate; coverage ceiling is 100% (full target)
+            double foldAmp = fold ? 1.5 * RepEdge(P) * (_sim.BrushStrength / 30.0) : 0.0;
             for (int i = 0; i < nv; i++)
             {
                 var pv = P.Vertices[i];
@@ -711,7 +724,17 @@ namespace CreaseStudio
                 double dcov = Math.Min(1.0 - _strokeCov[i], flow * gw);
                 if (dcov <= 1e-9) continue;
                 _strokeCov[i] += dcov;
-                Vector3 o = _strokeOffset[i];
+                Vector3 o;
+                if (fold)
+                {
+                    // tent profile across the line through `hit` along `dir` (a straight valley);
+                    // dir falls back to radial on the first dab, where it reads as a round dimple.
+                    Vector3 rel = new Vector3((float)dx, (float)dy, (float)dz);
+                    Vector3 perp = dir.LengthSquared > 1e-9f ? rel - dir * Vector3.Dot(rel, dir) : rel;
+                    double w = Math.Max(0.0, 1.0 - perp.Length / R);
+                    o = _strokeNormals[i] * (float)(-foldAmp * w);
+                }
+                else o = _strokeOffset[i];
                 P.Vertices.SetVertex(i, pv.X + o.X * dcov, pv.Y + o.Y * dcov, pv.Z + o.Z * dcov);
             }
             _meshDirty = true;
@@ -756,6 +779,12 @@ namespace CreaseStudio
                     if (P.Vertices[i].IsUnused) continue;
                     D[i] = nrm[i] * (float)(-amp);
                 }
+            }
+            else if (_brush == BrushKind.Fold)
+            {
+                // FOLD's offset is computed PER-DAB (it depends on the stroke direction), so here we
+                // just freeze the vertex normals the dab uses for its inward (-normal) valley.
+                _strokeNormals = VertexNormals(P);
             }
             else if (_brush == BrushKind.Inflate)
             {
