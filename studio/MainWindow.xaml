@@ -180,9 +180,50 @@
                         </TabItem>
 
                         <TabItem Header="DISPLAY">
-                            <StackPanel Margin="12,14,12,0">
-                                <TextBlock Text="MatCap, background, wireframe and energy-colour controls will live here."
-                                           Foreground="#8A8A98" FontSize="11" TextWrapping="Wrap" />
+                            <StackPanel Margin="10,12,10,0">
+                                <TextBlock Text="SHADING" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
+                                <StackPanel Orientation="Horizontal" Margin="2,0,0,2">
+                                    <RadioButton x:Name="WeldedRadio" Content="Welded" GroupName="shading" IsChecked="True"
+                                                 Foreground="#C8C8C8" FontSize="11" VerticalContentAlignment="Center" Margin="0,0,16,0"
+                                                 ToolTip="Smooth: shared vertices, averaged normals" />
+                                    <RadioButton x:Name="UnweldedRadio" Content="Unwelded" GroupName="shading"
+                                                 Foreground="#C8C8C8" FontSize="11" VerticalContentAlignment="Center"
+                                                 ToolTip="Faceted: per-face normals - reveals the planar panels" />
+                                </StackPanel>
+
+                                <TextBlock Text="MATCAP" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
+                                <ListBox x:Name="MatcapList" Background="Transparent" BorderThickness="0" Padding="0"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <Border x:Name="bd" BorderThickness="2" BorderBrush="Transparent" CornerRadius="3" Margin="3">
+                                                            <ContentPresenter />
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="bd" Property="BorderBrush" Value="#4A5A70" />
+                                                            </Trigger>
+                                                            <Trigger Property="IsSelected" Value="True">
+                                                                <Setter TargetName="bd" Property="BorderBrush" Value="#6A9FE0" />
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Image Source="{Binding}" Width="46" Height="46" Stretch="UniformToFill" />
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
                             </StackPanel>
                         </TabItem>
                     </TabControl>

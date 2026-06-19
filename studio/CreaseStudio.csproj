@@ -25,4 +25,10 @@
     <Compile Include="..\src\Session.cs" />
     <Compile Include="..\src\MeshIO.cs" />
   </ItemGroup>
+  <!-- bundled MatCap textures (nidorx-style lit spheres); copied next to the exe and loaded at runtime -->
+  <ItemGroup>
+    <Content Include="assets\matcaps\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

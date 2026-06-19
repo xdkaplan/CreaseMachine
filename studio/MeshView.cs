@@ -6,14 +6,11 @@ using Plankton;
 
 namespace CreaseStudio
 {
-    // Uploads a PlanktonMesh to the GPU and draws it with a procedural MatCap / lit-sphere shader.
-    //
-    // SMOOTH shading needs per-vertex normals, which need CONSISTENT face winding - but a welded
-    // STL has mixed winding (the source of earlier "reversed normal" corruption). So we re-orient
-    // the faces ourselves with a topological flood-fill (adjacent triangles must traverse their
-    // shared edge in opposite directions) before averaging area-weighted normals. The fragment
-    // then orients the interpolated normal toward the camera (n.z >= 0), which also absorbs a
-    // globally-inward mesh - so the result can't be "reversed" regardless of the mesh's winding.
+    // Uploads a PlanktonMesh to the GPU and draws it with a MatCap / lit-sphere shader (a texture
+    // sampled by the view-space surface normal). Two upload modes: WELDED/smooth (shared vertices
+    // with area-weighted averaged normals) and UNWELDED/flat (each triangle its own 3 vertices +
+    // face normal, which exposes the planar panels). The fragment shader orients each normal toward
+    // the camera (n.z >= 0), so a globally-inward mesh or mixed winding can't read as "reversed".
     sealed class MeshView : IDisposable
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
@@ -81,7 +78,9 @@ void main() {
             _hasMatcap = true;
         }
 
-        public void Upload(PlanktonMesh P)
+        // flat = false -> welded/smooth (shared verts, averaged normals); true -> unwelded/faceted
+        // (each triangle its own 3 verts + face normal), which reveals the planar panels.
+        public void Upload(PlanktonMesh P, bool flat = false)
         {
             EnsureProgram();
             int nV = P.Vertices.Count;
@@ -115,32 +114,55 @@ void main() {
                 tris.Add((a, b, c));
             }
 
-            // area-weighted smooth vertex normals, faces as-is. No winding re-orientation: there's
-            // no evidence the welded mesh has inconsistent winding (the earlier "reversed" look was
-            // the missing depth buffer, now fixed). The shader's camera-orient handles a globally-
-            // inward mesh, and matcap shading is symmetric anyway.
-            var nrm = new Vector3[used];
-            foreach (var (a0, b0, c0) in tris)
+            // Build vertex/normal/index buffers. No winding re-orientation: there's no evidence the
+            // welded mesh has inconsistent winding (the earlier "reversed" look was the missing depth
+            // buffer, now fixed), and the fragment shader orients each normal toward the camera anyway.
+            float[] posF, nrmF;
+            uint[] indices;
+            if (!flat)
             {
-                Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); // 2*area * unit normal
-                nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn;
+                // WELDED / smooth: area-weighted averaged vertex normals -> soft shading across edges.
+                var nrm = new Vector3[used];
+                foreach (var (a0, b0, c0) in tris)
+                {
+                    Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); // 2*area * unit normal
+                    nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn;
+                }
+                posF = new float[used * 3];
+                nrmF = new float[used * 3];
+                for (int i = 0; i < used; i++)
+                {
+                    posF[i * 3] = pos[i].X; posF[i * 3 + 1] = pos[i].Y; posF[i * 3 + 2] = pos[i].Z;
+                    Vector3 n = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.UnitZ;
+                    nrmF[i * 3] = n.X; nrmF[i * 3 + 1] = n.Y; nrmF[i * 3 + 2] = n.Z;
+                }
+                indices = new uint[tris.Count * 3];
+                for (int t = 0; t < tris.Count; t++)
+                {
+                    indices[t * 3] = (uint)tris[t].a;
+                    indices[t * 3 + 1] = (uint)tris[t].b;
+                    indices[t * 3 + 2] = (uint)tris[t].c;
+                }
             }
-
-            var posF = new float[used * 3];
-            var nrmF = new float[used * 3];
-            for (int i = 0; i < used; i++)
+            else
             {
-                posF[i * 3] = pos[i].X; posF[i * 3 + 1] = pos[i].Y; posF[i * 3 + 2] = pos[i].Z;
-                Vector3 n = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.UnitZ;
-                nrmF[i * 3] = n.X; nrmF[i * 3 + 1] = n.Y; nrmF[i * 3 + 2] = n.Z;
-            }
-
-            var indices = new uint[tris.Count * 3];
-            for (int t = 0; t < tris.Count; t++)
-            {
-                indices[t * 3] = (uint)tris[t].a;
-                indices[t * 3 + 1] = (uint)tris[t].b;
-                indices[t * 3 + 2] = (uint)tris[t].c;
+                // UNWELDED / flat: expand each triangle to its own 3 verts sharing the face normal
+                // -> hard facets that expose the planar panels the developability flow is forming.
+                int n3 = tris.Count * 3;
+                posF = new float[n3 * 3];
+                nrmF = new float[n3 * 3];
+                indices = new uint[n3];
+                int k = 0;
+                foreach (var (a0, b0, c0) in tris)
+                {
+                    Vector3 pa = pos[a0], pb = pos[b0], pc = pos[c0];
+                    Vector3 fn = Vector3.Cross(pb - pa, pc - pa);
+                    fn = fn.LengthSquared > 1e-20f ? Vector3.Normalize(fn) : Vector3.UnitZ;
+                    posF[k] = pa.X; posF[k + 1] = pa.Y; posF[k + 2] = pa.Z; nrmF[k] = fn.X; nrmF[k + 1] = fn.Y; nrmF[k + 2] = fn.Z; k += 3;
+                    posF[k] = pb.X; posF[k + 1] = pb.Y; posF[k + 2] = pb.Z; nrmF[k] = fn.X; nrmF[k + 1] = fn.Y; nrmF[k + 2] = fn.Z; k += 3;
+                    posF[k] = pc.X; posF[k + 1] = pc.Y; posF[k + 2] = pc.Z; nrmF[k] = fn.X; nrmF[k + 1] = fn.Y; nrmF[k + 2] = fn.Z; k += 3;
+                }
+                for (int i = 0; i < n3; i++) indices[i] = (uint)i;
             }
             _indexCount = indices.Length;
 
@@ -178,78 +200,6 @@ void main() {
             GL.BindVertexArray(_vao);
             GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
             GL.BindVertexArray(0);
-        }
-
-        // Topological orientation: flood-fill over edge-adjacency, flipping triangles so every pair
-        // of adjacent triangles traverses their shared edge in OPPOSITE directions (the manifold
-        // consistency condition). Independent components each seed independently. Returns per-tri
-        // flip flags. Non-manifold edges (>2 incident tris) are simply not used for propagation.
-        static bool[] OrientConsistently(List<(int a, int b, int c)> tris, int nV)
-        {
-            int nT = tris.Count;
-            var flip = new bool[nT];
-            if (nT == 0) return flip;
-
-            // undirected edge -> incident triangles
-            var edgeTris = new Dictionary<long, List<int>>(nT * 2);
-            void AddEdge(int u, int v, int t)
-            {
-                long key = u < v ? ((long)u << 32) | (uint)v : ((long)v << 32) | (uint)u;
-                if (!edgeTris.TryGetValue(key, out var l)) { l = new List<int>(2); edgeTris[key] = l; }
-                l.Add(t);
-            }
-            for (int t = 0; t < nT; t++)
-            {
-                var (a, b, c) = tris[t];
-                AddEdge(a, b, t); AddEdge(b, c, t); AddEdge(c, a, t);
-            }
-
-            var visited = new bool[nT];
-            var stack = new Stack<int>();
-            for (int seed = 0; seed < nT; seed++)
-            {
-                if (visited[seed]) continue;
-                visited[seed] = true;
-                stack.Push(seed);
-                while (stack.Count > 0)
-                {
-                    int t = stack.Pop();
-                    var tw = Winding(tris[t], flip[t]);
-                    // each edge of t in its current winding
-                    Span<(int u, int v)> edges = stackalloc (int, int)[3]
-                        { (tw.a, tw.b), (tw.b, tw.c), (tw.c, tw.a) };
-                    foreach (var (u, v) in edges)
-                    {
-                        long key = u < v ? ((long)u << 32) | (uint)v : ((long)v << 32) | (uint)u;
-                        var inc = edgeTris[key];
-                        if (inc.Count != 2) continue;          // boundary or non-manifold: skip
-                        int nb = inc[0] == t ? inc[1] : inc[0];
-                        if (visited[nb]) continue;
-                        // nb must traverse this edge as v->u to be consistent with t's u->v.
-                        bool nbHasUV = TraversesUV(tris[nb], false, u, v);   // original winding dir
-                        // if nb (original) traverses u->v, it's same-direction as t -> needs flip.
-                        flip[nb] = nbHasUV;
-                        visited[nb] = true;
-                        stack.Push(nb);
-                    }
-                }
-            }
-            return flip;
-        }
-
-        static (int a, int b, int c) Winding((int a, int b, int c) t, bool flip)
-            => flip ? (t.a, t.c, t.b) : (t.a, t.b, t.c);
-
-        // does triangle (with given flip) contain the directed edge u->v ?
-        static bool TraversesUV((int a, int b, int c) t, bool flip, int u, int v)
-        {
-            var w = Winding(t, flip);
-            return (w.a == u && w.b == v) || (w.b == u && w.c == v) || (w.c == u && w.a == v);
-        }
-
-        static IEnumerable<(int a, int b, int c)> WithFlip(List<(int a, int b, int c)> tris, bool[] flip)
-        {
-            for (int t = 0; t < tris.Count; t++) yield return Winding(tris[t], flip[t]);
         }
 
         static int Link(string vs, string fs)

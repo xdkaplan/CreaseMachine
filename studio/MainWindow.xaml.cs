@@ -18,8 +18,13 @@ namespace CreaseStudio
         string _meshPath;            // source mesh path, so Reset can reload the input from disk
         bool _glInit, _meshDirty;
         long _totalIters;
-        byte[] _matcapPx; int _matcapW, _matcapH;   // matcap texture pixels (BGRA, GL row order)
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
+
+        // Display state (render-only, owned here rather than in SimSettings, which stays flow-only):
+        bool _flatShading;                          // false = welded/smooth, true = unwelded/faceted
+        string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
+        byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
+        bool _matcapDirty;                          // re-upload the matcap texture on the next render
 
         // orbit camera
         float _azimuth = 0.6f, _elevation = 0.4f, _distance = 3f;
@@ -55,27 +60,29 @@ namespace CreaseStudio
             }
             else Title = "CreaseStudio — (no mesh at " + def + ")";
 
-            // Optional matcap texture (decoded on CPU now; GL upload at first render). Sampled by
-            // the view-space normal - colours the surface by orientation (good for debugging normals).
-            string mc = @"C:\Temp\matcap.png";
-            if (System.IO.File.Exists(mc))
+            // DISPLAY tab: bundled matcaps (assets/matcaps, copied next to the exe). Thumbnails feed
+            // the switcher ListBox; the selected one is decoded to a GL texture by SelectMatcap. The
+            // initial decode is done explicitly here (the SelectionChanged handler is wired below, so
+            // setting SelectedIndex now doesn't double-fire). Matcaps are sampled by the view-space
+            // normal -> a lit-sphere look that reads orientation.
+            string mcDir = System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "matcaps");
+            _matcapPaths = System.IO.Directory.Exists(mcDir)
+                ? System.IO.Directory.GetFiles(mcDir, "*.png") : Array.Empty<string>();
+            Array.Sort(_matcapPaths, StringComparer.OrdinalIgnoreCase);
+            var thumbs = new System.Collections.Generic.List<System.Windows.Media.ImageSource>();
+            foreach (var p in _matcapPaths)
             {
                 try
                 {
                     var bi = new System.Windows.Media.Imaging.BitmapImage();
-                    bi.BeginInit(); bi.UriSource = new Uri(mc);
+                    bi.BeginInit(); bi.UriSource = new Uri(p); bi.DecodePixelWidth = 64;
                     bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad; bi.EndInit();
-                    var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(
-                        bi, System.Windows.Media.PixelFormats.Bgra32, null, 0);
-                    int w = conv.PixelWidth, h = conv.PixelHeight;
-                    var px = new byte[w * h * 4];
-                    conv.CopyPixels(px, w * 4, 0);
-                    var flip = new byte[px.Length];                 // top-down rows -> bottom-up for GL
-                    for (int y = 0; y < h; y++) Array.Copy(px, y * w * 4, flip, (h - 1 - y) * w * 4, w * 4);
-                    _matcapPx = flip; _matcapW = w; _matcapH = h;
+                    thumbs.Add(bi);
                 }
                 catch { }
             }
+            MatcapList.ItemsSource = thumbs;
+            if (_matcapPaths.Length > 0) { MatcapList.SelectedIndex = 0; SelectMatcap(0); }
 
             // Top-bar actions (declared in XAML): run N flow steps, one subdivision, reset.
             IterButton.Click += (s, e) => RunIters(_sim.IterPerRun);
@@ -91,6 +98,11 @@ namespace CreaseStudio
             LeftSplitter.PreviewMouseLeftButtonUp += (s, e) => AfterSplitterDrag(LeftCol, ref _leftRestore);
             RightSplitter.PreviewMouseLeftButtonDown += (s, e) => _preDragWidth = RightCol.ActualWidth;
             RightSplitter.PreviewMouseLeftButtonUp += (s, e) => AfterSplitterDrag(RightCol, ref _rightRestore);
+
+            // DISPLAY tab: welded/unwelded shading toggle + matcap switcher.
+            WeldedRadio.Checked += (s, e) => SetShading(false);
+            UnweldedRadio.Checked += (s, e) => SetShading(true);
+            MatcapList.SelectionChanged += (s, e) => { if (MatcapList.SelectedIndex >= 0) SelectMatcap(MatcapList.SelectedIndex); };
         }
 
         // A panel is "collapsed" when its column is narrower than CollapseThreshold (32px). The
@@ -161,6 +173,45 @@ namespace CreaseStudio
             _gl?.InvalidateVisual();
         }
 
+        // Welded (smooth) <-> unwelded (faceted) shading. Render-only: re-uploads the same mesh in
+        // the new form, doesn't touch the flow.
+        void SetShading(bool flat)
+        {
+            if (_flatShading == flat) return;
+            _flatShading = flat;
+            _meshDirty = true;
+            _gl?.InvalidateVisual();
+        }
+
+        // Decode matcap[i] to BGRA (GL row order) and queue it for upload next render. GL texture
+        // calls must run with the context current (inside OnRender), so we only stage the pixels here.
+        void SelectMatcap(int i)
+        {
+            if (_matcapPaths == null || i < 0 || i >= _matcapPaths.Length) return;
+            try
+            {
+                _matcapPx = DecodeMatcapBgra(_matcapPaths[i], out _matcapW, out _matcapH);
+                _matcapDirty = true;
+                _gl?.InvalidateVisual();
+            }
+            catch { }
+        }
+
+        static byte[] DecodeMatcapBgra(string path, out int w, out int h)
+        {
+            var bi = new System.Windows.Media.Imaging.BitmapImage();
+            bi.BeginInit(); bi.UriSource = new Uri(path);
+            bi.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad; bi.EndInit();
+            var conv = new System.Windows.Media.Imaging.FormatConvertedBitmap(
+                bi, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            w = conv.PixelWidth; h = conv.PixelHeight;
+            var px = new byte[w * h * 4];
+            conv.CopyPixels(px, w * 4, 0);
+            var flip = new byte[px.Length];                 // top-down rows -> bottom-up for GL
+            for (int y = 0; y < h; y++) Array.Copy(px, y * w * 4, flip, (h - 1 - y) * w * 4, w * 4);
+            return flip;
+        }
+
         void OnMouseMove(object sender, MouseEventArgs e)
         {
             if (!_dragging) return;
@@ -179,18 +230,20 @@ namespace CreaseStudio
             if (!_glInit)
             {
                 _view = new MeshView();
-                if (_matcapPx != null) _view.SetMatcap(_matcapPx, _matcapW, _matcapH);
                 if (_session != null)
                 {
-                    _view.Upload(_session.Mesh);
+                    _view.Upload(_session.Mesh, _flatShading);
                     _target = _view.Center;
                     _distance = _view.Radius * 3f;
                 }
                 _glInit = true;
             }
 
-            // re-upload the (flow-mutated) mesh when a run has happened (GL thread = here)
-            if (_meshDirty && _session != null) { _view.Upload(_session.Mesh); _meshDirty = false; }
+            // apply a queued matcap texture (GL thread = here)
+            if (_matcapDirty && _view != null && _matcapPx != null) { _view.SetMatcap(_matcapPx, _matcapW, _matcapH); _matcapDirty = false; }
+
+            // re-upload when the mesh changed (a run / subdivide / reset) or the shading mode toggled
+            if (_meshDirty && _session != null) { _view.Upload(_session.Mesh, _flatShading); _meshDirty = false; }
 
             // Depth state EVERY frame: GLWpfControl rebinds its own framebuffer / resets GL state
             // each render, so a one-time enable doesn't stick. Without this there's no depth test and
