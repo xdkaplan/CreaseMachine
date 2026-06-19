@@ -23,7 +23,7 @@ namespace CreaseStudio
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
         // Display state (render-only, owned here rather than in SimSettings, which stays flow-only):
-        bool _flatShading;                          // false = welded/smooth, true = unwelded/faceted
+        bool _flatShading = true;                   // false = welded/smooth, true = unwelded/faceted (default)
         string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
         byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
         bool _matcapDirty;                          // re-upload the matcap texture on the next render
@@ -54,9 +54,8 @@ namespace CreaseStudio
         BrushKind _brush = BrushKind.None;
         bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
-        double _brushSize = 10.0;         // influence radius, world units; [ / ] shrink / grow
-        double _brushSigmaFrac = 0.25;    // Gaussian sigma as a fraction of size; Ctrl+Shift+[ / ] soften / harden
-        double _strokeAmp;                // bump height for the current stroke (~edge length)
+        double _strokeAmp;                // noise bump height for the current stroke (~edge length)
+        double[] _strokeCov;              // per-vertex coverage this stroke (NOISE opacity/flow accumulation)
         System.Windows.Point _lastHover;  // last hover position, to refresh the preview after a size change
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -476,6 +475,7 @@ namespace CreaseStudio
                 _drag = DragMode.Edit;
                 if (_brush != BrushKind.None && _session != null)
                 {
+                    _strokeCov = new double[_session.Mesh.Vertices.Count];   // fresh coverage for this stroke
                     if (_brush == BrushKind.Noise) _strokeAmp = 2.0 * RepEdge(_session.Mesh);   // noise bump height
                     if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);
                 }
@@ -539,9 +539,11 @@ namespace CreaseStudio
 
         // ===================== NOISE brush =====================
 
-        void ResizeBrush(double factor) => _brushSize = Math.Clamp(_brushSize * factor, 0.1, 100000.0);
-        void HardenBrush() => _brushSigmaFrac = Math.Clamp(_brushSigmaFrac * 0.85, 0.05, 1.0);   // sharper falloff
-        void SoftenBrush() => _brushSigmaFrac = Math.Clamp(_brushSigmaFrac / 0.85, 0.05, 1.0);   // softer falloff
+        // [ / ] and Ctrl+Shift+[ / ] drive the same VM params the BRUSH-tab sliders bind to (so they stay
+        // in sync). Size is clamped to the Size slider's range; Softness to [0, 1].
+        void ResizeBrush(double factor) => _sim.BrushSize = Math.Clamp(_sim.BrushSize * factor, 1.0, 100.0);
+        void HardenBrush() => _sim.BrushSoftness = Math.Clamp(_sim.BrushSoftness - 0.05, 0.0, 1.0);   // less soft
+        void SoftenBrush() => _sim.BrushSoftness = Math.Clamp(_sim.BrushSoftness + 0.05, 0.0, 1.0);   // more soft
 
         // Build a pick ray from the camera params (convention-independent) and intersect the mesh.
         bool PickSurface(System.Windows.Point screen, out Vector3 hit)
@@ -615,13 +617,14 @@ namespace CreaseStudio
         void ApplyBuffDab(Vector3 hit)
         {
             var P = _session.Mesh;
-            double R = _brushSize, R2 = R * R;
-            double sigma = Math.Max(1e-6, _brushSigmaFrac * R);
+            double R = _sim.BrushSize, R2 = R * R;
+            double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
             double twoSig2 = 2.0 * sigma * sigma;
             double L = RepEdge(P);
-            double t = Math.Max(1e-9, _sim.Step) * L * L;   // step like the flow (Step·L²)
+            double t = Math.Max(1e-9, _sim.Step) * L * L;       // step like the flow (Step·L²)
             double capLen = L;
-
+            double intensity = _sim.BrushStrength * _sim.BrushFlow;   // per-dab step scale (buff self-damps,
+                                                                      // so no coverage ceiling is needed)
             DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
             DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
                 0.0, 0.0, false, _sim.Sharpness, 0.04, true, null, _sim.DetMix);   // deCraze = 0.04 (the "secret")
@@ -636,8 +639,8 @@ namespace CreaseStudio
                 if (d2 > R2) continue;
                 Vec3 g = grad[i];
                 if (!g.IsValid) continue;
-                double wgt = Math.Exp(-d2 / twoSig2);
-                double sx = -t * wgt * g.X, sy = -t * wgt * g.Y, sz = -t * wgt * g.Z;
+                double sc = t * Math.Exp(-d2 / twoSig2) * intensity;
+                double sx = -sc * g.X, sy = -sc * g.Y, sz = -sc * g.Z;
                 double sl = Math.Sqrt(sx * sx + sy * sy + sz * sz);
                 if (sl > capLen && sl > 1e-20) { double s = capLen / sl; sx *= s; sy *= s; sz *= s; }
                 P.Vertices.SetVertex(i, pv.X + sx, pv.Y + sy, pv.Z + sz);
@@ -651,13 +654,15 @@ namespace CreaseStudio
         void ApplyNoiseDab(Vector3 hit)
         {
             var P = _session.Mesh;
-            double R = _brushSize, R2 = R * R;
-            double sigma = Math.Max(1e-6, _brushSigmaFrac * R);
+            double R = _sim.BrushSize, R2 = R * R;
+            double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
             double twoSig2 = 2.0 * sigma * sigma;
             double freq = 2.0 / R;                                  // a few bumps across the footprint
             double amp = _strokeAmp > 0 ? _strokeAmp : 2.0 * RepEdge(P);
+            double strength = _sim.BrushStrength, flow = _sim.BrushFlow;   // opacity ceiling / build rate
             Vector3[] nrm = VertexNormals(P);
             int nv = P.Vertices.Count;
+            if (_strokeCov == null || _strokeCov.Length != nv) _strokeCov = new double[nv];
             for (int i = 0; i < nv; i++)
             {
                 var pv = P.Vertices[i];
@@ -665,9 +670,13 @@ namespace CreaseStudio
                 double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z;
                 double d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 > R2) continue;
-                double wgt = Math.Exp(-d2 / twoSig2);
+                double gw = Math.Exp(-d2 / twoSig2);
+                // flow builds coverage toward the strength ceiling; gaussian shapes each dab.
+                double dcov = Math.Min(strength - _strokeCov[i], flow * gw);
+                if (dcov <= 1e-9) continue;
+                _strokeCov[i] += dcov;
                 double n = _noise.Noise(pv.X * freq, pv.Y * freq, pv.Z * freq);
-                double disp = amp * wgt * n;
+                double disp = amp * n * dcov;       // total at full coverage = amp·noise·strength
                 Vector3 nn = nrm[i];
                 P.Vertices.SetVertex(i, pv.X + nn.X * disp, pv.Y + nn.Y * disp, pv.Z + nn.Z * disp);
             }
@@ -720,7 +729,7 @@ namespace CreaseStudio
             double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
             double h = Math.Max(1, _gl.ActualHeight);
             double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
-            double rpx = _brushSize * h / (2.0 * dist * tanH);
+            double rpx = _sim.BrushSize * h / (2.0 * dist * tanH);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;
             _previewDot.Margin = new Thickness(cursor.X - rpx, cursor.Y - rpx, 0, 0);
             _previewDot.Visibility = Visibility.Visible;

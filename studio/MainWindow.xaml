@@ -214,10 +214,10 @@
                             <StackPanel Margin="10,12,10,0">
                                 <TextBlock Text="SHADING" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
                                 <StackPanel Orientation="Horizontal" Margin="2,0,0,2">
-                                    <RadioButton x:Name="WeldedRadio" Content="Welded" GroupName="shading" IsChecked="True"
+                                    <RadioButton x:Name="WeldedRadio" Content="Welded" GroupName="shading"
                                                  Foreground="#C8C8C8" FontSize="11" VerticalContentAlignment="Center" Margin="0,0,16,0"
                                                  ToolTip="Smooth: shared vertices, averaged normals" />
-                                    <RadioButton x:Name="UnweldedRadio" Content="Unwelded" GroupName="shading"
+                                    <RadioButton x:Name="UnweldedRadio" Content="Unwelded" GroupName="shading" IsChecked="True"
                                                  Foreground="#C8C8C8" FontSize="11" VerticalContentAlignment="Center"
                                                  ToolTip="Faceted: per-face normals - reveals the planar panels" />
                                 </StackPanel>
@@ -256,6 +256,60 @@
                                     </ListBox.ItemTemplate>
                                 </ListBox>
                             </StackPanel>
+                        </TabItem>
+
+                        <TabItem Header="BRUSH">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,8">
+                                <StackPanel Margin="10,0,10,0">
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Strength" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock.Text>
+                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
+                                                    <Binding Path="Value" ElementName="StrengthSlider" />
+                                                    <Binding Path="Minimum" ElementName="StrengthSlider" />
+                                                    <Binding Path="Maximum" ElementName="StrengthSlider" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                        <Slider x:Name="StrengthSlider" Minimum="0" Maximum="1" Value="{Binding BrushStrength}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Speed" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Flow — passes over a spot to reach full strength" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock.Text>
+                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
+                                                    <Binding Path="Value" ElementName="FlowSlider" />
+                                                    <Binding Path="Minimum" ElementName="FlowSlider" />
+                                                    <Binding Path="Maximum" ElementName="FlowSlider" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                        <Slider x:Name="FlowSlider" Minimum="0" Maximum="1" Value="{Binding BrushFlow}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Size" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Footprint radius (world units) — also [ / ]" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider x:Name="BrushSizeSlider" Minimum="1" Maximum="100" Value="{Binding BrushSize}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Softness" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Gaussian falloff — also Ctrl+Shift+[ / ]" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
+                                            <TextBlock.Text>
+                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
+                                                    <Binding Path="Value" ElementName="SoftnessSlider" />
+                                                    <Binding Path="Minimum" ElementName="SoftnessSlider" />
+                                                    <Binding Path="Maximum" ElementName="SoftnessSlider" />
+                                                </MultiBinding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                        <Slider x:Name="SoftnessSlider" Minimum="0" Maximum="1" Value="{Binding BrushSoftness}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                </StackPanel>
+                            </ScrollViewer>
                         </TabItem>
                     </TabControl>
                 </Grid>

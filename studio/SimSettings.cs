@@ -23,6 +23,15 @@ namespace CreaseStudio
         public double DetMix { get => _detMix; set => Set(ref _detMix, value); }
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
 
+        // Brush params (shared by all brushes; the BRUSH tab + the [ ] / Ctrl+Shift+[ ] hotkeys drive
+        // these). Strength = per-stroke opacity ceiling (0..1), Flow = build rate per dab (0..1),
+        // Size = footprint radius in world units, Softness = Gaussian falloff (0 sharp .. 1 soft).
+        double _brushStrength = 1.0, _brushFlow = 1.0, _brushSize = 10.0, _brushSoftness = 0.25;
+        public double BrushStrength { get => _brushStrength; set => Set(ref _brushStrength, value); }
+        public double BrushFlow { get => _brushFlow; set => Set(ref _brushFlow, value); }
+        public double BrushSize { get => _brushSize; set => Set(ref _brushSize, value); }
+        public double BrushSoftness { get => _brushSoftness; set => Set(ref _brushSoftness, value); }
+
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";
 
