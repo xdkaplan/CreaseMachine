@@ -56,6 +56,7 @@ namespace CreaseStudio
         readonly Perlin _noise = new Perlin();
         double _strokeAmp;                // noise bump height for the current stroke (~edge length)
         double[] _strokeCov;              // per-vertex coverage this stroke (NOISE opacity/flow accumulation)
+        System.Windows.Threading.DispatcherTimer _brushTimer;   // applies dabs while held (flow over time)
         System.Windows.Point _lastHover;  // last hover position, to refresh the preview after a size change
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -99,6 +100,17 @@ namespace CreaseStudio
             };
             CenterHost.Children.Add(_previewDot);
             _gl.MouseLeave += (s, e) => _previewDot.Visibility = Visibility.Collapsed;
+
+            // While an Edit (brush) drag is held, keep dabbing at the cursor on a timer so scrubbing —
+            // or just holding still — accumulates effect over time (flow). Self-throttles (a tick won't
+            // re-enter while the previous dab is still running). BUFF self-damps, so it settles where
+            // already developable; NOISE fills to its coverage ceiling and stops.
+            _brushTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
+            _brushTimer.Tick += (s, e) =>
+            {
+                if (_drag == DragMode.Edit && _brush != BrushKind.None && _session != null
+                    && PickSurface(_lastMouse, out var hit)) ApplyDab(hit);
+            };
 
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
@@ -482,6 +494,7 @@ namespace CreaseStudio
                     _strokeCov = new double[_session.Mesh.Vertices.Count];   // fresh coverage for this stroke
                     if (_brush == BrushKind.Noise) _strokeAmp = 2.0 * RepEdge(_session.Mesh);   // noise bump height
                     if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);
+                    _brushTimer.Start();   // keep accumulating while held (flow over time)
                 }
             }
             else return;
@@ -490,6 +503,7 @@ namespace CreaseStudio
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
+            _brushTimer?.Stop();
             if (_drag == DragMode.Edit && _brush != BrushKind.None && _session != null)
                 _session.ZeroMomentum();   // a manual edit invalidates the stale Nesterov velocity
             _drag = DragMode.None;
@@ -518,7 +532,7 @@ namespace CreaseStudio
                     PanCamera(dx, dy);
                     break;
                 case DragMode.Edit:
-                    if (_brush != BrushKind.None && PickSurface(p, out var hit)) ApplyDab(hit);
+                    // Position only — the brush timer applies dabs at _lastMouse (flow over time).
                     break;
             }
         }
