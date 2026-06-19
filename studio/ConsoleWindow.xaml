@@ -3,10 +3,25 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Console" Height="360" Width="480" Background="#1E1E20"
         ShowInTaskbar="False" WindowStartupLocation="CenterOwner">
-    <!-- The session log (recorded commands + replay timings). Non-modal tool window; the main
-         window writes here via AppendLine. Closing just hides it (the owner reuses the instance). -->
-    <TextBox x:Name="LogBox" Margin="6" IsReadOnly="True" IsReadOnlyCaretVisible="False"
-             Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
-             FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap"
-             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+    <!-- Session journal: transport toolbar (Save/Replay/Clear) over the log (recorded commands +
+         replay timings). Non-modal tool window; the main window wires the buttons and writes log
+         lines via AppendLine. Closing just hides it (the owner reuses the instance). -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="6,6,6,3" LastChildFill="False">
+            <Button x:Name="SaveButton" DockPanel.Dock="Left" Content="Save…" Padding="10,3" Margin="0,0,6,0"
+                    FontSize="11" ToolTip="Save the recorded session to a .journal file" />
+            <Button x:Name="ReplayButton" DockPanel.Dock="Left" Content="Replay…" Padding="10,3" Margin="0,0,6,0"
+                    FontSize="11" ToolTip="Load a .journal and replay it live, timing each command" />
+            <Button x:Name="ClearButton" DockPanel.Dock="Left" Content="Clear" Padding="10,3"
+                    FontSize="11" ToolTip="Clear the current recording and log" />
+        </DockPanel>
+        <TextBox x:Name="LogBox" Grid.Row="1" Margin="6,3,6,6" IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                 Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
+                 FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap"
+                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+    </Grid>
 </Window>

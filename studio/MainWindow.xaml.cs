@@ -126,10 +126,10 @@ namespace CreaseStudio
             UnweldedRadio.Checked += (s, e) => { if (!_suppressUi) Execute(StudioCommand.Shading(true), record: true); };
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
 
-            // Bottom-bar transport: save the recorded session, replay a journal file, clear recording.
-            SaveSessionButton.Click += (s, e) => SaveSession();
-            ReplayButton.Click += (s, e) => OpenAndReplay();
-            ClearJournalButton.Click += (s, e) => { _journal.Clear(); _console?.ClearLog(); Log("journal cleared"); };
+            // Console-window transport: save the recorded session, replay a journal file, clear recording.
+            _console.SaveButton.Click += (s, e) => SaveSession();
+            _console.ReplayButton.Click += (s, e) => OpenAndReplay();
+            _console.ClearButton.Click += (s, e) => { _journal.Clear(); _console.ClearLog(); Log("journal cleared"); };
 
             // Menu bar + keyboard shortcuts (Ctrl+S = Save As, Ctrl+Shift+J = toggle Console).
             MenuSaveAs.Click += (s, e) => SaveSession();
