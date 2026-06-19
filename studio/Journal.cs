@@ -34,9 +34,10 @@ namespace CreaseStudio
                 // Names match the CLI's run-param vocabulary (it lower-cases names and accepts all of
                 // these, incl. maxcov/momfix), so a studio .journal is runnable by the headless CLI.
                 case CmdKind.Run: return string.Format(CultureInfo.InvariantCulture,
-                    "run {0} step={1} mom={2} decraze={3} band={4} sharp={5} detmix={6} debranch={7} deconsolidate={8} maxcov={9} momfix={10}",
+                    "run {0} step={1} mom={2} decraze={3} band={4} sharp={5} detmix={6} debranch={7} deconsolidate={8} maxcov={9} momfix={10} adaptivedetmix={11} adetmixpow={12}",
                     N, F(P.Step), F(P.Momentum), F(P.deCraze), F(P.CrazeBand), F(P.Sharpness), F(P.DetMix),
-                    F(P.deBranch), F(P.deConsolidate), P.UseMaxCov ? 1 : 0, P.MomFix);
+                    F(P.deBranch), F(P.deConsolidate), P.UseMaxCov ? 1 : 0, P.MomFix,
+                    P.AdaptiveDetMix ? 1 : 0, F(P.AdaptiveDetMixPower));
                 case CmdKind.Subdivide: return "subdivide";
                 case CmdKind.Reset: return "reset";
                 case CmdKind.Matcap: return "matcap " + N;
@@ -79,6 +80,8 @@ namespace CreaseStudio
                             case "deconsolidate": case "deconsol": case "consolidate": p.deConsolidate = d; break;
                             case "maxcov": p.UseMaxCov = d != 0; break;
                             case "momfix": p.MomFix = (int)d; break;
+                            case "adaptivedetmix": case "adaptdetmix": case "adetmix": p.AdaptiveDetMix = d != 0; break;
+                            case "adaptivedetmixpow": case "adaptivedetmixpower": case "adetmixpow": p.AdaptiveDetMixPower = d; break;
                         }
                     }
                     return Run(n, p);

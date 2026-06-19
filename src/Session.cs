@@ -17,9 +17,11 @@ namespace CreaseMachine
         public double Sharpness;     // corner-preservation exponent
         public double deCraze;       // L1 dihedral sparsity weight
         public double CrazeBand;     // deCraze Huber flat-band, radians
-        public double DetMix;        // lambda_min <-> det energy blend
+        public double DetMix;        // lambda_min <-> det energy blend (constant floor)
         public bool   UseMaxCov;     // B.4 max-covariance toggle
         public int    MomFix;        // momentum-restart mode (1..4)
+        public bool   AdaptiveDetMix;     // raise the blend toward 1 at near-degenerate vertices
+        public double AdaptiveDetMixPower; // ramp exponent: a_degeneracy = (1 - sep)^power (<=0 -> 2.0)
     }
 
     /// <summary>
@@ -99,6 +101,10 @@ namespace CreaseMachine
         public double NesterovStep(FlowParams p, out bool[] foldFlags)
         {
             DevelopabilityEnergy.CrazeBand = p.CrazeBand;
+            // Per-solve static (same shape as CrazeBand): default OFF -> shipping path byte-identical.
+            // GH/studio leave these unset (false / 0), so they never touch the adaptive branch.
+            DevelopabilityEnergy.AdaptiveDetMix = p.AdaptiveDetMix;
+            DevelopabilityEnergy.AdaptiveDetMixPower = p.AdaptiveDetMixPower > 0.0 ? p.AdaptiveDetMixPower : 2.0;
 
             PlanktonMesh P = Mesh;
             int nV = P.Vertices.Count;

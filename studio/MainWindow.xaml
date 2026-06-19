@@ -198,9 +198,23 @@
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="DetMix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
+                                        <TextBlock DockPanel.Dock="Left" Text="DetMix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Constant blend floor: 0 = paper-faithful λ_min, 1 = det (λ_min·λ_max). Adaptive (below) raises it per-vertex." />
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DetMix, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="0" Maximum="1" Value="{Binding DetMix}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Adaptive" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Adaptive DetMix: raise the blend toward 1 at near-degenerate (twisty) vertices only, leaving real creases paper-faithful. Removes the symmetric-mesh twist." />
+                                        <CheckBox IsChecked="{Binding AdaptiveDetMix}" Content="degeneracy-driven" Foreground="#8A8A98" FontSize="11" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <DockPanel Margin="0,3,0,0" IsEnabled="{Binding AdaptiveDetMix}">
+                                        <TextBlock DockPanel.Dock="Left" Text="↳ Power" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Ramp sharpness: a = (1−sep)^Power. Higher = det only very near the circle; lower = det bleeds into more-anisotropic vertices." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding AdaptiveDetMixPow, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="1" Maximum="6" Value="{Binding AdaptiveDetMixPow}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
                                     <DockPanel Margin="0,3,0,0">

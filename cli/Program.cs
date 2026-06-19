@@ -21,6 +21,7 @@ using CreaseMachine;
 //
 // Params (sticky; unspecified ones keep their last value). Numeric ones accept `a>b` ramps:
 //   step mom deCraze band detMix deBranch deConsolidate sharpness   maxCov(bool)  momFix(int)
+//   adaptiveDetMix(bool)  adetmixpow(num)   <- experimental sep-adaptive DetMix (off by default)
 // Defaults match the GH component: step=0.05 mom=0.9 deCraze=0 band=0.1 detMix=0 sharpness=4 momFix=4
 static class Program
 {
@@ -35,6 +36,11 @@ static class Program
                   deBranch = 0.0, deConsolidate = 0.0, sharpness = 4.0;
     static bool maxCov = false;
     static int momFix = 4;
+    // EXPERIMENTAL: adaptive DetMix. When on, the lambda_min/det blend is raised toward 1 at
+    // near-degenerate vertices (sep -> 0) via a_deg = (1 - sep)^pow, leaving real creases (sep -> 1)
+    // at the detMix floor. Off by default -> byte-identical to the shipping flow.
+    static bool adaptiveDetMix = false;
+    static double adaptiveDetMixPow = 2.0;
 
     static int Main(string[] args)
     {
@@ -136,7 +142,9 @@ static class Program
             "  panels " + m.Panels +
             "  crazeRMS " + m.CrazeRmsDeg.ToString("0.0") + "deg" +
             "  maxDih " + m.MaxDihDeg.ToString("0.0") + "deg" +
-            "   [" + R.Echo() + (maxCov ? " maxCov" : "") + " momFix " + momFix + "]" +
+            "  rough " + m.DihRoughDeg.ToString("0.0") + "deg" +
+            "   [" + R.Echo() + (maxCov ? " maxCov" : "") + " momFix " + momFix +
+            (adaptiveDetMix ? " aDetMix^" + adaptiveDetMixPow.ToString("0.##", CultureInfo.InvariantCulture) : "") + "]" +
             "   " + (sw.Elapsed.TotalSeconds).ToString("0.0") + "s");
     }
 
@@ -182,7 +190,8 @@ static class Program
     {
         Console.WriteLine("  step=" + step + " mom=" + mom + " deCraze=" + deCraze + " band=" + band +
             " detMix=" + detMix + " deBranch=" + deBranch + " deConsolidate=" + deConsolidate +
-            " sharpness=" + sharpness + " maxCov=" + maxCov + " momFix=" + momFix);
+            " sharpness=" + sharpness + " maxCov=" + maxCov + " momFix=" + momFix +
+            " adaptiveDetMix=" + adaptiveDetMix + " adetmixpow=" + adaptiveDetMixPow);
     }
 
     static void PrintMetrics(string tag)
@@ -191,7 +200,8 @@ static class Program
         var m = FlowMetrics.Compute(P, band, maxCov, sharpness);
         Console.WriteLine("  " + tag + ": verts " + P.Vertices.Count + "  sumE " + Fmt(m.SumE) +
             "  panels " + m.Panels + "  crazeRMS " + m.CrazeRmsDeg.ToString("0.0") + "deg" +
-            "  maxDih " + m.MaxDihDeg.ToString("0.0") + "deg  (crease cutoff " + (band * 180.0 / Math.PI).ToString("0.0") + "deg)");
+            "  maxDih " + m.MaxDihDeg.ToString("0.0") + "deg  rough " + m.DihRoughDeg.ToString("0.0") + "deg" +
+            "  (crease cutoff " + (band * 180.0 / Math.PI).ToString("0.0") + "deg)");
     }
 
     static void PrintHelp()
@@ -206,7 +216,9 @@ static class Program
   params                       show current sticky params
   quit
   params: step mom deCraze band detMix deBranch deConsolidate sharpness maxCov momFix
-  example: run 500 deCraze=0.1>0.0 step=0.05   (ramp deCraze 0.1->0 over 500 iters)");
+          adaptiveDetMix(bool) adetmixpow(num)
+  example: run 500 deCraze=0.1>0.0 step=0.05   (ramp deCraze 0.1->0 over 500 iters)
+  example: run 200 detMix=0.05 adaptiveDetMix=1 adetmixpow=2   (adaptive blend A/B)");
     }
 
     // ============================ flow ============================
@@ -222,6 +234,7 @@ static class Program
             CrazeBand = R.band.At(frac), DetMix = R.detMix.At(frac), deBranch = R.deBranch.At(frac),
             deConsolidate = R.deConsolidate.At(frac), Sharpness = R.sharpness.At(frac),
             UseMaxCov = maxCov, MomFix = momFix,
+            AdaptiveDetMix = adaptiveDetMix, AdaptiveDetMixPower = adaptiveDetMixPow,
         };
         // Drive the SHARED flow via a transient session wrapping the CLI's P/vel, then sync back.
         // Same order the CLI used inline (collapse short -> collapse sliver -> Nesterov -> fold heal),
@@ -267,6 +280,10 @@ static class Program
         // bool / int params (not rampable)
         if (name == "maxcov") { maxCov = val == "1" || val.ToLowerInvariant() == "true"; return; }
         if (name == "momfix") { int.TryParse(val, out momFix); momFix = Math.Max(1, Math.Min(4, momFix)); return; }
+        if (name == "adaptivedetmix" || name == "adaptdetmix" || name == "adetmix")
+        { adaptiveDetMix = val == "1" || val.ToLowerInvariant() == "true"; return; }
+        if (name == "adaptivedetmixpow" || name == "adaptivedetmixpower" || name == "adetmixpow")
+        { if (double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double ap) && ap > 0) adaptiveDetMixPow = ap; return; }
 
         Ramp r;
         int gt = val.IndexOf('>');

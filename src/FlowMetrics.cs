@@ -23,6 +23,7 @@ namespace CreaseMachine
             public int Panels;         // connected face clusters below the crease cutoff
             public double CrazeRmsDeg; // RMS of sub-cutoff (intra-panel) dihedrals, degrees
             public double MaxDihDeg;   // largest dihedral anywhere, degrees
+            public double DihRoughDeg; // RMS within-face dihedral disagreement (accordion/craze), degrees
         }
 
         // Per-vertex pure developability energy (covariance lambda_min, or lambda_max if
@@ -62,22 +63,41 @@ namespace CreaseMachine
             int[] par = new int[nF];
             for (int f = 0; f < nF; f++) par[f] = IsTri(P, f) ? f : -1;
 
+            int nH = P.Halfedges.Count;
+            double[] phiE = new double[nH / 2];   // per-edge dihedral (0 where not an interior tri-tri edge)
             double sumSq = 0; int nIntra = 0; double maxDih = 0;
-            for (int h = 0; h < P.Halfedges.Count; h += 2)
+            for (int h = 0; h < nH; h += 2)
             {
                 if (P.Halfedges[h].IsUnused) continue;
                 int fA = P.Halfedges[h].AdjacentFace, fB = P.Halfedges[h + 1].AdjacentFace;
                 if (fA < 0 || fB < 0 || par[fA] < 0 || par[fB] < 0) continue;
                 double dih = Dihedral(P, fA, fB);
+                phiE[h >> 1] = dih;
                 if (dih > maxDih) maxDih = dih;
                 if (dih < tau) { Union(par, fA, fB); sumSq += dih * dih; nIntra++; }
             }
             int panels = 0;
             for (int f = 0; f < nF; f++) if (par[f] >= 0 && Find(par, f) == f) panels++;
 
+            // Dihedral roughness: within each triangle, how much do its 3 edge dihedrals disagree?
+            // A smooth/curved developable region has near-equal edge dihedrals (low); an accordion of
+            // sub-creases - the crazing the covariance energy is blind to - makes neighbouring edges
+            // alternate fold/flat, so the disagreement is high. This is the Sum|d phi| signal.
+            double rSumSq = 0; int rN = 0;
+            for (int f = 0; f < nF; f++)
+            {
+                if (par[f] < 0) continue;
+                int[] he = P.Faces.GetHalfedges(f);
+                if (he.Length != 3) continue;
+                double p0 = phiE[he[0] >> 1], p1 = phiE[he[1] >> 1], p2 = phiE[he[2] >> 1];
+                double d01 = p0 - p1, d12 = p1 - p2, d20 = p2 - p0;
+                rSumSq += d01 * d01 + d12 * d12 + d20 * d20; rN += 3;
+            }
+
             m.Panels = panels;
             m.CrazeRmsDeg = (nIntra > 0 ? Math.Sqrt(sumSq / nIntra) : 0.0) * 180.0 / Math.PI;
             m.MaxDihDeg = maxDih * 180.0 / Math.PI;
+            m.DihRoughDeg = (rN > 0 ? Math.Sqrt(rSumSq / rN) : 0.0) * 180.0 / Math.PI;
             return m;
         }
 

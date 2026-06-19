@@ -13,6 +13,9 @@ namespace CreaseStudio
         // CrazeBand is shown to the user in DEGREES (more intuitive than radians); the engine wants
         // radians, so ToFlowParams() converts. 5.7 deg == the engine's documented 0.1 rad default.
         double _step = 0.01, _momentum = 0.9, _deCraze = 0.0, _crazeBandDeg = 5.7, _sharpness = 4.0, _detMix = 0.05;
+        // Experimental: adaptive DetMix - raise the lambda_min<->det blend toward 1 at near-degenerate
+        // ("twisty") vertices via a = (1-sep)^pow, leaving real creases (sep->1) at the DetMix floor.
+        bool _adaptiveDetMix = false; double _adaptiveDetMixPow = 2.0;
 
         public int IterPerRun { get => _iterPerRun; set { if (Set(ref _iterPerRun, value)) OnChanged(nameof(IterLabel)); } }
         public double Step { get => _step; set => Set(ref _step, value); }
@@ -21,6 +24,8 @@ namespace CreaseStudio
         public double CrazeBandDeg { get => _crazeBandDeg; set => Set(ref _crazeBandDeg, value); }
         public double Sharpness { get => _sharpness; set => Set(ref _sharpness, value); }
         public double DetMix { get => _detMix; set => Set(ref _detMix, value); }
+        public bool AdaptiveDetMix { get => _adaptiveDetMix; set => Set(ref _adaptiveDetMix, value); }
+        public double AdaptiveDetMixPow { get => _adaptiveDetMixPow; set => Set(ref _adaptiveDetMixPow, value); }
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
 
         // Brush params (shared by all brushes; the BRUSH tab + the [ ] / Ctrl+Shift+[ ] hotkeys drive
@@ -58,6 +63,8 @@ namespace CreaseStudio
             CrazeBand = CrazeBandDeg * System.Math.PI / 180.0,   // degrees (UI) -> radians (engine)
             Sharpness = Sharpness,
             DetMix = DetMix,
+            AdaptiveDetMix = AdaptiveDetMix,
+            AdaptiveDetMixPower = AdaptiveDetMixPow,
             MomFix = MomFix,
             deBranch = 0.0,
             deConsolidate = 0.0,
