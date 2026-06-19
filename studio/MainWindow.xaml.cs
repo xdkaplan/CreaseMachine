@@ -49,9 +49,11 @@ namespace CreaseStudio
         enum DragMode { None, Orbit, Pan, Edit }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = edit (brush)
 
-        // NOISE brush (the only editor for now). Left-drag paints when active; right-drag still orbits.
+        // Brushes (the editors). One active at a time; left-drag paints, right-drag still orbits.
+        enum BrushKind { None, Noise, Buff }
+        BrushKind _brush = BrushKind.None;
+        bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
-        bool _noiseActive;
         double _brushSize = 10.0;         // influence radius, world units; [ / ] shrink / grow
         double _brushSigmaFrac = 0.25;    // Gaussian sigma as a fraction of size; Ctrl+Shift+[ / ] soften / harden
         double _strokeAmp;                // bump height for the current stroke (~edge length)
@@ -170,7 +172,7 @@ namespace CreaseStudio
                     if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) HardenBrush();
                     else if (Keyboard.Modifiers == ModifierKeys.None) ResizeBrush(1.2);
                     else return;
-                    if (_noiseActive) UpdatePreview(_lastHover);
+                    if (_brush != BrushKind.None) UpdatePreview(_lastHover);
                     e.Handled = true;
                 }
                 else if (e.Key == Key.OemOpenBrackets)    // [  = shrink brush  /  Ctrl+Shift = soften
@@ -178,14 +180,28 @@ namespace CreaseStudio
                     if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) SoftenBrush();
                     else if (Keyboard.Modifiers == ModifierKeys.None) ResizeBrush(1.0 / 1.2);
                     else return;
-                    if (_noiseActive) UpdatePreview(_lastHover);
+                    if (_brush != BrushKind.None) UpdatePreview(_lastHover);
                     e.Handled = true;
                 }
             };
 
-            // NOISE brush tile (bottom bar): toggles paint mode on left-drag.
-            NoiseBrushButton.Checked += (s, e) => _noiseActive = true;
-            NoiseBrushButton.Unchecked += (s, e) => { _noiseActive = false; _previewDot.Visibility = Visibility.Collapsed; };
+            // Brush tiles (bottom bar): mutually exclusive; selecting one paints on left-drag.
+            NoiseBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Noise); };
+            NoiseBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Noise) SetBrush(BrushKind.None); };
+            BuffBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Buff); };
+            BuffBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Buff) SetBrush(BrushKind.None); };
+        }
+
+        // Activate a brush (or none), keeping the two tiles mutually exclusive. _suppressBrushUi stops
+        // the programmatic IsChecked sets from re-entering the Checked/Unchecked handlers.
+        void SetBrush(BrushKind k)
+        {
+            _brush = k;
+            _suppressBrushUi = true;
+            NoiseBrushButton.IsChecked = k == BrushKind.Noise;
+            BuffBrushButton.IsChecked = k == BrushKind.Buff;
+            _suppressBrushUi = false;
+            if (k == BrushKind.None) _previewDot.Visibility = Visibility.Collapsed;
         }
 
         // ===================== window menu: Console + About (both non-modal) =====================
@@ -458,10 +474,10 @@ namespace CreaseStudio
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (_noiseActive && _session != null)
+                if (_brush != BrushKind.None && _session != null)
                 {
-                    _strokeAmp = 2.0 * RepEdge(_session.Mesh);                 // bump height for this stroke
-                    if (PickSurface(_lastMouse, out var hit)) ApplyNoiseDab(hit);
+                    if (_brush == BrushKind.Noise) _strokeAmp = 2.0 * RepEdge(_session.Mesh);   // noise bump height
+                    if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);
                 }
             }
             else return;
@@ -470,7 +486,7 @@ namespace CreaseStudio
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
-            if (_drag == DragMode.Edit && _noiseActive && _session != null)
+            if (_drag == DragMode.Edit && _brush != BrushKind.None && _session != null)
                 _session.ZeroMomentum();   // a manual edit invalidates the stale Nesterov velocity
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
@@ -482,7 +498,7 @@ namespace CreaseStudio
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
-                if (_noiseActive) UpdatePreview(p);   // brush-footprint preview on hover
+                if (_brush != BrushKind.None) UpdatePreview(p);   // brush-footprint preview on hover
                 return;
             }
             float dx = (float)(p.X - _lastMouse.X), dy = (float)(p.Y - _lastMouse.Y);
@@ -498,7 +514,7 @@ namespace CreaseStudio
                     PanCamera(dx, dy);
                     break;
                 case DragMode.Edit:
-                    if (_noiseActive && PickSurface(p, out var hit)) ApplyNoiseDab(hit);
+                    if (_brush != BrushKind.None && PickSurface(p, out var hit)) ApplyDab(hit);
                     break;
             }
         }
@@ -585,6 +601,51 @@ namespace CreaseStudio
 
         static Vector3 V(PlanktonMesh P, int i) { var v = P.Vertices[i]; return new Vector3(v.X, v.Y, v.Z); }
 
+        // Dispatch one brush dab to the active editor.
+        void ApplyDab(Vector3 hit)
+        {
+            if (_brush == BrushKind.Noise) ApplyNoiseDab(hit);
+            else if (_brush == BrushKind.Buff) ApplyBuffDab(hit);
+        }
+
+        // Buff = a localized developability flow step with deCraze 0.04: compute the analytic gradient
+        // (covariance energy + the L1 dihedral consolidation term) and take a brush-masked,
+        // trust-region-capped descent step. Self-damping — buffs toward a clean developable surface and
+        // settles where the region is already flat. Boundaries / unused verts held fixed.
+        void ApplyBuffDab(Vector3 hit)
+        {
+            var P = _session.Mesh;
+            double R = _brushSize, R2 = R * R;
+            double sigma = Math.Max(1e-6, _brushSigmaFrac * R);
+            double twoSig2 = 2.0 * sigma * sigma;
+            double L = RepEdge(P);
+            double t = Math.Max(1e-9, _sim.Step) * L * L;   // step like the flow (Step·L²)
+            double capLen = L;
+
+            DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
+            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
+                0.0, 0.0, false, _sim.Sharpness, 0.04, true, null, _sim.DetMix);   // deCraze = 0.04 (the "secret")
+
+            int nv = P.Vertices.Count;
+            for (int i = 0; i < nv; i++)
+            {
+                var pv = P.Vertices[i];
+                if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
+                double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z;
+                double d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > R2) continue;
+                Vec3 g = grad[i];
+                if (!g.IsValid) continue;
+                double wgt = Math.Exp(-d2 / twoSig2);
+                double sx = -t * wgt * g.X, sy = -t * wgt * g.Y, sz = -t * wgt * g.Z;
+                double sl = Math.Sqrt(sx * sx + sy * sy + sz * sz);
+                if (sl > capLen && sl > 1e-20) { double s = capLen / sl; sx *= s; sy *= s; sz *= s; }
+                P.Vertices.SetVertex(i, pv.X + sx, pv.Y + sy, pv.Z + sz);
+            }
+            _meshDirty = true;
+            _gl?.InvalidateVisual();
+        }
+
         // Displace vertices within the brush footprint along their normals by ±Perlin noise, with a
         // Gaussian falloff from the hit point. Boundaries / unused verts are held fixed (as the flow does).
         void ApplyNoiseDab(Vector3 hit)
@@ -652,7 +713,7 @@ namespace CreaseStudio
         // pixels at the hit depth. Hidden when the cursor isn't over the mesh.
         void UpdatePreview(System.Windows.Point cursor)
         {
-            if (!_noiseActive || _session == null || !PickSurface(cursor, out var hit))
+            if (_brush == BrushKind.None || _session == null || !PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
             Vector3 dir = CamDir();
             Vector3 eye = _target + dir * _distance;

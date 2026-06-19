@@ -267,8 +267,11 @@
         <Border Grid.Row="3" Background="#2D2D30">
             <DockPanel Margin="8,0" LastChildFill="False">
                 <ToggleButton x:Name="NoiseBrushButton" DockPanel.Dock="Left" Content="NOISE"
-                              Width="48" Height="48" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                              Width="48" Height="48" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
                               ToolTip="NOISE brush — ± normal Perlin displacement. Left-drag paints. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                <ToggleButton x:Name="BuffBrushButton" DockPanel.Dock="Left" Content="BUFF"
+                              Width="48" Height="48" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                              ToolTip="BUFF brush — local developability flow toward a clean, consolidated surface. Left-drag to buff. [ ] size, Ctrl+Shift+[ ] soften/harden." />
                 <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="" Foreground="#8A8A98"
                            VerticalAlignment="Center" FontSize="11" />
             </DockPanel>
