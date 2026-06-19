@@ -13,6 +13,7 @@ namespace CreaseStudio
     {
         GLWpfControl _gl;
         MeshView _view;
+        GroundGrid _grid;            // subtle dot grid on the world Z=0 plane (10-unit spacing)
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         string _meshPath;            // source mesh path, so Reset can reload the input from disk
@@ -462,7 +463,7 @@ namespace CreaseStudio
 
         void OnRender(TimeSpan delta)
         {
-            if (!_glInit) { _view = new MeshView(); _glInit = true; }
+            if (!_glInit) { _view = new MeshView(); _grid = new GroundGrid(); _glInit = true; }
 
             // apply a queued matcap texture (GL thread = here)
             if (_matcapDirty && _view != null && _matcapPx != null) { _view.SetMatcap(_matcapPx, _matcapW, _matcapH); _matcapDirty = false; }
@@ -476,7 +477,11 @@ namespace CreaseStudio
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;
-                if (_reframe) { _target = _view.Center; _distance = _view.Radius * 3f; _reframe = false; }
+                if (_reframe)
+                {
+                    _target = _view.Center; _distance = _view.Radius * 3f; _reframe = false;
+                    _grid.Build(_view.Center, _view.Radius);   // size the ground grid to the new mesh footprint
+                }
                 UpdateStatus();
             }
 
@@ -524,6 +529,7 @@ namespace CreaseStudio
             Matrix4 proj = Matrix4.CreatePerspectiveFieldOfView(
                 MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
 
+            _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
             _view?.Draw(view, proj);
         }
     }
