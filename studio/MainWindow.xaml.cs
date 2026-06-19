@@ -54,9 +54,10 @@ namespace CreaseStudio
         BrushKind _brush = BrushKind.None;
         bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
-        double _strokeAmp;                // noise bump height for the current stroke (~edge length)
-        double[] _strokeCov;              // per-vertex coverage this stroke (NOISE opacity/flow accumulation)
+        Vector3[] _strokeOffset;          // per-vertex target offset frozen at stroke start (NOISE noise / BUFF burst)
+        double[] _strokeCov;              // per-vertex coverage this stroke (Flow builds it toward Strength)
         double _dabAccum;                 // screen-px traveled since the last dab (path-spacing accumulator)
+        const int BuffBurstIters = 30;    // developability iterations in the BUFF target burst (once per stroke)
         System.Windows.Point _lastHover;  // last hover position, to refresh the preview after a size change
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -482,7 +483,7 @@ namespace CreaseStudio
                 {
                     _strokeCov = new double[_session.Mesh.Vertices.Count];   // fresh coverage for this stroke
                     _dabAccum = 0;                                            // reset path-spacing accumulator
-                    if (_brush == BrushKind.Noise) _strokeAmp = 2.0 * RepEdge(_session.Mesh);   // noise bump height
+                    _strokeOffset = ComputeBrushOffset();                     // freeze the target (BUFF burst runs here)
                     if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);   // initial dab at the down point
                 }
             }
@@ -639,67 +640,19 @@ namespace CreaseStudio
 
         static Vector3 V(PlanktonMesh P, int i) { var v = P.Vertices[i]; return new Vector3(v.X, v.Y, v.Z); }
 
-        // Dispatch one brush dab to the active editor.
+        // Apply one brush dab: blend the footprint vertices toward the stroke's frozen target offset
+        // (_strokeOffset), using the shared coverage model — Flow builds coverage toward the Strength
+        // ceiling (gaussian-shaped per dab), the move is offset × coverage-increment. Both brushes share
+        // this; they differ only in how _strokeOffset is computed at stroke start. Cheap (no CHA here).
         void ApplyDab(Vector3 hit)
         {
-            if (_brush == BrushKind.Noise) ApplyNoiseDab(hit);
-            else if (_brush == BrushKind.Buff) ApplyBuffDab(hit);
-        }
-
-        // Buff = a localized developability flow step with deCraze 0.04: compute the analytic gradient
-        // (covariance energy + the L1 dihedral consolidation term) and take a brush-masked,
-        // trust-region-capped descent step. Self-damping — buffs toward a clean developable surface and
-        // settles where the region is already flat. Boundaries / unused verts held fixed.
-        void ApplyBuffDab(Vector3 hit)
-        {
             var P = _session.Mesh;
+            int nv = P.Vertices.Count;
+            if (_strokeOffset == null || _strokeOffset.Length != nv || _strokeCov == null || _strokeCov.Length != nv) return;
             double R = _sim.BrushSize, R2 = R * R;
             double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
             double twoSig2 = 2.0 * sigma * sigma;
-            double L = RepEdge(P);
-            double t = Math.Max(1e-9, _sim.Step) * L * L;       // step like the flow (Step·L²)
-            double capLen = L;
-            double deCraze = _sim.BrushStrength * _sim.DeCrazeMax;    // Strength (0-100%) drives the deCraze weight
-            double intensity = _sim.BrushFlow;                        // Flow (speed) = per-dab step scale; buff
-                                                                      // self-damps, so no coverage ceiling is needed
-            DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
-            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
-                0.0, 0.0, false, _sim.Sharpness, deCraze, true, null, _sim.DetMix);
-
-            int nv = P.Vertices.Count;
-            for (int i = 0; i < nv; i++)
-            {
-                var pv = P.Vertices[i];
-                if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
-                double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z;
-                double d2 = dx * dx + dy * dy + dz * dz;
-                if (d2 > R2) continue;
-                Vec3 g = grad[i];
-                if (!g.IsValid) continue;
-                double sc = t * Math.Exp(-d2 / twoSig2) * intensity;
-                double sx = -sc * g.X, sy = -sc * g.Y, sz = -sc * g.Z;
-                double sl = Math.Sqrt(sx * sx + sy * sy + sz * sz);
-                if (sl > capLen && sl > 1e-20) { double s = capLen / sl; sx *= s; sy *= s; sz *= s; }
-                P.Vertices.SetVertex(i, pv.X + sx, pv.Y + sy, pv.Z + sz);
-            }
-            _meshDirty = true;
-            _gl?.InvalidateVisual();
-        }
-
-        // Displace vertices within the brush footprint along their normals by ±Perlin noise, with a
-        // Gaussian falloff from the hit point. Boundaries / unused verts are held fixed (as the flow does).
-        void ApplyNoiseDab(Vector3 hit)
-        {
-            var P = _session.Mesh;
-            double R = _sim.BrushSize, R2 = R * R;
-            double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
-            double twoSig2 = 2.0 * sigma * sigma;
-            double freq = 2.0 / R;                                  // a few bumps across the footprint
-            double amp = _strokeAmp > 0 ? _strokeAmp : 2.0 * RepEdge(P);
-            double strength = _sim.BrushStrength, flow = _sim.BrushFlow;   // opacity ceiling / build rate
-            Vector3[] nrm = VertexNormals(P);
-            int nv = P.Vertices.Count;
-            if (_strokeCov == null || _strokeCov.Length != nv) _strokeCov = new double[nv];
+            double strength = _sim.BrushStrength, flow = _sim.BrushFlow;   // coverage ceiling / build rate
             for (int i = 0; i < nv; i++)
             {
                 var pv = P.Vertices[i];
@@ -708,17 +661,82 @@ namespace CreaseStudio
                 double d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 > R2) continue;
                 double gw = Math.Exp(-d2 / twoSig2);
-                // flow builds coverage toward the strength ceiling; gaussian shapes each dab.
                 double dcov = Math.Min(strength - _strokeCov[i], flow * gw);
                 if (dcov <= 1e-9) continue;
                 _strokeCov[i] += dcov;
-                double n = _noise.Noise(pv.X * freq, pv.Y * freq, pv.Z * freq);
-                double disp = amp * n * dcov;       // total at full coverage = amp·noise·strength
-                Vector3 nn = nrm[i];
-                P.Vertices.SetVertex(i, pv.X + nn.X * disp, pv.Y + nn.Y * disp, pv.Z + nn.Z * disp);
+                Vector3 o = _strokeOffset[i];
+                P.Vertices.SetVertex(i, pv.X + o.X * dcov, pv.Y + o.Y * dcov, pv.Z + o.Z * dcov);
             }
             _meshDirty = true;
             _gl?.InvalidateVisual();
+        }
+
+        // Freeze the per-vertex target offset for the current stroke. NOISE: ± normal Perlin (computed
+        // once, so the pattern doesn't drift as the surface moves). BUFF: the displacement produced by a
+        // burst of K developability iterations — "where each vertex goes if you fully buff" — which the
+        // dabs then paint in locally. Computed ONCE per stroke (the expensive flow doesn't run per dab).
+        Vector3[] ComputeBrushOffset()
+        {
+            var P = _session.Mesh;
+            int nv = P.Vertices.Count;
+            var D = new Vector3[nv];
+            if (_brush == BrushKind.Noise)
+            {
+                double amp = 2.0 * RepEdge(P);
+                double freq = 2.0 / _sim.BrushSize;                 // a few bumps across the footprint
+                Vector3[] nrm = VertexNormals(P);
+                for (int i = 0; i < nv; i++)
+                {
+                    var pv = P.Vertices[i];
+                    if (pv.IsUnused) continue;
+                    double n = _noise.Noise(pv.X * freq, pv.Y * freq, pv.Z * freq);
+                    D[i] = nrm[i] * (float)(amp * n);
+                }
+            }
+            else if (_brush == BrushKind.Buff)
+            {
+                ComputeBuffTarget(D);
+            }
+            return D;
+        }
+
+        // BUFF target: run K developability iterations (covariance + the deCraze weight from the slider)
+        // on the live mesh, record the per-vertex displacement, then restore the mesh. The expensive flow
+        // runs once here per stroke; the dabs that paint it in are cheap.
+        void ComputeBuffTarget(Vector3[] D)
+        {
+            var P = _session.Mesh;
+            int nv = P.Vertices.Count;
+            var ox = new double[nv]; var oy = new double[nv]; var oz = new double[nv];
+            for (int i = 0; i < nv; i++) { var pv = P.Vertices[i]; ox[i] = pv.X; oy[i] = pv.Y; oz[i] = pv.Z; }
+
+            double L = RepEdge(P);
+            double t = Math.Max(1e-9, _sim.Step) * L * L;
+            double capLen = L;
+            double deCraze = _sim.DeCraze * _sim.DeCrazeMax;     // the consolidation weight you dialed
+            DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
+            for (int k = 0; k < BuffBurstIters; k++)
+            {
+                DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
+                    0.0, 0.0, false, _sim.Sharpness, deCraze, true, null, _sim.DetMix);
+                for (int i = 0; i < nv; i++)
+                {
+                    var pv = P.Vertices[i];
+                    if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
+                    Vec3 g = grad[i];
+                    if (!g.IsValid) continue;
+                    double sx = -t * g.X, sy = -t * g.Y, sz = -t * g.Z;
+                    double sl = Math.Sqrt(sx * sx + sy * sy + sz * sz);
+                    if (sl > capLen && sl > 1e-20) { double s = capLen / sl; sx *= s; sy *= s; sz *= s; }
+                    P.Vertices.SetVertex(i, pv.X + sx, pv.Y + sy, pv.Z + sz);
+                }
+            }
+            for (int i = 0; i < nv; i++)
+            {
+                var pv = P.Vertices[i];
+                D[i] = new Vector3((float)(pv.X - ox[i]), (float)(pv.Y - oy[i]), (float)(pv.Z - oz[i]));
+                P.Vertices.SetVertex(i, ox[i], oy[i], oz[i]);   // restore — the dabs paint the offset in
+            }
         }
 
         static Vector3[] VertexNormals(PlanktonMesh P)
