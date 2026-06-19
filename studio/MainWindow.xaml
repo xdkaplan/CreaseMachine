@@ -320,11 +320,14 @@
         <Border Grid.Row="3" Background="#2D2D30">
             <DockPanel Margin="8,0" LastChildFill="False">
                 <ToggleButton x:Name="NoiseBrushButton" DockPanel.Dock="Left" Content="NOISE"
-                              Width="48" Height="48" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
+                              Width="48" Height="48" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
                               ToolTip="NOISE brush — ± normal Perlin displacement. Left-drag paints. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                <ToggleButton x:Name="PolishBrushButton" DockPanel.Dock="Left" Content="POLISH"
+                              Width="48" Height="48" Margin="0,0,6,0" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="POLISH — developability flow with crease-preserving deCraze (Huber band): cleans panels, keeps sharp creases." />
                 <ToggleButton x:Name="BuffBrushButton" DockPanel.Dock="Left" Content="BUFF"
-                              Width="48" Height="48" VerticalAlignment="Center" FontSize="11" FontWeight="Bold"
-                              ToolTip="BUFF brush — local developability flow toward a clean, consolidated surface. Left-drag to buff. [ ] size, Ctrl+Shift+[ ] soften/harden." />
+                              Width="48" Height="48" VerticalAlignment="Center" FontSize="10" FontWeight="Bold"
+                              ToolTip="BUFF — same deCraze flow but with no Huber band (pure L1): rounds / softens creases." />
                 <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="" Foreground="#8A8A98"
                            VerticalAlignment="Center" FontSize="11" />
             </DockPanel>

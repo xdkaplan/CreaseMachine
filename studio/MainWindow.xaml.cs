@@ -49,7 +49,7 @@ namespace CreaseStudio
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = edit (brush)
 
         // Brushes (the editors). One active at a time; left-drag paints, right-drag still orbits.
-        enum BrushKind { None, Noise, Buff }
+        enum BrushKind { None, Noise, Polish, Buff }   // Polish = deCraze w/ Huber band (clean creases); Buff = no band (rounds them)
         BrushKind _brush = BrushKind.None;
         bool _suppressBrushUi;            // guards re-entrant tile Checked/Unchecked while syncing
         readonly Perlin _noise = new Perlin();
@@ -216,17 +216,20 @@ namespace CreaseStudio
             // Brush tiles (bottom bar): mutually exclusive; selecting one paints on left-drag.
             NoiseBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Noise); };
             NoiseBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Noise) SetBrush(BrushKind.None); };
+            PolishBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Polish); };
+            PolishBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Polish) SetBrush(BrushKind.None); };
             BuffBrushButton.Checked += (s, e) => { if (!_suppressBrushUi) SetBrush(BrushKind.Buff); };
             BuffBrushButton.Unchecked += (s, e) => { if (!_suppressBrushUi && _brush == BrushKind.Buff) SetBrush(BrushKind.None); };
         }
 
-        // Activate a brush (or none), keeping the two tiles mutually exclusive. _suppressBrushUi stops
+        // Activate a brush (or none), keeping the tiles mutually exclusive. _suppressBrushUi stops
         // the programmatic IsChecked sets from re-entering the Checked/Unchecked handlers.
         void SetBrush(BrushKind k)
         {
             _brush = k;
             _suppressBrushUi = true;
             NoiseBrushButton.IsChecked = k == BrushKind.Noise;
+            PolishBrushButton.IsChecked = k == BrushKind.Polish;
             BuffBrushButton.IsChecked = k == BrushKind.Buff;
             _suppressBrushUi = false;
             if (k == BrushKind.None) _previewDot.Visibility = Visibility.Collapsed;
@@ -709,17 +712,18 @@ namespace CreaseStudio
                     D[i] = nrm[i] * (float)(amp * n);
                 }
             }
+            else if (_brush == BrushKind.Polish)
+                ComputeBuffTarget(D, _sim.CrazeBandDeg * Math.PI / 180.0);   // Huber band: near-flat edges settle -> keeps sharp creases
             else if (_brush == BrushKind.Buff)
-            {
-                ComputeBuffTarget(D);
-            }
+                ComputeBuffTarget(D, 0.0);                                   // no band (pure L1): the flatten force never vanishes -> rounds creases
             return D;
         }
 
-        // BUFF target: run K (= Strength) developability iterations (covariance + a fixed BuffDeCraze
-        // consolidation weight) on the live mesh, record the per-vertex displacement, then restore the
-        // mesh. The expensive flow runs once here per stroke; the dabs that paint it in are cheap.
-        void ComputeBuffTarget(Vector3[] D)
+        // Polish/Buff target: run K (= Strength) developability iterations (covariance + a fixed
+        // BuffDeCraze consolidation weight, with the given CrazeBand) on the live mesh, record the
+        // per-vertex displacement, then restore the mesh. The expensive flow runs once here per stroke;
+        // the dabs that paint it in are cheap. crazeBand>0 (Polish) preserves creases; 0 (Buff) rounds them.
+        void ComputeBuffTarget(Vector3[] D, double crazeBand)
         {
             var P = _session.Mesh;
             int nv = P.Vertices.Count;
@@ -730,7 +734,7 @@ namespace CreaseStudio
             double t = Math.Max(1e-9, _sim.Step) * L * L;
             double capLen = L;
             int K = Math.Max(1, (int)Math.Round(_sim.BrushStrength));   // Strength = iterations in the burst
-            DevelopabilityEnergy.CrazeBand = _sim.CrazeBandDeg * Math.PI / 180.0;
+            DevelopabilityEnergy.CrazeBand = crazeBand;
             for (int k = 0; k < K; k++)
             {
                 DevelopabilityEnergy.ComputeHingeEnergyAndGrad(P, out _, out Vec3[] grad, out _, out _,
