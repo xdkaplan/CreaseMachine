@@ -13,6 +13,12 @@ namespace CreasePatchSolver
     {
         GLWpfControl _gl;
         MeshView _view;
+        MeshView _flatView;          // BFF flat map M', drawn beside M (offset in +X) on the z=0 plane
+        bool _hasFlat;               // true after a successful Flatten; cleared on load/reset (stale M')
+        bool _bffNeeded = true;      // true => BFF hasn't run for the CURRENT mesh yet. Set on every
+                                     // load/reset; cleared the first time BFF flattens this mesh
+                                     // (via the Flatten button OR the first PatchStep). The lazy gate.
+        bool _meshSwitching;         // re-entrancy guard while MeshIndex programmatically resets the app
         GroundGrid _grid;            // subtle dot grid on the world Z=0 plane (10-unit spacing)
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
@@ -80,7 +86,8 @@ namespace CreasePatchSolver
 
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
-            string def = @"C:\Temp\Bunny 5k.stl";
+            // Default = Mesh 1 (NURBS test surface 0.stl), not the bunny. Missing -> status, no crash.
+            string def = NurbsMeshPath(_sim.MeshIndex);
             if (System.IO.File.Exists(def)) Execute(StudioCommand.Load(def), record: true);
             else Title = "CreasePatchSolver — (no mesh at " + def + ")";
 
@@ -114,6 +121,7 @@ namespace CreasePatchSolver
             IterButton.Click += (s, e) => Execute(StudioCommand.Run(_sim.IterPerRun, _sim.ToFlowParams()), record: true);
             SubdivideButton.Click += (s, e) => Execute(StudioCommand.Subdiv(), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
+            FlattenButton.Click += (s, e) => OnFlatten();   // direct handler (not journaled)
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -128,7 +136,11 @@ namespace CreasePatchSolver
             // DISPLAY tab: matcap switcher (recorded; _suppressUi stops replay-sync re-recording). The
             // Facet slider binds straight to the view-model; a render is kicked when it changes.
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
-            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual(); };
+            _sim.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual();
+                else if (e.PropertyName == nameof(SimSettings.MeshIndex)) OnMeshIndexChanged();
+            };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
             _console.SaveButton.Click += (s, e) => SaveSession();
@@ -278,22 +290,44 @@ namespace CreasePatchSolver
             _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
+            _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
+            _bffNeeded = true;        // new mesh -> BFF must (re)run before the sim can step
             Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(path);
             _gl?.InvalidateVisual();
         }
 
-        // Run n flow steps in-process (on the UI thread). Uses the supplied params (NOT live sliders),
-        // so a recorded run replays identically. Times the flow loop for the perf-drift readout.
+        // Path to a NURBS test surface by 1-based picker index: Mesh 1 -> 0.stl, Mesh 30 -> 29.stl.
+        static string NurbsMeshPath(int meshIndex) => System.IO.Path.Combine(
+            @"C:\Repo\xdkaplan\CreaseMachine\test\models\NURBS test surfaces", (meshIndex - 1) + ".stl");
+
+        // MeshIndex slider changed -> reset the app to that NURBS surface. ApplyLoad already clears
+        // _hasFlat and re-arms BFF (_bffNeeded = true). The re-entrancy guard stops a programmatic
+        // MeshIndex write (e.g. clamping) from recursing; the slider is snapped to integers so no clamp
+        // is needed here, but the guard keeps any future programmatic set from re-firing the load.
+        void OnMeshIndexChanged()
+        {
+            if (_meshSwitching) return;
+            _meshSwitching = true;
+            try
+            {
+                string path = NurbsMeshPath(_sim.MeshIndex);
+                if (System.IO.File.Exists(path)) Execute(StudioCommand.Load(path), record: true);
+                else Title = "CreasePatchSolver — (no mesh at " + path + ")";
+            }
+            finally { _meshSwitching = false; }
+        }
+
+        // Run n PatchSolver steps in-process (on the UI thread). This is the PatchSolver paradigm —
+        // it does NOT touch the Stein/DetMix developability flow (NesterovStep & friends). The
+        // FlowParams `p` is intentionally ignored (kept only so the journal/Run plumbing is untouched
+        // this pass). Times the loop for the perf-drift readout.
         void ApplyRun(int n, FlowParams p)
         {
             if (_session == null || n <= 0) return;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             for (int i = 0; i < n; i++)
             {
-                _session.CollapseShort();
-                _session.CollapseSliver();
-                _session.NesterovStep(p, out bool[] fold);
-                _session.HealFolds(fold);
+                if (!PatchStep()) break;   // BFF not ready (failed) -> don't run the sim
             }
             sw.Stop();
             _lastRunMs = sw.Elapsed.TotalMilliseconds;
@@ -302,6 +336,32 @@ namespace CreasePatchSolver
             Title = "CreasePatchSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
             UpdateStatus();
             _gl?.InvalidateVisual();
+        }
+
+        // One PatchSolver step. Lazy-BFF gate: the first step for a given mesh runs Boundary First
+        // Flattening (once), uploads the flat map M' beside M, and arms the sim. Subsequent steps (and
+        // any step after a manual Flatten already ran for this mesh) skip straight to IsometricStep.
+        // Returns false if BFF was needed but failed (caller should stop the run).
+        bool PatchStep()
+        {
+            if (_session == null) return false;
+            if (_bffNeeded)
+            {
+                bool ok = Bff.TryFlatten(_session.Mesh, out var flat, out var log);
+                if (!string.IsNullOrWhiteSpace(log)) Log(log.TrimEnd());
+                if (!ok || flat == null) return false;   // failure logged; don't start the sim
+                ShowFlat(flat);                            // upload M' beside M (shared offset logic)
+                _bffNeeded = false;                        // BFF done for this mesh
+            }
+            IsometricStep();
+            return true;
+        }
+
+        // STUB — the PatchSolver per-iteration update. No-op for now.
+        // TODO: Jiang isometric co-refinement — minimize E_iso (corresponding-parallelogram
+        // congruence) + fairness over the index-aligned M <-> M' correspondence. No-op for now.
+        void IsometricStep()
+        {
         }
 
         // One 1->4 subdivision of the live mesh (geometry-preserving; momentum resets inside
@@ -323,6 +383,8 @@ namespace CreasePatchSolver
             catch (Exception ex) { Title = "CreasePatchSolver — reset failed: " + ex.Message; return; }
             _totalIters = 0;
             _meshDirty = true;
+            _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
+            _bffNeeded = true;        // reset -> BFF must (re)run before the sim can step
             Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(_meshPath);
             _gl?.InvalidateVisual();
         }
@@ -339,6 +401,40 @@ namespace CreasePatchSolver
                 _gl?.InvalidateVisual();
             }
             catch { }
+        }
+
+        // ===================== Flatten (BFF) — direct handler, not journaled =====================
+
+        // Run Boundary First Flattening on the live mesh and show the flat map M' beside M. BFF returns
+        // an OBJ already on the XY plane (z=0) with the SAME vertex/face count + ordering as the input,
+        // so M'[i] corresponds to M[i]. We offset M' in +X so it sits on the ground plane next to M.
+        void OnFlatten()
+        {
+            if (_session == null) return;
+            bool ok = Bff.TryFlatten(_session.Mesh, out var flat, out var log);
+            if (!string.IsNullOrWhiteSpace(log)) Log(log.TrimEnd());
+            if (!ok || flat == null) return;   // failure already logged; don't crash
+            ShowFlat(flat);
+            _bffNeeded = false;   // share the gate: a manual Flatten satisfies PatchStep's lazy BFF
+        }
+
+        // Upload the BFF flat map M' and place it beside M on the z=0 plane (to +X of M by both radii
+        // plus a gap). Shared by the Flatten button and PatchStep's lazy first flatten. Sets _hasFlat.
+        void ShowFlat(PlanktonMesh flat)
+        {
+            if (_view == null || _flatView == null) return;   // GL views not built yet (pre-first-render)
+            _flatView.Upload(flat);   // sets _flatView.Center / .Radius from the flat geometry
+
+            float gap = 0.3f * (_view.Radius + _flatView.Radius);
+            var targetCenter = new Vector3(
+                _view.Center.X + _view.Radius + _flatView.Radius + gap,
+                _view.Center.Y,
+                0f);
+            _flatView.ModelOffset = targetCenter - _flatView.Center;
+
+            _hasFlat = true;
+            _reframe = true;          // M' just appeared -> re-fit the camera to show M and M' together
+            _gl?.InvalidateVisual();
         }
 
         // ===================== journal save / replay =====================
@@ -481,10 +577,22 @@ namespace CreasePatchSolver
 
         void OnRender(TimeSpan delta)
         {
-            if (!_glInit) { _view = new MeshView(); _grid = new GroundGrid(); _glInit = true; }
+            if (!_glInit)
+            {
+                _view = new MeshView();
+                _flatView = new MeshView(); _flatView.EnsureProgram();   // BFF flat map, drawn beside M
+                _flatView.ShowEdges = true;   // M' is flat (uniform shading) -> reveal its triangulation with edges
+                _grid = new GroundGrid();
+                _glInit = true;
+            }
 
-            // apply a queued matcap texture (GL thread = here)
-            if (_matcapDirty && _view != null && _matcapPx != null) { _view.SetMatcap(_matcapPx, _matcapW, _matcapH); _matcapDirty = false; }
+            // apply a queued matcap texture (GL thread = here); M' shades the same as M
+            if (_matcapDirty && _view != null && _matcapPx != null)
+            {
+                _view.SetMatcap(_matcapPx, _matcapW, _matcapH);
+                _flatView?.SetMatcap(_matcapPx, _matcapW, _matcapH);
+                _matcapDirty = false;
+            }
 
             // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
             // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
@@ -495,12 +603,25 @@ namespace CreasePatchSolver
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;
-                if (_reframe)
-                {
-                    _target = _view.Center; _distance = _view.Radius * 3f; _reframe = false;
-                    _grid.Build(_view.Center, _view.Radius);   // size the ground grid to the new mesh footprint
-                }
                 UpdateStatus();
+            }
+
+            // Re-fit the camera (and ground grid) when flagged — after a load/reset, and when the BFF
+            // flat map M' first appears (so M' isn't left off to the side). Fits M, plus M' if shown.
+            if (_reframe && _view != null && _view.HasMesh)
+            {
+                Vector3 fitCenter = _view.Center; float fitRadius = _view.Radius;
+                if (_hasFlat && _flatView != null && _flatView.HasMesh)
+                {
+                    Vector3 flatCen = _flatView.Center + _flatView.ModelOffset;   // M' placed center
+                    float flatRad = _flatView.Radius;
+                    Vector3 bbLo = Vector3.ComponentMin(fitCenter - new Vector3(fitRadius), flatCen - new Vector3(flatRad));
+                    Vector3 bbHi = Vector3.ComponentMax(fitCenter + new Vector3(fitRadius), flatCen + new Vector3(flatRad));
+                    fitCenter = (bbLo + bbHi) * 0.5f; fitRadius = MathF.Max(1e-4f, (bbHi - bbLo).Length * 0.5f);
+                }
+                _target = fitCenter; _distance = fitRadius * 3f;
+                _grid.Build(fitCenter, fitRadius);
+                _reframe = false;
             }
 
             // Depth state EVERY frame: GLWpfControl rebinds its own framebuffer / resets GL state
@@ -546,6 +667,11 @@ namespace CreasePatchSolver
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
             if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp; _view.Draw(view, proj); }   // Facet -> shader
+            if (_hasFlat && _flatView != null && _flatView.HasMesh)   // BFF flat map M', beside M on the z=0 plane
+            {
+                _flatView.Sharpness = (float)_sim.Facet; _flatView.FacetExp = (float)_sim.FacetExp;
+                _flatView.Draw(view, proj);
+            }
         }
     }
 }

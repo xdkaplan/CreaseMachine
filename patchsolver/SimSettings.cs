@@ -10,6 +10,9 @@ namespace CreasePatchSolver
     sealed class SimSettings : INotifyPropertyChanged
     {
         int _iterPerRun = 10, _momFix = 4;
+        // PatchSolver mesh picker: 1..30 maps to the NURBS test surfaces 0.stl..29.stl. Changing it
+        // resets the app to that mesh (load + clear flat + re-arm BFF) from the MainWindow handler.
+        int _meshIndex = 1;
         // CrazeBand is shown to the user in DEGREES (more intuitive than radians); the engine wants
         // radians, so ToFlowParams() converts. 5.7 deg == the engine's documented 0.1 rad default.
         double _step = 0.01, _momentum = 0.9, _deCraze = 0.0, _crazeBandDeg = 5.7, _sharpness = 4.0, _detMix = 0.05;
@@ -27,6 +30,7 @@ namespace CreasePatchSolver
         public bool AdaptiveDetMix { get => _adaptiveDetMix; set => Set(ref _adaptiveDetMix, value); }
         public double AdaptiveDetMixPow { get => _adaptiveDetMixPow; set => Set(ref _adaptiveDetMixPow, value); }
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
+        public int MeshIndex { get => _meshIndex; set => Set(ref _meshIndex, value); }
 
         // The canonical "100%" deCraze weight — the top of the 0-100% scale used by the deCraze
         // slider (its Maximum maps to DeCrazeMax). Defined once here so the 0.04 isn't a magic number

@@ -14,7 +14,7 @@ namespace CreasePatchSolver
     sealed class MeshView : IDisposable
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
-        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp;
+        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp, _uEdge, _uEdgeColor;
         int _tex;
         bool _hasMatcap;
         int _indexCount;
@@ -24,6 +24,10 @@ namespace CreasePatchSolver
         public float Radius { get; private set; } = 1f;
         public float Sharpness = 1f;     // 0 = smooth, 1 = faceted; set per frame from the Facet slider
         public float FacetExp = 1f;      // facet response exponent (Curve slider)
+        public Vector3 ModelOffset = Vector3.Zero;   // world translation applied before view (draw a mesh beside another)
+        public bool HasMesh => _ready;   // true once a mesh has been uploaded
+        public bool ShowEdges = false;   // overlay the triangle edges (used for the flat map M', which is otherwise a featureless flat blob)
+        public Vector3 EdgeColor = new Vector3(0.10f, 0.10f, 0.13f);
 
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
@@ -47,7 +51,10 @@ uniform sampler2D uMatcap;
 uniform int uHasMatcap;
 uniform float uSharpness;     // 0 = smooth (averaged normal), 1 = faceted (per-face normal)
 uniform float uFacetExp;      // response curve: blend = pow(sharpness, exp). 1 = linear
+uniform int uEdge;            // 1 = edge/wireframe pass -> output solid uEdgeColor
+uniform vec3 uEdgeColor;
 void main() {
+    if (uEdge == 1) { FragColor = vec4(uEdgeColor, 1.0); return; }
     vec3 sn = normalize(vN);
     // Geometric face normal from screen-space derivatives = the 'unwelded' normal, for free.
     vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
@@ -77,6 +84,8 @@ void main() {
             _uHasMatcap = GL.GetUniformLocation(_prog, "uHasMatcap");
             _uSharpness = GL.GetUniformLocation(_prog, "uSharpness");
             _uFacetExp = GL.GetUniformLocation(_prog, "uFacetExp");
+            _uEdge = GL.GetUniformLocation(_prog, "uEdge");
+            _uEdgeColor = GL.GetUniformLocation(_prog, "uEdgeColor");
         }
 
         public void SetMatcap(byte[] bgra, int w, int h)
@@ -176,7 +185,8 @@ void main() {
         public void Draw(Matrix4 view, Matrix4 proj)
         {
             if (!_ready) return;
-            Matrix4 mvp = view * proj;                 // OpenTK row-major + transpose=false convention
+            Matrix4 model = Matrix4.CreateTranslation(ModelOffset);   // pure translation; doesn't affect normals
+            Matrix4 mvp = model * view * proj;         // OpenTK row-major + transpose=false convention
             Matrix3 normalMat = new Matrix3(view);     // rigid view -> rotation is the normal transform
             GL.UseProgram(_prog);
             GL.UniformMatrix4(_uMvp, false, ref mvp);
@@ -192,7 +202,20 @@ void main() {
                 GL.Uniform1(_uMatcap, 0);
             }
             GL.BindVertexArray(_vao);
+            // Filled pass. When edges are on, push the fill back a touch (polygon offset) so the
+            // wireframe overlay drawn at true depth wins the depth test (clean hidden-line look).
+            GL.Uniform1(_uEdge, 0);
+            if (ShowEdges) { GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1f, 1f); }
             GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
+            if (ShowEdges)
+            {
+                GL.Disable(EnableCap.PolygonOffsetFill);
+                GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
+                GL.Uniform1(_uEdge, 1);
+                GL.Uniform3(_uEdgeColor, EdgeColor.X, EdgeColor.Y, EdgeColor.Z);
+                GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
+                GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+            }
             GL.BindVertexArray(0);
         }
 

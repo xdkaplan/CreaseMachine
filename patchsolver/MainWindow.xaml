@@ -74,9 +74,12 @@
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="CreasePatchSolver" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
-                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | +N iter. -->
+                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | Flatten | +N iter. -->
                 <Button x:Name="IterButton" DockPanel.Dock="Right" Content="{Binding IterLabel}"
                         Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center" />
+                <Button x:Name="FlattenButton" DockPanel.Dock="Right" Content="Flatten"
+                        Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
+                        ToolTip="Run Boundary First Flattening and show the flat map beside the mesh" />
                 <Button x:Name="SubdivideButton" DockPanel.Dock="Right" Content="SubD"
                         Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
                         ToolTip="One 1-to-4 subdivision (refine, then keep flowing)" />
@@ -153,74 +156,13 @@
                         <TabItem Header="SIMULATION">
                             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,8">
                                 <StackPanel Margin="10,0,10,0">
+                                    <!-- Mesh picker: 1..30 -> NURBS test surfaces 0.stl..29.stl. Changing this
+                                         resets the app to that mesh (load + clear flat + re-arm BFF). -->
                                     <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Iter / run" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding IterPerRun}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="1" Maximum="100" Value="{Binding IterPerRun}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Step" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center">
-                                            <TextBlock.Text>
-                                                <MultiBinding Converter="{StaticResource RangeToPercent}">
-                                                    <Binding Path="Value" ElementName="StepSlider" />
-                                                    <Binding Path="Minimum" ElementName="StepSlider" />
-                                                    <Binding Path="Maximum" ElementName="StepSlider" />
-                                                </MultiBinding>
-                                            </TextBlock.Text>
-                                        </TextBlock>
-                                        <Slider x:Name="StepSlider" Minimum="0.001" Maximum="0.05" Value="{Binding Step}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Momentum" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Momentum, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="0.95" Value="{Binding Momentum}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="deCraze" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DeCraze, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="3" Value="{Binding DeCraze}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="CrazeBand" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding CrazeBandDeg, StringFormat={}{0:0.#}°}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="30" Value="{Binding CrazeBandDeg}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Sharpness" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Sharpness, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="8" Value="{Binding Sharpness}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="DetMix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Constant blend floor: 0 = paper-faithful λ_min, 1 = det (λ_min·λ_max). Adaptive (below) raises it per-vertex." />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding DetMix, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="1" Value="{Binding DetMix}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Adaptive" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Adaptive DetMix: raise the blend toward 1 at near-degenerate (twisty) vertices only, leaving real creases paper-faithful. Removes the symmetric-mesh twist." />
-                                        <CheckBox IsChecked="{Binding AdaptiveDetMix}" Content="degeneracy-driven" Foreground="#8A8A98" FontSize="11" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0" IsEnabled="{Binding AdaptiveDetMix}">
-                                        <TextBlock DockPanel.Dock="Left" Text="↳ Power" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Ramp sharpness: a = (1−sep)^Power. Higher = det only very near the circle; lower = det bleeds into more-anisotropic vertices." />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding AdaptiveDetMixPow, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="1" Maximum="6" Value="{Binding AdaptiveDetMixPow}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="MomFix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MomFix}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="1" Maximum="4" Value="{Binding MomFix}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Left" Text="Mesh" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Pick a NURBS test surface (1-30). Switching resets the solver to that mesh." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MeshIndex}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
                                 </StackPanel>
                             </ScrollViewer>
