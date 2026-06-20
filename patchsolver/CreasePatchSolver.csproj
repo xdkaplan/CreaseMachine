@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>CreasePatchSolver</AssemblyName>
+    <RootNamespace>CreasePatchSolver</RootNamespace>
+  </PropertyGroup>
+  <!-- In-process net8 WPF viewer/patch-solver. Renders via OpenTK + GLWpfControl (MatCap shader).
+       Drives the same Rhino-free engine the plugin/CLI use, in-process. -->
+  <ItemGroup>
+    <PackageReference Include="OpenTK" Version="4.8.2" />
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.3" />
+  </ItemGroup>
+  <!-- same Rhino-free engine the plugin/CLI use, compiled in-process under net8 -->
+  <ItemGroup>
+    <Reference Include="Plankton">
+      <HintPath>..\lib\Plankton.dll</HintPath>
+    </Reference>
+    <Compile Include="..\src\Vec3.cs" />
+    <Compile Include="..\src\DevelopabilityEnergy.cs" />
+    <Compile Include="..\src\MeshOps.cs" />
+    <Compile Include="..\src\Session.cs" />
+    <Compile Include="..\src\MeshIO.cs" />
+    <Compile Include="..\src\FlowMetrics.cs" />
+  </ItemGroup>
+  <!-- bundled MatCap textures (nidorx-style lit spheres); copied next to the exe and loaded at runtime -->
+  <ItemGroup>
+    <Content Include="assets\matcaps\*.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>
