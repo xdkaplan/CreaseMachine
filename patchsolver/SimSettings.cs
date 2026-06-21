@@ -19,6 +19,14 @@ namespace CreasePatchSolver
         // Experimental: adaptive DetMix - raise the lambda_min<->det blend toward 1 at near-degenerate
         // ("twisty") vertices via a = (1-sep)^pow, leaving real creases (sep->1) at the DetMix floor.
         bool _adaptiveDetMix = false; double _adaptiveDetMixPow = 2.0;
+        // Isometric patch-solver OBJECTIVE weights (IsometricLM.Solve, Levenberg-Marquardt). There is no
+        // step / learning rate: LM computes its own step (damped normal equations), so these are pure
+        // objective knobs. Iso is the developability gain: higher = drive relErr lower (LM is stable to
+        // any scale - it can't diverge like the old explicit step did). Anchor is the faithfulness dial:
+        // low = deform M freely toward developable (relErr -> ~0; at anchor 0.001, LM reaches ~0.005%),
+        // high = stay near the original. Fair (uniform-Laplacian smoothing) is largely unneeded under LM
+        // (no zigzag to suppress); leave it low or 0.
+        double _isoWeight = 10.0, _fairWeight = 0.1, _anchorWeight = 0.1;
 
         public int IterPerRun { get => _iterPerRun; set { if (Set(ref _iterPerRun, value)) OnChanged(nameof(IterLabel)); } }
         public double Step { get => _step; set => Set(ref _step, value); }
@@ -31,6 +39,11 @@ namespace CreasePatchSolver
         public double AdaptiveDetMixPow { get => _adaptiveDetMixPow; set => Set(ref _adaptiveDetMixPow, value); }
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
         public int MeshIndex { get => _meshIndex; set => Set(ref _meshIndex, value); }
+
+        // Isometric patch-solver objective weights (drive IsometricLM.Solve via IsometricStep()).
+        public double IsoWeight { get => _isoWeight; set => Set(ref _isoWeight, value); }
+        public double FairWeight { get => _fairWeight; set => Set(ref _fairWeight, value); }
+        public double AnchorWeight { get => _anchorWeight; set => Set(ref _anchorWeight, value); }
 
         // The canonical "100%" deCraze weight — the top of the 0-100% scale used by the deCraze
         // slider (its Maximum maps to DeCrazeMax). Defined once here so the 0.04 isn't a magic number

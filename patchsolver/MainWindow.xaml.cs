@@ -14,6 +14,17 @@ namespace CreasePatchSolver
         GLWpfControl _gl;
         MeshView _view;
         MeshView _flatView;          // BFF flat map M', drawn beside M (offset in +X) on the z=0 plane
+        PlanktonMesh _flat;          // the live flat map M' the isometric solver mutates (retained from ShowFlat)
+        CreaseMachine.Vec3[] _M0;    // original M positions, captured when the flat first appears (proximity anchor)
+        double _lastEIso;            // last E_iso (edge-length-squared mismatch) for the convergence readout
+        double _lmLambda;            // Levenberg-Marquardt damping; persists across ticks (trust region).
+        const int LmCgIters = 80;    // matrix-free CG iterations per LM linear solve (truncated/inexact is fine)
+        double _refMeanLen2;         // mean squared edge length of the ORIGINAL mesh, frozen at first flatten
+        double _isoResFactor = 1.0;  // resolution compensation on wIso: (_refMeanLen2 / current meanLen2)^1.5.
+                                     // The iso gradient scales ~L^3, so subdivision (edges halve) collapses it
+                                     // ~8x and the anchor then dominates, dragging M back toward M0 (relErr
+                                     // climbs). This restores the iso<->anchor balance so subdivide is
+                                     // resolution-NEUTRAL. ==1.0 at base res (ref==current) -> defaults unchanged.
         bool _hasFlat;               // true after a successful Flatten; cleared on load/reset (stale M')
         bool _bffNeeded = true;      // true => BFF hasn't run for the CURRENT mesh yet. Set on every
                                      // load/reset; cleared the first time BFF flattens this mesh
@@ -155,6 +166,8 @@ namespace CreasePatchSolver
             {
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
+                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
+                else if (e.Key == Key.D && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Subdiv(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Space)              // hold to run the flow continuously
                 {
                     if (!_spaceHeld) { _spaceHeld = true; _spaceIters = 0; _flowTimer.Start(); }
@@ -162,14 +175,16 @@ namespace CreasePatchSolver
                 }
             };
 
-            // Hold Space: run one developability iteration per tick until released. On release, record
-            // the held run as a single Run(N) in the journal (so it stays replayable) without re-running.
+            // Hold Space: run a BATCH of solver steps per timer tick until released (the timer can't tick
+            // faster than ~16ms, so batching is how we go fast — one GPU re-upload + redraw per tick, not
+            // per step). On release, record the held run as a single Run(N) in the journal (replayable).
+            const int spaceItersPerTick = 3;   // LM iterations per 16ms tick (each is worth ~thousands of GD steps)
             _flowTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _flowTimer.Tick += (s, e) =>
             {
                 if (_session == null) { _flowTimer.Stop(); return; }
-                ApplyRun(1, _sim.ToFlowParams());   // ApplyRun doesn't journal (Execute does), so no flooding
-                _spaceIters++;
+                ApplyRun(spaceItersPerTick, _sim.ToFlowParams());   // ApplyRun doesn't journal (Execute does)
+                _spaceIters += spaceItersPerTick;
             };
             PreviewKeyUp += (s, e) =>
             {
@@ -291,6 +306,8 @@ namespace CreasePatchSolver
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
+            _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
+            _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // new mesh -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // new mesh -> BFF must (re)run before the sim can step
             Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(path);
             _gl?.InvalidateVisual();
@@ -325,14 +342,12 @@ namespace CreasePatchSolver
         {
             if (_session == null || n <= 0) return;
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            for (int i = 0; i < n; i++)
-            {
-                if (!PatchStep()) break;   // BFF not ready (failed) -> don't run the sim
-            }
+            PatchStep(n);                  // BFF gate (once) + n LM iterations in a single Solve (topology built once)
             sw.Stop();
             _lastRunMs = sw.Elapsed.TotalMilliseconds;
             _totalIters += n;
-            _meshDirty = true;
+            _meshDirty = true;                                          // OnRender re-uploads M (_view) once
+            if (_hasFlat && _flatView != null) _flatView.Upload(_flat); // re-upload M' once per batch, not per step
             Title = "CreasePatchSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
             UpdateStatus();
             _gl?.InvalidateVisual();
@@ -342,7 +357,7 @@ namespace CreasePatchSolver
         // Flattening (once), uploads the flat map M' beside M, and arms the sim. Subsequent steps (and
         // any step after a manual Flatten already ran for this mesh) skip straight to IsometricStep.
         // Returns false if BFF was needed but failed (caller should stop the run).
-        bool PatchStep()
+        bool PatchStep(int lmIters)
         {
             if (_session == null) return false;
             if (_bffNeeded)
@@ -353,23 +368,69 @@ namespace CreasePatchSolver
                 ShowFlat(flat);                            // upload M' beside M (shared offset logic)
                 _bffNeeded = false;                        // BFF done for this mesh
             }
-            IsometricStep();
+            IsometricStep(lmIters);
             return true;
         }
 
-        // STUB — the PatchSolver per-iteration update. No-op for now.
-        // TODO: Jiang isometric co-refinement — minimize E_iso (corresponding-parallelogram
-        // congruence) + fairness over the index-aligned M <-> M' correspondence. No-op for now.
-        void IsometricStep()
+        // `lmIters` Levenberg-Marquardt iterations co-refining M (3D) and its flat image M' toward
+        // isometry (= developability) over the index-aligned M <-> M' correspondence. LM solves a damped
+        // normal-equation system each iteration (matrix-free CG), so it computes the step direction AND
+        // size (no Step knob) and auto-adapts its damping (trust region) — driving relErr -> 0 and staying
+        // robust to weight scale where the explicit Jacobi step diverged. The weights are the objective:
+        // Iso (developability) vs Anchor (faithfulness) vs Fair (smoothness). lambda persists across calls.
+        // No GPU re-upload here — ApplyRun re-uploads M and M' ONCE after the batch.
+        void IsometricStep(int lmIters)
         {
+            if (_session == null || _flat == null || _M0 == null) return;
+            _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
+                          _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight,
+                          lmIters, LmCgIters, ref _lmLambda);
         }
 
-        // One 1->4 subdivision of the live mesh (geometry-preserving; momentum resets inside
-        // FlowSession.Subdivide as indices are renumbered). Camera unchanged.
+        // One 1->4 subdivision of the live mesh. Geometry-preserving (midpoints are linear). When a
+        // flat map exists we refine M, M' AND the anchor M0 with the SAME deterministic midpoint
+        // scheme on the SAME connectivity, so (a) the M'[i]==M[i] index alignment the solver depends
+        // on survives, and (b) M0 stays the ORIGINAL-shape reference at the new resolution (not a
+        // re-anchor onto the already-deformed M). Then the solver keeps developing at higher res
+        // (paper: subdivide after the flow settles, then keep flowing to sharpen at hi-res). Camera
+        // unchanged (bounds are identical — midpoints lie on existing edges).
         void ApplySubdivide()
         {
             if (_session == null) return;
-            _session.Subdivide();
+
+            bool hadFlat = _flat != null && _M0 != null && _M0.Length == _session.Mesh.Vertices.Count;
+            PlanktonMesh m0mesh = null;
+            if (hadFlat)
+            {
+                // carry the anchor positions on the CURRENT (pre-subdivide) connectivity so that
+                // subdividing interpolates its midpoints exactly as M and M' get interpolated.
+                m0mesh = new PlanktonMesh();
+                for (int v = 0; v < _M0.Length; v++) m0mesh.Vertices.Add(_M0[v].X, _M0[v].Y, _M0[v].Z);
+                for (int f = 0; f < _session.Mesh.Faces.Count; f++)
+                {
+                    if (_session.Mesh.Faces[f].IsUnused) continue;
+                    int[] fv = _session.Mesh.Faces.GetFaceVertices(f);
+                    if (fv.Length == 3) m0mesh.Faces.AddFace(fv);
+                }
+            }
+
+            _session.Subdivide();                            // refine M
+            if (hadFlat)
+            {
+                _flat = MeshOps.UniformSubdivide(_flat);     // refine M' identically -> alignment preserved
+                m0mesh = MeshOps.UniformSubdivide(m0mesh);   // refine the anchor identically
+                var verts = m0mesh.Vertices; int n = verts.Count;
+                var m0 = new CreaseMachine.Vec3[n];
+                for (int v = 0; v < n; v++) { var p = verts[v]; m0[v] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
+                _M0 = m0;
+                // restore the iso<->anchor balance at the finer mesh: the iso gradient scales ~L^3, so
+                // compensate wIso by (originalScale / currentScale)^1.5. Frozen ref -> base res stays ==1.
+                double cur = MeanLen2(_session.Mesh);
+                _isoResFactor = (_refMeanLen2 > 0 && cur > 0) ? Math.Pow(_refMeanLen2 / cur, 1.5) : 1.0;
+                _lmLambda = 0;                               // resolution changed -> fresh LM trust region
+                _flatView?.Upload(_flat);                    // re-upload the refined M'
+            }
+
             _meshDirty = true;
             Title = "CreasePatchSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
@@ -384,6 +445,8 @@ namespace CreasePatchSolver
             _totalIters = 0;
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
+            _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
+            _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // reset -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // reset -> BFF must (re)run before the sim can step
             Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(_meshPath);
             _gl?.InvalidateVisual();
@@ -423,18 +486,65 @@ namespace CreasePatchSolver
         void ShowFlat(PlanktonMesh flat)
         {
             if (_view == null || _flatView == null) return;   // GL views not built yet (pre-first-render)
+            _flat = flat;             // retain M' — the actual mesh the isometric solver mutates
+            CaptureM0();              // snapshot M's positions once per mesh (proximity anchor for the solver)
             _flatView.Upload(flat);   // sets _flatView.Center / .Radius from the flat geometry
+            PlaceFlat();              // place M' beside M on the z=0 plane
 
+            _hasFlat = true;
+            // NOTE: intentionally no camera reframe here — keep the current view when the 2D pattern
+            // appears (M' is placed beside M; the user can zoom-extents manually if they want it framed).
+            _gl?.InvalidateVisual();
+        }
+
+        // Place the flat map M' beside M on the z=0 plane (to +X of M by both radii plus a gap). Called
+        // from ShowFlat (first flatten) and IsometricStep (after M' deforms) so M' tracks alongside M.
+        void PlaceFlat()
+        {
+            if (_view == null || _flatView == null) return;
             float gap = 0.3f * (_view.Radius + _flatView.Radius);
             var targetCenter = new Vector3(
                 _view.Center.X + _view.Radius + _flatView.Radius + gap,
                 _view.Center.Y,
                 0f);
             _flatView.ModelOffset = targetCenter - _flatView.Center;
+        }
 
-            _hasFlat = true;
-            _reframe = true;          // M' just appeared -> re-fit the camera to show M and M' together
-            _gl?.InvalidateVisual();
+        // Snapshot the live 3D mesh M's current positions as the proximity anchor M0, ONCE per mesh
+        // (when the flat first appears). Without an anchor the trivial isometry minimizer is M
+        // collapsing flat onto M'. Guarded so a later re-Flatten on the same mesh doesn't re-anchor to
+        // an already-deformed M; _M0 is nulled on load/reset so a stale anchor is never reused.
+        void CaptureM0()
+        {
+            if (_M0 != null || _session == null) return;
+            var verts = _session.Mesh.Vertices;
+            int n = verts.Count;
+            var m0 = new CreaseMachine.Vec3[n];
+            for (int v = 0; v < n; v++)
+            {
+                var p = verts[v];
+                m0[v] = new CreaseMachine.Vec3(p.X, p.Y, p.Z);
+            }
+            _M0 = m0;
+            _refMeanLen2 = MeanLen2(_session.Mesh);   // freeze the original edge scale for iso resolution compensation
+            _isoResFactor = 1.0;                      // base resolution -> no compensation yet
+            _lmLambda = 0;                            // fresh LM trust region for this mesh
+        }
+
+        // Mean squared edge length of a mesh (Sum |edge|^2 / edgeCount). Used to freeze the original
+        // scale (_refMeanLen2) and to size the post-subdivide iso compensation factor.
+        static double MeanLen2(PlanktonMesh M)
+        {
+            double s = 0; int n = 0, nH = M.Halfedges.Count;
+            for (int h = 0; h < nH; h += 2)
+            {
+                if (M.Halfedges[h].IsUnused) continue;
+                int i = M.Halfedges[h].StartVertex, j = M.Halfedges[h + 1].StartVertex;
+                var a = M.Vertices[i]; var b = M.Vertices[j];
+                double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+                s += dx * dx + dy * dy + dz * dz; n++;
+            }
+            return n > 0 ? s / n : 0.0;
         }
 
         // ===================== journal save / replay =====================
@@ -500,8 +610,11 @@ namespace CreasePatchSolver
         {
             if (StatusText == null) return;
             int v = _session != null ? _session.Mesh.Vertices.Count : 0;
+            string eIso = _hasFlat
+                ? "  ·  E_iso " + _lastEIso.ToString("0.###e+0", System.Globalization.CultureInfo.InvariantCulture)
+                : "";
             StatusText.Text = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "flow {0:0.0} ms · upload {1:0.0} ms · {2} verts", _lastRunMs, _lastUploadMs, v);
+                "flow {0:0.0} ms · upload {1:0.0} ms · {2} verts{3}", _lastRunMs, _lastUploadMs, v, eIso);
         }
 
         static byte[] DecodeMatcapBgra(string path, out int w, out int h)

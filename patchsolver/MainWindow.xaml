@@ -164,6 +164,29 @@
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MeshIndex}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
+
+                                    <!-- Isometric patch-solver OBJECTIVE weights: developability driver (Iso),
+                                         anti-zigzag fairness (Fair), proximity anchor to the original shape (Anchor).
+                                         These define the objective for IsometricLM.Solve (Levenberg-Marquardt); the
+                                         solver computes its own step, so there is no step / learning-rate knob. -->
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Iso" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Developability driver (gain): weight on equalizing corresponding edge lengths between M and the flat M'. LM is stable at any value — crank it freely." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding IsoWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="50" Value="{Binding IsoWeight}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Fair" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Uniform-Laplacian smoothing on M and M'. Largely unneeded under the LM solver (no zigzag to suppress) — leave low or 0." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding FairWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="1" Value="{Binding FairWeight}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Anchor" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Faithfulness dial: weight holding M near its original shape. Lower toward 0 to drive relErr -> ~0 (more deformation); raise to stay faithful. Without any anchor M can collapse flat onto M'." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding AnchorWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="2" Value="{Binding AnchorWeight}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>
