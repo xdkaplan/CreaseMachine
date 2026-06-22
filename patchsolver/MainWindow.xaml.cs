@@ -140,10 +140,9 @@ namespace CreasePatchSolver
             // Top-bar actions route through Execute() so each is recorded to the session journal.
             SolveButton.Click += async (s, e) => await OnSolveAsync();   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal (not journaled)
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
-            SubdivideButton.Click += (s, e) => Execute(StudioCommand.Subdiv(), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
-            // click a preset, Ctrl+R to start clean, then hold Space — repeat for each to compare.
+            // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
             PresetAButton.Click += (s, e) => _sim.ApplyPreset('A');
             PresetBButton.Click += (s, e) => _sim.ApplyPreset('B');
             PresetCButton.Click += (s, e) => _sim.ApplyPreset('C');
@@ -185,7 +184,6 @@ namespace CreasePatchSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
-                else if (e.Key == Key.D && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Subdiv(), record: true); e.Handled = true; }
             };
             // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
             // a progress+cancel modal. ApplyRun/PatchStep remain only for journal replay of legacy Run(N).)

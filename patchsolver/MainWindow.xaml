@@ -74,13 +74,11 @@
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="CreasePatchSolver" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
-                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | Solve. -->
+                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | Solve.
+                     (Subdivision is folded into Solve via the Subdivision-level slider — no separate button.) -->
                 <Button x:Name="SolveButton" DockPanel.Dock="Right" Content="Solve"
                         Padding="16,2" Margin="4,0,0,0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
-                        ToolTip="Bake: develop to the selected Accuracy, then for each Subdivision level subdivide and re-develop. Runs to completion (no live animation), then shows the result." />
-                <Button x:Name="SubdivideButton" DockPanel.Dock="Right" Content="SubD"
-                        Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
-                        ToolTip="One 1-to-4 subdivision (refine, then keep flowing)" />
+                        ToolTip="Bake: develop to the selected Accuracy, then for each Subdivision level subdivide and re-develop. Runs on a worker with a progress + cancel modal, then shows the result." />
                 <Button x:Name="ResetButton" DockPanel.Dock="Right" Content="Reset"
                         Padding="10,2" FontSize="12" VerticalAlignment="Center"
                         ToolTip="Reload the input mesh and reset the flow" />
