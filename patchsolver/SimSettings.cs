@@ -44,6 +44,10 @@ namespace CreasePatchSolver
         public double AdaptiveDetMixPow { get => _adaptiveDetMixPow; set => Set(ref _adaptiveDetMixPow, value); }
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
         public int MeshIndex { get => _meshIndex; set => Set(ref _meshIndex, value); }
+        // Test-mesh source: false = NURBS surface STLs (single open patches); true = Solid FBX meshes
+        // (6-sided, unwelded -> per-face components). The Mesh index selects within the chosen set.
+        bool _loadSolid;
+        public bool LoadSolid { get => _loadSolid; set => Set(ref _loadSolid, value); }
 
         // Isometric patch-solver knobs (drive IsometricLM.Solve + IsometricSmoothers via IsometricStep()).
         public double IsoWeight { get => _isoWeight; set => Set(ref _isoWeight, value); }
@@ -136,6 +140,13 @@ namespace CreasePatchSolver
         // Overlay per-vertex ruling lines (developable generators = zero-curvature directions) on M.
         bool _showRulings;
         public bool ShowRulings { get => _showRulings; set => Set(ref _showRulings, value); }
+
+        // Pin each patch boundary onto a low-DOF degree-3 B-spline "bent wire" (~1 control point per
+        // SeamRatio mesh points) and hold it fixed during the solve, so seams are smooth + shared.
+        bool _fixBSplineEdges;
+        public bool FixBSplineEdges { get => _fixBSplineEdges; set => Set(ref _fixBSplineEdges, value); }
+        int _seamRatio = 5;
+        public int SeamRatio { get => _seamRatio; set => Set(ref _seamRatio, value); }
 
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";

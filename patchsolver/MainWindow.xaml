@@ -163,6 +163,11 @@
                                         <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
+                                        <CheckBox Content="Solid (FBX) — load 6-sided test meshes" IsChecked="{Binding LoadSolid, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
+                                                  ToolTip="Off = NURBS surface STLs (single open patches). On = Solid FBX meshes (6-sided, unwelded into per-face components). The Mesh index selects within the chosen set." />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Subdiv" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
                                                    ToolTip="Subdivision level: how many 1->4 refine rounds Solve does (develop to accuracy, then subdivide + re-develop, per level). 0 = no subdivision." />
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding SubdivLevel}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
@@ -193,6 +198,11 @@
                                         <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
                                         <CheckBox Content="Show rulings (developable generators)" IsChecked="{Binding ShowRulings, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
                                                   ToolTip="Overlay per-vertex ruling lines — the zero-curvature straight generators (gold). Clean parallel rulings = genuinely developable; swirling = not there yet." />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
+                                        <CheckBox Content="Fix B-spline edges (pin seams to a bent wire)" IsChecked="{Binding FixBSplineEdges, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
+                                                  ToolTip="Snap each patch boundary onto a low-DOF degree-3 B-spline (~1 control point per 5 mesh points) and hold it fixed while solving. Seams become smooth shared wires; cyan overlay shows the fitted curve. Takes effect on the next Solve." />
                                     </DockPanel>
 
                                     <Expander Header="Advanced" IsExpanded="False" Foreground="#9AA0A8" FontSize="11" Margin="0,10,0,0">

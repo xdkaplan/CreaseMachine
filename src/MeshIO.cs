@@ -14,7 +14,10 @@ namespace CreaseMachine
     {
         public static PlanktonMesh Load(string path)
         {
-            return path.ToLowerInvariant().EndsWith(".obj") ? LoadObj(path) : LoadBinaryStl(path);
+            string p = path.ToLowerInvariant();
+            if (p.EndsWith(".obj")) return LoadObj(path);
+            if (p.EndsWith(".fbx")) return FbxIO.LoadBinaryFbx(path);   // preserves unwelded seam topology (per-face components)
+            return LoadBinaryStl(path);
         }
 
         public static PlanktonMesh LoadBinaryStl(string path)

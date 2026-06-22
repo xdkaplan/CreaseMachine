@@ -98,7 +98,7 @@ namespace CreasePatchSolver
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
             // Default = Mesh 1 (NURBS test surface 0.stl), not the bunny. Missing -> status, no crash.
-            string def = NurbsMeshPath(_sim.MeshIndex);
+            string def = MeshPath(_sim.MeshIndex);
             if (System.IO.File.Exists(def)) Execute(StudioCommand.Load(def), record: true);
             else Title = "CreasePatchSolver — (no mesh at " + def + ")";
 
@@ -157,7 +157,7 @@ namespace CreasePatchSolver
             _sim.PropertyChanged += (s, e) =>
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual();
-                else if (e.PropertyName == nameof(SimSettings.MeshIndex)) OnMeshIndexChanged();
+                else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.LoadSolid)) OnMeshIndexChanged();
             };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
@@ -324,6 +324,13 @@ namespace CreasePatchSolver
         static string NurbsMeshPath(int meshIndex) => System.IO.Path.Combine(
             @"C:\Repo\xdkaplan\CreaseMachine\test\models\NURBS test surfaces", (meshIndex - 1) + ".stl");
 
+        // Path to a Solid (6-sided) FBX test mesh by 1-based picker index: Mesh 1 -> Solid0.fbx. These
+        // currently live where they were dropped (C:\Temp); relocate alongside the NURBS set when permanent.
+        static string SolidMeshPath(int meshIndex) => System.IO.Path.Combine(@"C:\Temp", "Solid" + (meshIndex - 1) + ".fbx");
+
+        // The active test-mesh path for a picker index, per the Surface/Solid toggle.
+        string MeshPath(int meshIndex) => _sim.LoadSolid ? SolidMeshPath(meshIndex) : NurbsMeshPath(meshIndex);
+
         // MeshIndex slider changed -> reset the app to that NURBS surface. ApplyLoad already clears
         // _hasFlat and re-arms BFF (_bffNeeded = true). The re-entrancy guard stops a programmatic
         // MeshIndex write (e.g. clamping) from recursing; the slider is snapped to integers so no clamp
@@ -334,7 +341,7 @@ namespace CreasePatchSolver
             _meshSwitching = true;
             try
             {
-                string path = NurbsMeshPath(_sim.MeshIndex);
+                string path = MeshPath(_sim.MeshIndex);
                 if (System.IO.File.Exists(path)) Execute(StudioCommand.Load(path), record: true);
                 else Title = "CreasePatchSolver — (no mesh at " + path + ")";
             }
@@ -372,6 +379,45 @@ namespace CreasePatchSolver
             return true;
         }
 
+        // ---- fixed B-spline seam edges (bent-wire pins) ----
+        bool[] _pinned;        // per-vertex: true where pinned to a seam wire (Dirichlet during the solve)
+        float[] _seamLineF;    // GL_LINES positions for the fitted seam wires (display)
+        bool _seamsDirty;      // seam display needs re-upload
+
+        // Fit a low-DOF degree-3 B-spline ("bent wire", ~1 control point per SeamRatio mesh points) to each
+        // boundary loop of the live mesh, SNAP the boundary vertices onto it, and mark them pinned so the
+        // solve holds them fixed. Builds the cyan display polyline too. Call on the (fresh/subdivided) mesh
+        // before flattening, since it moves boundary positions.
+        void SetupSeamPins()
+        {
+            _pinned = null; _seamLineF = null;
+            if (_session == null) return;
+            var mesh = _session.Mesh;
+            var loops = CreaseMachine.MeshOps.BoundaryLoops(mesh);
+            if (loops.Count == 0) return;
+            int ratio = Math.Max(2, _sim.SeamRatio);
+            var pin = new bool[mesh.Vertices.Count];
+            var seg = new System.Collections.Generic.List<float>();
+            foreach (var loop in loops)
+            {
+                var pts = new CreaseMachine.Vec3[loop.Length];
+                for (int i = 0; i < loop.Length; i++) { var p = mesh.Vertices[loop[i]]; pts[i] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
+                var tgt = CreaseMachine.BSplineFit.LowDofTargets(pts, ratio);
+                for (int i = 0; i < loop.Length; i++)
+                {
+                    mesh.Vertices[loop[i]].X = (float)tgt[i].X; mesh.Vertices[loop[i]].Y = (float)tgt[i].Y; mesh.Vertices[loop[i]].Z = (float)tgt[i].Z;
+                    pin[loop[i]] = true;
+                }
+                var curve = CreaseMachine.BSplineFit.SampleCurve(pts, ratio, 8);
+                for (int i = 0; i + 1 < curve.Length; i++)
+                {
+                    seg.Add((float)curve[i].X); seg.Add((float)curve[i].Y); seg.Add((float)curve[i].Z);
+                    seg.Add((float)curve[i + 1].X); seg.Add((float)curve[i + 1].Y); seg.Add((float)curve[i + 1].Z);
+                }
+            }
+            _pinned = pin; _seamLineF = seg.ToArray(); _seamsDirty = true;
+        }
+
         // ===================== Solve (bake) =====================
 
         // Develop to the selected Accuracy, then subdivide + re-develop for each Subdivision level. Resets to
@@ -382,6 +428,7 @@ namespace CreasePatchSolver
             if (_session == null || _meshPath == null) return;
             Title = "CreasePatchSolver — solving…";
             ApplyReset();                          // start clean from the input mesh
+            if (_sim.FixBSplineEdges) SetupSeamPins();   // snap boundaries onto bent-wire seams + pin them (before flatten)
             _view?.Upload(_session.Mesh);          // current M bounds so M' places correctly on first flatten
             if (!EnsureFlat()) { Title = "CreasePatchSolver — BFF failed"; UpdateStatus(); return; }
 
@@ -392,6 +439,7 @@ namespace CreasePatchSolver
             for (int lvl = 0; lvl < _sim.SubdivLevel && sw.ElapsedMilliseconds < budgetMs; lvl++)
             {
                 ApplySubdivide();
+                if (_sim.FixBSplineEdges) SetupSeamPins();   // re-fit the bent wire on the refined boundary
                 SolveToAccuracy(target, sw, budgetMs);
             }
 
@@ -413,7 +461,8 @@ namespace CreasePatchSolver
             {
                 _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
                     _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight,
-                    _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref _lmLambda);
+                    _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref _lmLambda,
+                    _sim.FixBSplineEdges ? _pinned : null);
                 double pct = RelErr(_session.Mesh, _flat) * 100.0;
                 if (pct <= targetPct) break;            // reached the accuracy bar
                 if (prev - pct < 1e-5) break;           // converged (no further progress) -> subdivide may help
@@ -433,7 +482,7 @@ namespace CreasePatchSolver
             if (_session == null || _flat == null || _M0 == null) return;
             _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
                           _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight, _sim.DiffFair, _sim.BendWeight, _sim.BendDiff,
-                          lmIters, LmCgIters, ref _lmLambda);
+                          lmIters, LmCgIters, ref _lmLambda, _sim.FixBSplineEdges ? _pinned : null);
             // optional non-shrinking smoother (strain distributor / de-buckler) after the LM step
             var sm = (IsometricSmoothers.Kind)_sim.SmoothKind;
             if (sm != IsometricSmoothers.Kind.None)
@@ -866,6 +915,9 @@ namespace CreasePatchSolver
                 _view.ShowRulings = _sim.ShowRulings;
                 if (_sim.ShowRulings && _view.HasMesh && _session != null && _rulingsDirty)
                 { _view.SetRulings(RulingField.Compute(_session.Mesh, 0.45, 0.02)); _rulingsDirty = false; }
+                _view.ShowSeams = _sim.FixBSplineEdges;
+                if (_sim.FixBSplineEdges && _view.HasMesh && _seamLineF != null && _seamsDirty)
+                { _view.SetSeams(_seamLineF); _seamsDirty = false; }
                 _view.Draw(view, proj);
             }
             if (_hasFlat && _flatView != null && _flatView.HasMesh)   // BFF flat map M', beside M on the z=0 plane
