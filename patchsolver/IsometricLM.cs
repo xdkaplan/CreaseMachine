@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Threading.Tasks;
 using Plankton;
 using CreaseMachine;
 
@@ -42,6 +44,10 @@ namespace CreasePatchSolver
         public static bool DebugGradCheck = false;
         public static double LastGradCheckErr = 0.0;
 
+        // Element-count threshold above which the matrix-free apply parallelises (below it, fork/join would
+        // dominate). Tunable for benchmarking; raising it past the mesh size forces the serial path.
+        public static int ParThreshold = 2000;
+
         // Run `outerIters` LM iterations on (M, Mp). Weights define the objective (no step size). lambda
         // persists via ref. Returns the raw E_iso (Sum of squared-length mismatches, unweighted) for the
         // convergence readout - same quantity IsometricSolver.Step returns, so the GUI display is parity.
@@ -68,6 +74,36 @@ namespace CreasePatchSolver
             {
                 used[v] = !M.Vertices[v].IsUnused;
                 nbr[v] = used[v] ? (M.Vertices.GetVertexNeighbours(v) ?? Array.Empty<int>()) : Array.Empty<int>();
+            }
+
+            // per-vertex incident-edge CSR: lets J^T r be assembled as a GATHER (each vertex sums its own
+            // incident edges) rather than a SCATTER (edges add to both endpoints). The gather is race-free
+            // and deterministic, so the J^T apply can be parallelised over vertices with no accumulators.
+            // veSign[t] = +1 if this vertex is the i-endpoint of edge veEdge[t], -1 if the j-endpoint.
+            int[] veStart = new int[nV + 1];
+            for (int e = 0; e < nE; e++) { veStart[ei[e]]++; veStart[ej[e]]++; }
+            for (int v = 0, acc = 0; v <= nV; v++) { int c = veStart[v]; veStart[v] = acc; acc += c; }
+            int[] veEdge = new int[2 * nE]; sbyte[] veSign = new sbyte[2 * nE]; int[] veFill = new int[nV];
+            for (int e = 0; e < nE; e++)
+            {
+                int i = ei[e], j = ej[e];
+                int pi = veStart[i] + veFill[i]++; veEdge[pi] = e; veSign[pi] = +1;
+                int pj = veStart[j] + veFill[j]++; veEdge[pj] = e; veSign[pj] = -1;
+            }
+
+            // parallelism for the matrix-free apply (the CG-inner hot path). Every wrapped loop is write-local
+            // or gather-by-vertex, so chunked Partitioner ranges are race-free and bit-identical to serial;
+            // gated on size so small meshes (where fork/join dominates) stay serial. Capped at ProcessorCount-2
+            // like the covariance engine. The Solve bake is synchronous, so this does not contend with live UI.
+            int maxPar = Math.Max(1, Environment.ProcessorCount - 2);
+            var parOpts = new ParallelOptions { MaxDegreeOfParallelism = maxPar };
+            bool parV = nV >= ParThreshold, parE = nE >= ParThreshold;
+            int vChunk = Math.Max(64, (nV + maxPar * 4 - 1) / (maxPar * 4));
+            int eChunk = Math.Max(64, (nE + maxPar * 4 - 1) / (maxPar * 4));
+            void Par(bool on, int n, int chunk, Action<int, int> body)
+            {
+                if (on) Parallel.ForEach(Partitioner.Create(0, n, chunk), parOpts, rg => body(rg.Item1, rg.Item2));
+                else body(0, n);
             }
 
             double sIso = Math.Sqrt(Math.Max(wIso, 0.0));
@@ -128,25 +164,36 @@ namespace CreasePatchSolver
             double[] pmB = new double[3 * nV], t1B = new double[3 * nV], t2B = new double[3 * nV];
             void Umb(double[] inp, double[] outp)
             {
-                for (int v = 0; v < nV; v++)
+                Par(parV, nV, vChunk, (lo, hi) =>
                 {
-                    int bb = 3 * v; var nb = nbr[v]; int d = nb.Length;
-                    if (!used[v] || d == 0) { outp[bb] = outp[bb + 1] = outp[bb + 2] = 0; continue; }
-                    double ax = 0, ay = 0, az = 0;
-                    for (int k = 0; k < d; k++) { int u = nb[k]; ax += inp[3 * u]; ay += inp[3 * u + 1]; az += inp[3 * u + 2]; }
-                    double iv = 1.0 / d;
-                    outp[bb] = ax * iv - inp[bb]; outp[bb + 1] = ay * iv - inp[bb + 1]; outp[bb + 2] = az * iv - inp[bb + 2];
-                }
+                    for (int v = lo; v < hi; v++)
+                    {
+                        int bb = 3 * v; var nb = nbr[v]; int d = nb.Length;
+                        if (!used[v] || d == 0) { outp[bb] = outp[bb + 1] = outp[bb + 2] = 0; continue; }
+                        double ax = 0, ay = 0, az = 0;
+                        for (int k = 0; k < d; k++) { int u = nb[k]; ax += inp[3 * u]; ay += inp[3 * u + 1]; az += inp[3 * u + 2]; }
+                        double iv = 1.0 / d;
+                        outp[bb] = ax * iv - inp[bb]; outp[bb + 1] = ay * iv - inp[bb + 1]; outp[bb + 2] = az * iv - inp[bb + 2];
+                    }
+                });
             }
-            void UmbT(double[] inp, double[] outp)   // exact transpose of Umb: (U^T r)_j = sum_{i in nbr(j)} r_i/deg_i - r_j
-            {
-                for (int v = 0; v < nV; v++) { int bb = 3 * v; if (!used[v]) { outp[bb] = outp[bb + 1] = outp[bb + 2] = 0; continue; } outp[bb] = -inp[bb]; outp[bb + 1] = -inp[bb + 1]; outp[bb + 2] = -inp[bb + 2]; }
-                for (int v = 0; v < nV; v++)
+            void UmbT(double[] inp, double[] outp)   // exact transpose of Umb, as a per-vertex GATHER (race-free):
+            {                                        // (U^T r)_w = -r_w + sum_{s in nbr(w), used, deg>0} r_s / deg(s)
+                Par(parV, nV, vChunk, (lo, hi) =>
                 {
-                    var nb = nbr[v]; int d = nb.Length; if (!used[v] || d == 0) continue;
-                    double iv = 1.0 / d, rx = inp[3 * v] * iv, ry = inp[3 * v + 1] * iv, rz = inp[3 * v + 2] * iv;
-                    for (int k = 0; k < d; k++) { int u = nb[k]; outp[3 * u] += rx; outp[3 * u + 1] += ry; outp[3 * u + 2] += rz; }
-                }
+                    for (int w = lo; w < hi; w++)
+                    {
+                        int bb = 3 * w;
+                        double sx = used[w] ? -inp[bb] : 0.0, sy = used[w] ? -inp[bb + 1] : 0.0, sz = used[w] ? -inp[bb + 2] : 0.0;
+                        var nb = nbr[w]; int d = nb.Length;
+                        for (int k = 0; k < d; k++)
+                        {
+                            int s = nb[k]; int ds = nbr[s].Length; if (!used[s] || ds == 0) continue;
+                            double iv = 1.0 / ds; sx += inp[3 * s] * iv; sy += inp[3 * s + 1] * iv; sz += inp[3 * s + 2] * iv;
+                        }
+                        outp[bb] = sx; outp[bb + 1] = sy; outp[bb + 2] = sz;
+                    }
+                });
             }
             // bendDiff=true  -> DIFFERENTIAL bending vs U^2(M0): preserve original curvature (low-drift mode).
             // bendDiff=false -> PLAIN bending toward U^2=0: drive to the SMOOTHEST shape -> a single entirely
@@ -222,26 +269,32 @@ namespace CreasePatchSolver
             void ApplyJ(double[] v, double[] rout)
             {
                 Array.Clear(rout, 0, nR);
-                for (int e = 0; e < nE; e++)
+                Par(parE, nE, eChunk, (lo, hi) =>
                 {
-                    int i = ei[e], j = ej[e];
-                    double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
-                    double dpx = eDPx[e], dpy = eDPy[e];
-                    double vmx = v[3 * i] - v[3 * j], vmy = v[3 * i + 1] - v[3 * j + 1], vmz = v[3 * i + 2] - v[3 * j + 2];
-                    double vpx = v[oP + 2 * i] - v[oP + 2 * j], vpy = v[oP + 2 * i + 1] - v[oP + 2 * j + 1];
-                    rout[e] = sIso * (2.0 * (dmx * vmx + dmy * vmy + dmz * vmz) - 2.0 * (dpx * vpx + dpy * vpy));
-                }
-                if (sFair > 0.0)
-                    for (int vtx = 0; vtx < nV; vtx++)
+                    for (int e = lo; e < hi; e++)
                     {
-                        var nb = nbr[vtx]; int d = nb.Length; if (d == 0) continue;
-                        double ax = 0, ay = 0, az = 0, bx = 0, by = 0; double inv = 1.0 / d;
-                        for (int k = 0; k < d; k++) { int u = nb[k]; ax += v[3 * u]; ay += v[3 * u + 1]; az += v[3 * u + 2]; bx += v[oP + 2 * u]; by += v[oP + 2 * u + 1]; }
-                        rout[R_FM + 3 * vtx + 0] = sFair * (v[3 * vtx] - ax * inv);
-                        rout[R_FM + 3 * vtx + 1] = sFair * (v[3 * vtx + 1] - ay * inv);
-                        rout[R_FM + 3 * vtx + 2] = sFair * (v[3 * vtx + 2] - az * inv);
-                        if (!diffFair) { rout[R_FP + 2 * vtx + 0] = sFair * (v[oP + 2 * vtx] - bx * inv); rout[R_FP + 2 * vtx + 1] = sFair * (v[oP + 2 * vtx + 1] - by * inv); }
+                        int i = ei[e], j = ej[e];
+                        double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
+                        double dpx = eDPx[e], dpy = eDPy[e];
+                        double vmx = v[3 * i] - v[3 * j], vmy = v[3 * i + 1] - v[3 * j + 1], vmz = v[3 * i + 2] - v[3 * j + 2];
+                        double vpx = v[oP + 2 * i] - v[oP + 2 * j], vpy = v[oP + 2 * i + 1] - v[oP + 2 * j + 1];
+                        rout[e] = sIso * (2.0 * (dmx * vmx + dmy * vmy + dmz * vmz) - 2.0 * (dpx * vpx + dpy * vpy));
                     }
+                });
+                if (sFair > 0.0)
+                    Par(parV, nV, vChunk, (lo, hi) =>
+                    {
+                        for (int vtx = lo; vtx < hi; vtx++)
+                        {
+                            var nb = nbr[vtx]; int d = nb.Length; if (d == 0) continue;
+                            double ax = 0, ay = 0, az = 0, bx = 0, by = 0; double inv = 1.0 / d;
+                            for (int k = 0; k < d; k++) { int u = nb[k]; ax += v[3 * u]; ay += v[3 * u + 1]; az += v[3 * u + 2]; bx += v[oP + 2 * u]; by += v[oP + 2 * u + 1]; }
+                            rout[R_FM + 3 * vtx + 0] = sFair * (v[3 * vtx] - ax * inv);
+                            rout[R_FM + 3 * vtx + 1] = sFair * (v[3 * vtx + 1] - ay * inv);
+                            rout[R_FM + 3 * vtx + 2] = sFair * (v[3 * vtx + 2] - az * inv);
+                            if (!diffFair) { rout[R_FP + 2 * vtx + 0] = sFair * (v[oP + 2 * vtx] - bx * inv); rout[R_FP + 2 * vtx + 1] = sFair * (v[oP + 2 * vtx + 1] - by * inv); }
+                        }
+                    });
                 if (sPos > 0.0)
                     for (int vtx = 0; vtx < nV; vtx++)
                     {
@@ -270,60 +323,50 @@ namespace CreasePatchSolver
                 }
             }
 
-            // ---- J^T r  (exact transpose of ApplyJ) -> vout ----
+            // ---- J^T r  (exact transpose of ApplyJ), assembled as a per-vertex GATHER: each vertex sums its
+            //      OWN incident edges (via the veStart/veEdge/veSign CSR) and 1-ring, so every vout slot is
+            //      written by exactly one iteration -> race-free + deterministic when parallelised over v. ----
             void ApplyJt(double[] r, double[] vout)
             {
-                Array.Clear(vout, 0, N);
-                for (int e = 0; e < nE; e++)
+                double wsc = (sScale > 0.0 && S0 > 0.0) ? sScale * r[R_SC] / S0 : 0.0;   // global scale-row weight
+                Par(parV, nV, vChunk, (lo, hi) =>
                 {
-                    int i = ei[e], j = ej[e];
-                    double w = sIso * r[e];
-                    double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
-                    double dpx = eDPx[e], dpy = eDPy[e];
-                    double gx = 2.0 * dmx * w, gy = 2.0 * dmy * w, gz = 2.0 * dmz * w;
-                    vout[3 * i] += gx; vout[3 * i + 1] += gy; vout[3 * i + 2] += gz;
-                    vout[3 * j] -= gx; vout[3 * j + 1] -= gy; vout[3 * j + 2] -= gz;
-                    double hx = 2.0 * dpx * w, hy = 2.0 * dpy * w;
-                    vout[oP + 2 * i] -= hx; vout[oP + 2 * i + 1] -= hy;
-                    vout[oP + 2 * j] += hx; vout[oP + 2 * j + 1] += hy;
-                }
-                if (sFair > 0.0)
-                    for (int vtx = 0; vtx < nV; vtx++)
+                    for (int v = lo; v < hi; v++)
                     {
-                        var nb = nbr[vtx]; int d = nb.Length; if (d == 0) continue;
-                        double inv = 1.0 / d;
-                        double wmx = sFair * r[R_FM + 3 * vtx + 0], wmy = sFair * r[R_FM + 3 * vtx + 1], wmz = sFair * r[R_FM + 3 * vtx + 2];
-                        double wpx = sFair * r[R_FP + 2 * vtx + 0], wpy = sFair * r[R_FP + 2 * vtx + 1];
-                        vout[3 * vtx] += wmx; vout[3 * vtx + 1] += wmy; vout[3 * vtx + 2] += wmz;
-                        vout[oP + 2 * vtx] += wpx; vout[oP + 2 * vtx + 1] += wpy;
-                        for (int k = 0; k < d; k++)
+                        double gx = 0, gy = 0, gz = 0, hx = 0, hy = 0;
+                        // iso + scale: both scatter 2*dM*weight to the two endpoints (opposite signs); gather them
+                        // with veSign. iso also touches M' (opposite sign); scale does not.
+                        int es = veStart[v], ee = veStart[v + 1];
+                        for (int t = es; t < ee; t++)
                         {
-                            int u = nb[k];
-                            vout[3 * u] -= wmx * inv; vout[3 * u + 1] -= wmy * inv; vout[3 * u + 2] -= wmz * inv;
-                            vout[oP + 2 * u] -= wpx * inv; vout[oP + 2 * u + 1] -= wpy * inv;
+                            int e = veEdge[t]; double s = veSign[t];
+                            double wi = sIso * r[e];
+                            double cm = 2.0 * s * (wi + wsc), cp = 2.0 * s * wi;
+                            gx += cm * eDMx[e]; gy += cm * eDMy[e]; gz += cm * eDMz[e];
+                            hx -= cp * eDPx[e]; hy -= cp * eDPy[e];
                         }
+                        // fairness: own row + gather of -sFair*r_fair[u]/deg(u) over the 1-ring (symmetric adjacency).
+                        if (sFair > 0.0)
+                        {
+                            var nb = nbr[v]; int d = nb.Length;
+                            if (d > 0)
+                            {
+                                gx += sFair * r[R_FM + 3 * v + 0]; gy += sFair * r[R_FM + 3 * v + 1]; gz += sFair * r[R_FM + 3 * v + 2];
+                                hx += sFair * r[R_FP + 2 * v + 0]; hy += sFair * r[R_FP + 2 * v + 1];
+                                for (int k = 0; k < d; k++)
+                                {
+                                    int u = nb[k]; int du = nbr[u].Length; if (du == 0) continue; double iu = 1.0 / du;
+                                    gx -= sFair * r[R_FM + 3 * u + 0] * iu; gy -= sFair * r[R_FM + 3 * u + 1] * iu; gz -= sFair * r[R_FM + 3 * u + 2] * iu;
+                                    hx -= sFair * r[R_FP + 2 * u + 0] * iu; hy -= sFair * r[R_FP + 2 * u + 1] * iu;
+                                }
+                            }
+                        }
+                        if (sPos > 0.0 && used[v]) { gx += sPos * r[R_PM + 3 * v + 0]; gy += sPos * r[R_PM + 3 * v + 1]; gz += sPos * r[R_PM + 3 * v + 2]; }
+                        vout[3 * v] = gx; vout[3 * v + 1] = gy; vout[3 * v + 2] = gz;
+                        vout[oP + 2 * v] = hx; vout[oP + 2 * v + 1] = hy;
                     }
-                if (sPos > 0.0)
-                    for (int vtx = 0; vtx < nV; vtx++)
-                    {
-                        if (!used[vtx]) continue;
-                        vout[3 * vtx] += sPos * r[R_PM + 3 * vtx + 0];
-                        vout[3 * vtx + 1] += sPos * r[R_PM + 3 * vtx + 1];
-                        vout[3 * vtx + 2] += sPos * r[R_PM + 3 * vtx + 2];
-                    }
-                if (sScale > 0.0 && S0 > 0.0)
-                {
-                    double w = sScale * r[R_SC] / S0;
-                    for (int e = 0; e < nE; e++)
-                    {
-                        int i = ei[e], j = ej[e];
-                        double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
-                        double gx = 2.0 * dmx * w, gy = 2.0 * dmy * w, gz = 2.0 * dmz * w;
-                        vout[3 * i] += gx; vout[3 * i + 1] += gy; vout[3 * i + 2] += gz;
-                        vout[3 * j] -= gx; vout[3 * j + 1] -= gy; vout[3 * j + 2] -= gz;
-                    }
-                }
-                if (sBend > 0.0)
+                });
+                if (sBend > 0.0)   // U^2^T r = (U^T)(U^T) r, each UmbT a gather; add into the M rows
                 {
                     for (int vt = 0; vt < nV; vt++) { pmB[3 * vt] = sBend * r[R_BI + 3 * vt]; pmB[3 * vt + 1] = sBend * r[R_BI + 3 * vt + 1]; pmB[3 * vt + 2] = sBend * r[R_BI + 3 * vt + 2]; }
                     UmbT(pmB, t1B); UmbT(t1B, t2B);
