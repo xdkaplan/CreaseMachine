@@ -109,6 +109,7 @@ namespace CreasePatchSolver
             double[] x = new double[N];        // CG solution (delta)
             double[] cgR = new double[N], cgP = new double[N], cgAp = new double[N], cgZ = new double[N], cgMinv = new double[N], cgDiag = new double[N];
             double[] gsx = new double[nV], gsy = new double[nV], gsz = new double[nV];   // scale-row gradient (for the Jacobi diagonal)
+            double[] eDMx = new double[nE], eDMy = new double[nE], eDMz = new double[nE], eDPx = new double[nE], eDPy = new double[nE];   // per-edge linearization vectors (constant within an outer iter; precomputed to avoid recomputing in every CG apply)
             double[] tMx = new double[nV], tMy = new double[nV], tMz = new double[nV], tPx = new double[nV], tPy = new double[nV];
 
             // ---- 2nd-order bending (bi-Laplacian) setup. U(x)_i = mean_nbr(x) - x_i (umbrella Laplacian);
@@ -216,8 +217,8 @@ namespace CreasePatchSolver
                 for (int e = 0; e < nE; e++)
                 {
                     int i = ei[e], j = ej[e];
-                    double dmx = Mx[i] - Mx[j], dmy = My[i] - My[j], dmz = Mz[i] - Mz[j];
-                    double dpx = Px[i] - Px[j], dpy = Py[i] - Py[j];
+                    double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
+                    double dpx = eDPx[e], dpy = eDPy[e];
                     double vmx = v[3 * i] - v[3 * j], vmy = v[3 * i + 1] - v[3 * j + 1], vmz = v[3 * i + 2] - v[3 * j + 2];
                     double vpx = v[oP + 2 * i] - v[oP + 2 * j], vpy = v[oP + 2 * i + 1] - v[oP + 2 * j + 1];
                     rout[e] = sIso * (2.0 * (dmx * vmx + dmy * vmy + dmz * vmz) - 2.0 * (dpx * vpx + dpy * vpy));
@@ -247,7 +248,7 @@ namespace CreasePatchSolver
                     for (int e = 0; e < nE; e++)
                     {
                         int i = ei[e], j = ej[e];
-                        double dmx = Mx[i] - Mx[j], dmy = My[i] - My[j], dmz = Mz[i] - Mz[j];
+                        double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
                         double vmx = v[3 * i] - v[3 * j], vmy = v[3 * i + 1] - v[3 * j + 1], vmz = v[3 * i + 2] - v[3 * j + 2];
                         acc += 2.0 * (dmx * vmx + dmy * vmy + dmz * vmz);
                     }
@@ -269,8 +270,8 @@ namespace CreasePatchSolver
                 {
                     int i = ei[e], j = ej[e];
                     double w = sIso * r[e];
-                    double dmx = Mx[i] - Mx[j], dmy = My[i] - My[j], dmz = Mz[i] - Mz[j];
-                    double dpx = Px[i] - Px[j], dpy = Py[i] - Py[j];
+                    double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
+                    double dpx = eDPx[e], dpy = eDPy[e];
                     double gx = 2.0 * dmx * w, gy = 2.0 * dmy * w, gz = 2.0 * dmz * w;
                     vout[3 * i] += gx; vout[3 * i + 1] += gy; vout[3 * i + 2] += gz;
                     vout[3 * j] -= gx; vout[3 * j + 1] -= gy; vout[3 * j + 2] -= gz;
@@ -308,7 +309,7 @@ namespace CreasePatchSolver
                     for (int e = 0; e < nE; e++)
                     {
                         int i = ei[e], j = ej[e];
-                        double dmx = Mx[i] - Mx[j], dmy = My[i] - My[j], dmz = Mz[i] - Mz[j];
+                        double dmx = eDMx[e], dmy = eDMy[e], dmz = eDMz[e];
                         double gx = 2.0 * dmx * w, gy = 2.0 * dmy * w, gz = 2.0 * dmz * w;
                         vout[3 * i] += gx; vout[3 * i + 1] += gy; vout[3 * i + 2] += gz;
                         vout[3 * j] -= gx; vout[3 * j + 1] -= gy; vout[3 * j + 2] -= gz;
@@ -383,6 +384,7 @@ namespace CreasePatchSolver
             for (int outer = 0; outer < outerIters; outer++)
             {
                 ComputeR(Mx, My, Mz, Px, Py, r0);
+                for (int e = 0; e < nE; e++) { int i = ei[e], j = ej[e]; eDMx[e] = Mx[i] - Mx[j]; eDMy[e] = My[i] - My[j]; eDMz[e] = Mz[i] - Mz[j]; eDPx[e] = Px[i] - Px[j]; eDPy[e] = Py[i] - Py[j]; }   // freeze edge vectors for this outer iter
                 ApplyJt(r0, b);                        // b0 = J^T r0  (we solve A x = -b0)
                 for (int k = 0; k < N; k++) b[k] = -b[k];
                 DiagJtJ(cgDiag);                       // Jacobi diagonal (fixed per outer iter; lambda added per try)
