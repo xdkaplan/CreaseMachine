@@ -336,5 +336,17 @@
                            VerticalAlignment="Center" FontSize="11" Margin="8,0,0,0" />
             </DockPanel>
         </Border>
+
+        <!-- Modal bake overlay: shown while Solve runs on a background worker (progress + cancel). -->
+        <Border x:Name="BakeOverlay" Grid.Row="0" Grid.RowSpan="4" Background="#A6000000" Visibility="Collapsed" Panel.ZIndex="100">
+            <Border Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="4" Padding="22"
+                    Width="340" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock x:Name="BakeStatus" Text="Solving…" Foreground="#E8E8E8" FontSize="13" Margin="0,0,0,12" TextWrapping="Wrap" />
+                    <ProgressBar x:Name="BakeBar" Height="16" Minimum="0" Maximum="100" Value="0" />
+                    <Button x:Name="BakeCancel" Content="Cancel" Width="92" HorizontalAlignment="Right" Margin="0,14,0,0" Padding="8,3" />
+                </StackPanel>
+            </Border>
+        </Border>
     </Grid>
 </Window>

@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using OpenTK.Wpf;
@@ -64,9 +66,16 @@ namespace CreasePatchSolver
         enum DragMode { None, Orbit, Pan }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = (unused)
 
-        System.Windows.Threading.DispatcherTimer _flowTimer;   // runs the flow continuously while Space is held
-        bool _spaceHeld;
-        long _spaceIters;                 // iterations run during the current Space-hold (journaled on release)
+        // async Solve bake: runs on a worker with a modal progress+cancel overlay (replaces the old
+        // hold-Space live-step path). The worker does pure compute on the managed mesh; all GL/UI stays
+        // on the UI thread, and viewport uploads are gated on !_baking so they never read a mutating mesh.
+        bool _baking;
+        CancellationTokenSource _bakeCts;
+        CancellationToken _bakeToken;
+        IProgress<(double frac, string text)> _bakeProgress;
+        double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
+        string _bakeSummary = "";            // title body the bake produced
+        readonly System.Collections.Generic.List<string> _bakeLog = new System.Collections.Generic.List<string>();   // worker log lines, flushed on the UI thread
 
         public MainWindow()
         {
@@ -129,7 +138,8 @@ namespace CreasePatchSolver
             if (_matcapPaths.Length > 0) { int defMc = System.Math.Min(2, _matcapPaths.Length - 1); MatcapList.SelectedIndex = defMc; ApplyMatcap(defMc); }   // default = 4th matcap (now index 2 after removing the 3rd)
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
-            SolveButton.Click += (s, e) => OnSolve();   // bake: develop-to-accuracy + subdivide rounds (not journaled)
+            SolveButton.Click += async (s, e) => await OnSolveAsync();   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal (not journaled)
+            BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             SubdivideButton.Click += (s, e) => Execute(StudioCommand.Subdiv(), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
@@ -176,34 +186,9 @@ namespace CreasePatchSolver
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
                 else if (e.Key == Key.D && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Subdiv(), record: true); e.Handled = true; }
-                else if (e.Key == Key.Space)              // hold to run the flow continuously
-                {
-                    if (!_spaceHeld) { _spaceHeld = true; _spaceIters = 0; _flowTimer.Start(); }
-                    e.Handled = true;   // also stops Space from "clicking" a focused button
-                }
             };
-
-            // Hold Space: run a BATCH of solver steps per timer tick until released (the timer can't tick
-            // faster than ~16ms, so batching is how we go fast — one GPU re-upload + redraw per tick, not
-            // per step). On release, record the held run as a single Run(N) in the journal (replayable).
-            const int spaceItersPerTick = 3;   // LM iterations per 16ms tick (each is worth ~thousands of GD steps)
-            _flowTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
-            _flowTimer.Tick += (s, e) =>
-            {
-                if (_session == null) { _flowTimer.Stop(); return; }
-                ApplyRun(spaceItersPerTick, _sim.ToFlowParams());   // ApplyRun doesn't journal (Execute does)
-                _spaceIters += spaceItersPerTick;
-            };
-            PreviewKeyUp += (s, e) =>
-            {
-                if (e.Key == Key.Space && _spaceHeld)
-                {
-                    _spaceHeld = false; _flowTimer.Stop();
-                    if (_spaceIters > 0) { var c = StudioCommand.Run((int)_spaceIters, _sim.ToFlowParams()); _journal.Add(c); Log(c.Serialize() + "   (held space)"); }
-                    e.Handled = true;
-                }
-            };
-            Deactivated += (s, e) => { if (_spaceHeld) { _spaceHeld = false; _flowTimer.Stop(); } };   // safety if focus is lost mid-hold
+            // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
+            // a progress+cancel modal. ApplyRun/PatchStep remain only for journal replay of legacy Run(N).)
         }
 
         // ===================== window menu: Console + About (both non-modal) =====================
@@ -409,7 +394,8 @@ namespace CreasePatchSolver
                 }
             }
             _pinned = pin;
-            RefreshSeamDisplay();   // overlay now coincides with the snapped boundary
+            // (Display overlay is refreshed by the caller on the UI thread — RefreshSeamDisplay — since
+            // SetupSeamPins may run on the bake worker, which must not touch the seam display buffers.)
         }
 
         // Read-only: fit the bent-wire B-splines to the CURRENT boundary loops and build the overlay —
@@ -473,34 +459,87 @@ namespace CreasePatchSolver
         // Develop to the selected Accuracy, then subdivide + re-develop for each Subdivision level. Resets to
         // the input first (idempotent). Synchronous, no live animation; bounded by a wall-clock budget plus
         // per-round stall detection. Shows the final result + strain.
-        void OnSolve()
+        // Bake (develop-to-accuracy + subdivide) on a worker, behind a modal progress+cancel overlay. The
+        // worker (RunBake) is PURE compute on the managed mesh — no GL, no UI-bound property writes, no
+        // dirty-flag sets. All GL/UI happens here on the UI thread; viewport uploads are gated on !_baking
+        // so they never read the mesh while the worker is mutating it.
+        async Task OnSolveAsync()
         {
-            if (_session == null || _meshPath == null) return;
-            Title = "CreasePatchSolver — solving…";
-            ApplyReset();                          // start clean from the input mesh
-            if (_session != null && CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) { OnSolveMulti(); return; }   // multi-piece (FBX solid): per-component flatten + develop
-            if (_sim.FixBSplineEdges) SetupSeamPins();   // snap boundaries onto bent-wire seams + pin them (before flatten)
-            _view?.Upload(_session.Mesh);          // current M bounds so M' places correctly on first flatten
-            if (!EnsureFlat()) { Title = "CreasePatchSolver — BFF failed"; UpdateStatus(); return; }
+            if (_baking || _session == null || _meshPath == null) return;
+            ApplyReset();                          // UI thread: reload the input mesh + reset flags
+            _view?.Upload(_session.Mesh);          // show the reset mesh, then clear dirty so the bake's mutations aren't uploaded mid-flight
+            _meshDirty = false;
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            const long budgetMs = 10000;           // hard cap on the whole bake (UI is frozen meanwhile)
-            double target = _sim.AccuracyStrainPct;
-            SolveToAccuracy(target, sw, budgetMs);
-            for (int lvl = 0; lvl < _sim.SubdivLevel && sw.ElapsedMilliseconds < budgetMs; lvl++)
+            _baking = true;
+            _bakeCts = new CancellationTokenSource();
+            _bakeToken = _bakeCts.Token;
+            _bakeLog.Clear(); _bakeStrain = double.NaN; _bakeSummary = "";
+            BakeBar.Value = 0; BakeStatus.Text = "Solving…"; BakeOverlay.Visibility = Visibility.Visible;
+            _bakeProgress = new Progress<(double frac, string text)>(p =>
             {
-                ApplySubdivide();
-                if (_sim.FixBSplineEdges) SetupSeamPins();   // re-fit the bent wire on the refined boundary
-                SolveToAccuracy(target, sw, budgetMs);
-            }
+                if (p.frac >= 0) BakeBar.Value = Math.Max(0, Math.Min(100, p.frac * 100.0));
+                if (p.text != null) BakeStatus.Text = p.text;
+            });
 
-            _meshDirty = true; _rulingsDirty = true;
-            if (_hasFlat && _flatView != null) _flatView.Upload(_flat);
+            try { await Task.Run(RunBake); }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { _bakeLog.Add("solve failed: " + ex.Message); }
+            finally
+            {
+                _baking = false;
+                BakeOverlay.Visibility = Visibility.Collapsed;
+                foreach (var line in _bakeLog) Log(line);
+                if (_view != null) _view.Upload(_session.Mesh);
+                if (_hasFlat && _flatView != null && _flat != null) { _flatView.Upload(_flat); PlaceFlat(); }
+                _meshDirty = false; _rulingsDirty = true;     // mesh just uploaded; recompute rulings if shown
+                RefreshSeamDisplay();
+                if (!double.IsNaN(_bakeStrain)) _sim.StrainPct = _bakeStrain;
+                Title = "CreasePatchSolver — " + (_bakeToken.IsCancellationRequested ? "cancelled · " : "") + _bakeSummary;
+                UpdateStatus(); _gl?.InvalidateVisual();
+                _bakeCts?.Dispose(); _bakeCts = null; _bakeProgress = null;
+            }
+        }
+
+        // Worker entry (background thread): pure compute, dispatched single vs multi-component.
+        void RunBake()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            const long budgetMs = 10000;
+            double target = _sim.AccuracyStrainPct;
+            if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) RunBakeMulti(sw, budgetMs, target);
+            else RunBakeSingle(sw, budgetMs, target);
+        }
+
+        // Single-component bake (NURBS surface): flatten once, develop to accuracy, subdivide + re-develop.
+        void RunBakeSingle(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
+        {
+            if (_sim.FixBSplineEdges) SetupSeamPins();
+            if (!FlattenPure()) { _bakeSummary = "BFF failed"; return; }
+            SolveToAccuracy(target, sw, budgetMs);
+            int levels = _sim.SubdivLevel;
+            for (int lvl = 0; lvl < levels && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; lvl++)
+            {
+                SubdivideCompute();
+                if (_sim.FixBSplineEdges) SetupSeamPins();
+                SolveToAccuracy(target, sw, budgetMs);
+                _bakeProgress?.Report(((lvl + 2.0) / (levels + 1.0), "subdiv " + (lvl + 1) + "/" + levels));
+            }
             double pct = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
-            _sim.StrainPct = pct;
-            Title = "CreasePatchSolver — solved " + (double.IsNaN(pct) ? "" : pct.ToString("0.###") + "%  ")
-                  + "(" + _session.Mesh.Vertices.Count + " verts)";
-            UpdateStatus(); _gl?.InvalidateVisual();
+            _bakeStrain = pct;
+            _bakeSummary = (double.IsNaN(pct) ? "solved" : "solved " + pct.ToString("0.###") + "%") + "  (" + _session.Mesh.Vertices.Count + " verts)";
+        }
+
+        // Worker-safe flatten: BFF the live mesh into _flat + the anchor M0; NO GL upload (the UI thread
+        // uploads after the bake). Mirrors EnsureFlat minus ShowFlat's GPU work.
+        bool FlattenPure()
+        {
+            if (_session == null) return false;
+            if (_bffNeeded)
+            {
+                if (!Bff.TryFlatten(_session.Mesh, out var flat, out var log)) { if (!string.IsNullOrWhiteSpace(log)) _bakeLog.Add(log.TrimEnd()); return false; }
+                _flat = flat; CaptureM0(); _hasFlat = true; _bffNeeded = false;
+            }
+            return _flat != null && _M0 != null;
         }
 
         // ===================== multi-piece (per-component) solve =====================
@@ -509,38 +548,32 @@ namespace CreasePatchSolver
         // component independently, then reassemble in place. Each piece's boundary is FROZEN (Dirichlet)
         // during its develop, so the solid stays joined at the shared seams while each face's interior
         // flattens. (Smoothing / matching the seams to a shared B-spline is a later step.)
-        void OnSolveMulti()
+        void RunBakeMulti(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            const long budgetMs = 10000;
-            double target = _sim.AccuracyStrainPct;
-            double worst = 0; int pieces = 0, flattened = 0;
-            for (int lvl = 0; lvl <= _sim.SubdivLevel && sw.ElapsedMilliseconds < budgetMs; lvl++)
+            double worst = 0; int pieces = 0, flattened = 0; int levels = _sim.SubdivLevel;
+            for (int lvl = 0; lvl <= levels && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; lvl++)
             {
-                if (lvl > 0) ApplySubdivide();
+                if (lvl > 0) SubdivideCompute();
                 var comps = CreaseMachine.MeshOps.SplitComponents(_session.Mesh, out var vmaps);
                 pieces = comps.Count; flattened = 0; worst = 0;
                 var flatCombined = TopologyClone(_session.Mesh);
                 double xoff = 0;
-                for (int c = 0; c < comps.Count && sw.ElapsedMilliseconds < budgetMs; c++)
+                for (int c = 0; c < comps.Count && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; c++)
                 {
                     var pc = comps[c];
-                    if (!Bff.TryFlatten(pc, out var flat, out var log)) { if (!string.IsNullOrWhiteSpace(log)) Log("panel " + c + ": " + log.TrimEnd()); continue; }
+                    if (!Bff.TryFlatten(pc, out var flat, out var log)) { if (!string.IsNullOrWhiteSpace(log)) _bakeLog.Add("panel " + c + ": " + log.TrimEnd()); continue; }
                     DevelopPiece(pc, flat, target, sw, budgetMs);
                     var vmap = vmaps[c];
                     for (int v = 0; v < vmap.Length; v++) { var p = pc.Vertices[v]; _session.Mesh.Vertices[vmap[v]].X = p.X; _session.Mesh.Vertices[vmap[v]].Y = p.Y; _session.Mesh.Vertices[vmap[v]].Z = p.Z; }
                     xoff = PlaceFlatPiece(flat, flatCombined, vmap, xoff);
                     double e = RelErr(pc, flat); if (e > worst) worst = e; flattened++;
+                    _bakeProgress?.Report(((lvl + (c + 1.0) / comps.Count) / (levels + 1.0),
+                        "panel " + (c + 1) + "/" + comps.Count + (levels > 0 ? "  ·  subdiv " + lvl + "/" + levels : "") + "  ·  worst " + (worst * 100.0).ToString("0.##") + "%"));
                 }
                 _flat = flatCombined; _hasFlat = true; _bffNeeded = false;
             }
-            _meshDirty = true; _rulingsDirty = true;
-            RefreshSeamDisplay();
-            if (_flatView != null && _flat != null) { _flatView.Upload(_flat); PlaceFlat(); }
-            _sim.StrainPct = worst * 100.0;
-            Title = "CreasePatchSolver — " + flattened + "/" + pieces + " panels  worst strain "
-                  + (worst * 100.0).ToString("0.###") + "%  (" + _session.Mesh.Vertices.Count + " verts)";
-            UpdateStatus(); _gl?.InvalidateVisual();
+            _bakeStrain = worst * 100.0;
+            _bakeSummary = flattened + "/" + pieces + " panels  worst strain " + (worst * 100.0).ToString("0.###") + "%  (" + _session.Mesh.Vertices.Count + " verts)";
         }
 
         // Develop one component to the accuracy target with its boundary FROZEN (Dirichlet) so it stays
@@ -551,7 +584,7 @@ namespace CreasePatchSolver
             var m0 = new CreaseMachine.Vec3[pc.Vertices.Count];
             for (int v = 0; v < m0.Length; v++) { var p = pc.Vertices[v]; m0[v] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
             double lam = 0, prev = double.MaxValue;
-            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs; it++)
+            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; it++)
             {
                 IsometricLM.Solve(pc, flat, m0, _sim.IsoWeight, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight, _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref lam, pin);
                 double pct = RelErr(pc, flat) * 100.0;
@@ -587,13 +620,14 @@ namespace CreasePatchSolver
         {
             if (_flat == null || _M0 == null) return;
             double prev = double.MaxValue;
-            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs; it++)
+            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; it++)
             {
                 _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
                     _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight,
                     _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref _lmLambda,
                     _sim.FixBSplineEdges ? _pinned : null);
                 double pct = RelErr(_session.Mesh, _flat) * 100.0;
+                if ((it & 7) == 0) _bakeProgress?.Report((-1.0, "developing… strain " + pct.ToString("0.###") + "%  (target " + targetPct.ToString("0.###") + "%)"));
                 if (pct <= targetPct) break;            // reached the accuracy bar
                 if (prev - pct < 1e-5) break;           // converged (no further progress) -> subdivide may help
                 prev = pct;
@@ -629,10 +663,10 @@ namespace CreasePatchSolver
         // re-anchor onto the already-deformed M). Then the solver keeps developing at higher res
         // (paper: subdivide after the flow settles, then keep flowing to sharpen at hi-res). Camera
         // unchanged (bounds are identical — midpoints lie on existing edges).
-        void ApplySubdivide()
+        // Worker-safe subdivision: refine M (and the aligned M'/anchor), NO GL/UI. ApplySubdivide = this + upload.
+        void SubdivideCompute()
         {
             if (_session == null) return;
-
             bool hadFlat = _flat != null && _M0 != null && _M0.Length == _session.Mesh.Vertices.Count;
             PlanktonMesh m0mesh = null;
             if (hadFlat)
@@ -663,10 +697,19 @@ namespace CreasePatchSolver
                 double cur = MeanLen2(_session.Mesh);
                 _isoResFactor = (_refMeanLen2 > 0 && cur > 0) ? Math.Pow(_refMeanLen2 / cur, 1.5) : 1.0;
                 _lmLambda = 0;                               // resolution changed -> fresh LM trust region
-                _flatView?.Upload(_flat);                    // re-upload the refined M'
-                _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;   // refresh strain readout (stays ~constant: subdivide is metric-preserving)
             }
+        }
 
+        void ApplySubdivide()
+        {
+            if (_session == null) return;
+            SubdivideCompute();
+            bool aligned = _flat != null && _M0 != null && _M0.Length == _session.Mesh.Vertices.Count;
+            if (aligned && _flatView != null)
+            {
+                _flatView.Upload(_flat);                                  // re-upload the refined M'
+                _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;    // strain stays ~constant (subdivide is metric-preserving)
+            }
             _meshDirty = true;
             Title = "CreasePatchSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
@@ -969,7 +1012,7 @@ namespace CreasePatchSolver
 
             // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
             // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
-            if (_meshDirty && _session != null)
+            if (_meshDirty && !_baking && _session != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 _view.Upload(_session.Mesh);
@@ -1043,10 +1086,10 @@ namespace CreasePatchSolver
             {
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 _view.ShowRulings = _sim.ShowRulings;
-                if (_sim.ShowRulings && _view.HasMesh && _session != null && _rulingsDirty)
+                if (_sim.ShowRulings && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
                 { _view.SetRulings(RulingField.Compute(_session.Mesh, 0.45, 0.02)); _rulingsDirty = false; }
                 _view.ShowSeams = _sim.FixBSplineEdges;
-                if (_sim.FixBSplineEdges && _view.HasMesh && _seamsDirty)
+                if (_sim.FixBSplineEdges && _view.HasMesh && _seamsDirty && !_baking)
                 {
                     _view.SetSeams(_seamLineF ?? System.Array.Empty<float>());
                     _view.SetSeamControls(_seamCtrlF ?? System.Array.Empty<float>());
