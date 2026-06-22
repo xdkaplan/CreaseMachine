@@ -219,5 +219,42 @@ namespace CreaseMachine
             double cz = e1x * e2y - e1y * e2x;
             return Math.Sqrt(cx * cx + cy * cy + cz * cz);
         }
+
+        /// <summary>
+        /// Ordered boundary vertex loops. Each loop is the StartVertex sequence walked around a
+        /// boundary (a halfedge whose AdjacentFace &lt; 0), following NextHalfedge until it closes.
+        /// A closed solid returns none; an open disk patch returns one loop (its seam). Used to fit
+        /// fixed B-spline seam curves and to pin boundary vertices during the isometric solve.
+        /// </summary>
+        public static System.Collections.Generic.List<int[]> BoundaryLoops(PlanktonMesh M)
+        {
+            int nH = M.Halfedges.Count;
+            var visited = new bool[nH];
+            var loops = new System.Collections.Generic.List<int[]>();
+            for (int h0 = 0; h0 < nH; h0++)
+            {
+                if (M.Halfedges[h0].IsUnused || visited[h0] || M.Halfedges[h0].AdjacentFace >= 0) continue;
+                var loop = new System.Collections.Generic.List<int>();
+                int h = h0, guard = 0;
+                while (h >= 0 && !visited[h] && guard++ <= nH)
+                {
+                    visited[h] = true;
+                    loop.Add(M.Halfedges[h].StartVertex);
+                    h = M.Halfedges[h].NextHalfedge;
+                    if (h == h0) break;
+                }
+                if (loop.Count >= 2) loops.Add(loop.ToArray());
+            }
+            return loops;
+        }
+
+        /// <summary>Per-vertex mask, true where the vertex lies on any boundary loop.</summary>
+        public static bool[] BoundaryVertexMask(PlanktonMesh M)
+        {
+            var mask = new bool[M.Vertices.Count];
+            foreach (var loop in BoundaryLoops(M))
+                foreach (int v in loop) if (v >= 0 && v < mask.Length) mask[v] = true;
+            return mask;
+        }
     }
 }

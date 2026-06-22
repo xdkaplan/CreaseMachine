@@ -53,7 +53,7 @@ namespace CreasePatchSolver
         // convergence readout - same quantity IsometricSolver.Step returns, so the GUI display is parity.
         public static double Solve(PlanktonMesh M, PlanktonMesh Mp, Vec3[] M0,
                                    double wIso, double wFair, double wPos, double wScale, bool diffFair, double wBend, bool bendDiff,
-                                   int outerIters, int cgIters, ref double lambda)
+                                   int outerIters, int cgIters, ref double lambda, bool[] pinned = null)
         {
             int nV = M.Vertices.Count;
             if (nV == 0 || Mp.Vertices.Count != nV) return 0.0;
@@ -433,6 +433,12 @@ namespace CreasePatchSolver
             double curE = Energy(Mx, My, Mz, Px, Py);
             if (lambda <= 0) lambda = 1.0;
             double nu = 2.0;   // Nielsen damping: reject-doubling factor
+            bool[] mFixed = null;   // Dirichlet: the 3 M-DOFs of each pinned (fixed-seam) vertex are held fixed
+            if (pinned != null)
+            {
+                mFixed = new bool[N];
+                for (int v = 0; v < nV; v++) if (v < pinned.Length && pinned[v]) { mFixed[3 * v] = mFixed[3 * v + 1] = mFixed[3 * v + 2] = true; }
+            }
             for (int outer = 0; outer < outerIters; outer++)
             {
                 ComputeR(Mx, My, Mz, Px, Py, r0);
@@ -457,13 +463,14 @@ namespace CreasePatchSolver
                     LastGradCheckErr = maxAbsDiff / (gInf + 1e-12);   // max abs error normalized by gradient inf-norm
                 }
                 for (int k = 0; k < N; k++) b[k] = -b[k];
+                if (mFixed != null) for (int k = 0; k < N; k++) if (mFixed[k]) b[k] = 0.0;   // Dirichlet: no driving force on pinned M-DOFs
                 DiagJtJ(cgDiag);                       // Jacobi diagonal (fixed per outer iter; lambda added per try)
 
                 bool accepted = false;
                 for (int tries = 0; tries < 6 && !accepted; tries++)
                 {
                     double lam = lambda;
-                    for (int k = 0; k < N; k++) cgMinv[k] = 1.0 / (cgDiag[k] + lam);   // M^-1 = 1/(diag(J^T J) + lambda)
+                    for (int k = 0; k < N; k++) cgMinv[k] = (mFixed != null && mFixed[k]) ? 0.0 : 1.0 / (cgDiag[k] + lam);   // Dirichlet: zero preconditioner on pinned M-DOFs holds x there at 0
                     // ---- matrix-free Jacobi-PRECONDITIONED CG: solve (J^T J + lam I) x = b ----
                     Array.Clear(x, 0, N);
                     Array.Copy(b, cgR, N);             // r = b - A*0 = b
@@ -474,6 +481,7 @@ namespace CreasePatchSolver
                     {
                         ApplyJ(cgP, jvtmp); ApplyJt(jvtmp, cgAp);          // cgAp = J^T J p
                         for (int k = 0; k < N; k++) cgAp[k] += lam * cgP[k];  // + lambda p
+                        if (mFixed != null) for (int k = 0; k < N; k++) if (mFixed[k]) cgAp[k] = 0.0;   // Dirichlet: keep residual 0 on pinned M-DOFs (clean convergence test)
                         double pAp = Dot(cgP, cgAp); if (pAp <= 0) break;
                         double alpha = rz / pAp;
                         for (int k = 0; k < N; k++) { x[k] += alpha * cgP[k]; cgR[k] -= alpha * cgAp[k]; }
