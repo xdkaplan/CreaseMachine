@@ -74,12 +74,10 @@
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="CreasePatchSolver" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
-                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | Flatten | +N iter. -->
-                <Button x:Name="IterButton" DockPanel.Dock="Right" Content="{Binding IterLabel}"
-                        Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center" />
-                <Button x:Name="FlattenButton" DockPanel.Dock="Right" Content="Flatten"
-                        Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
-                        ToolTip="Run Boundary First Flattening and show the flat map beside the mesh" />
+                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | Solve. -->
+                <Button x:Name="SolveButton" DockPanel.Dock="Right" Content="Solve"
+                        Padding="16,2" Margin="4,0,0,0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
+                        ToolTip="Bake: develop to the selected Accuracy, then for each Subdivision level subdivide and re-develop. Runs to completion (no live animation), then shows the result." />
                 <Button x:Name="SubdivideButton" DockPanel.Dock="Right" Content="SubD"
                         Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
                         ToolTip="One 1-to-4 subdivision (refine, then keep flowing)" />
@@ -164,11 +162,51 @@
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MeshIndex}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Subdiv" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Subdivision level: how many 1->4 refine rounds Solve does (develop to accuracy, then subdivide + re-develop, per level). 0 = no subdivision." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding SubdivLevel}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="4" Value="{Binding SubdivLevel}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
 
-                                    <!-- Isometric patch-solver OBJECTIVE weights: developability driver (Iso),
-                                         anti-zigzag fairness (Fair), proximity anchor to the original shape (Anchor).
-                                         These define the objective for IsometricLM.Solve (Levenberg-Marquardt); the
-                                         solver computes its own step, so there is no step / learning-rate knob. -->
+                                    <!-- GO workflow: Accuracy (material) + Tolerance (fit-up mm) up top; raw solver
+                                         terms fold under Advanced. Startup config = preset D (single developable). -->
+                                    <DockPanel Margin="0,8,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Accuracy" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="How developable it must be, by material: Fabric (stretchy) -> Paper -> Sheet Metal -> Plate Metal (stiff, near-perfect). Sets the allowable in-plane strain." />
+                                        <TextBlock DockPanel.Dock="Right" Width="80" Text="{Binding AccuracyLabel}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="3" Value="{Binding AccuracyLevel}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,2,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Strain" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Live in-plane strain (relative edge-length error = developability). GO when it is within the selected material's allowable strain." />
+                                        <TextBlock DockPanel.Dock="Right" Text="{Binding GoText}" Foreground="{Binding GoBrush}" FontSize="11" FontWeight="Bold" Width="80" TextAlignment="Right" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock Text="{Binding StrainText}" Foreground="#8A8A98" FontSize="11" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Tolerance" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Absolute fit-up tolerance (gap between adjacent panels at assembly). Used later for panel sizing / acceptance." />
+                                        <TextBlock DockPanel.Dock="Right" Width="80" Text="{Binding ToleranceMm, StringFormat={}{0:0.##} mm}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="10" Value="{Binding ToleranceIndex}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,6,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
+                                        <CheckBox Content="Show rulings (developable generators)" IsChecked="{Binding ShowRulings, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
+                                                  ToolTip="Overlay per-vertex ruling lines — the zero-curvature straight generators (gold). Clean parallel rulings = genuinely developable; swirling = not there yet." />
+                                    </DockPanel>
+
+                                    <Expander Header="Advanced" IsExpanded="False" Foreground="#9AA0A8" FontSize="11" Margin="0,10,0,0">
+                                        <StackPanel Margin="0,6,0,0">
+                                            <DockPanel Margin="0,0,0,2">
+                                                <TextBlock DockPanel.Dock="Left" Text="Preset" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                           ToolTip="Raw developability presets. A scale-pin only · B +anchor (low-drift) · C +differential bending (faithful+smooth) · D no-anchor+plain-bending (single entirely-developable patch = the default)." />
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Button x:Name="PresetAButton" Content="A" Width="30" Margin="2,0" FontSize="11" ToolTip="A — scale-pin only (wrinkly, more drift)" />
+                                                    <Button x:Name="PresetBButton" Content="B" Width="30" Margin="2,0" FontSize="11" ToolTip="B — low-drift: + small anchor" />
+                                                    <Button x:Name="PresetCButton" Content="C" Width="30" Margin="2,0" FontSize="11" ToolTip="C — low-drift + smooth: anchor + differential bending" />
+                                                    <Button x:Name="PresetDButton" Content="D" Width="30" Margin="2,0" FontSize="11" ToolTip="D — single entirely-developable patch (no anchor + plain bending) = the default" />
+                                                </StackPanel>
+                                            </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Iso" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
                                                    ToolTip="Developability driver (gain): weight on equalizing corresponding edge lengths between M and the flat M'. LM is stable at any value — crank it freely." />
@@ -177,9 +215,14 @@
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Fair" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Uniform-Laplacian smoothing on M and M'. Largely unneeded under the LM solver (no zigzag to suppress) — leave low or 0." />
+                                                   ToolTip="Fairness/smoothing weight. With 'Differential' (below) ON it de-buckles without shrinking (preserves original detail) — the C preset. OFF it's a plain Laplacian (shrinks); leave low or 0." />
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding FairWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="0" Maximum="1" Value="{Binding FairWeight}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,1,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
+                                        <CheckBox Content="Differential (non-shrinking)" IsChecked="{Binding DiffFair, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
+                                                  ToolTip="Fair mode. On: penalize the CHANGE in local shape from the original (non-shrinking, preserves detail). Off: plain Laplacian (shrinks)." />
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Anchor" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
@@ -187,6 +230,35 @@
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding AnchorWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="0" Maximum="2" Value="{Binding AnchorWeight}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Bend" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="2nd-order bending (differential bi-Laplacian) — the ANTI-WRINKLE term (paper's 2nd-difference fairness, triangle analog). Penalises change in curvature from the original, flattening buckles WITHOUT shrinking. Raise to de-wrinkle (preset C uses 0.6); very high slightly fights developability." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BendWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="3" Value="{Binding BendWeight}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Scale" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Global scale pin (anti-collapse): pins total size to the original so M can't shrink flat. This single global term is all that's needed in place of a dense Anchor — with Scale on, Anchor can be 0 and M still develops to relErr ~0." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding ScaleWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="50" Value="{Binding ScaleWeight}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Smoother" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Non-shrinking smoother applied after each LM step (boundary pinned): None / Tangential (slides vertices in-surface) / Taubin (lambda-mu, no net shrink). Distributes strain / de-buckles. None suffices for near-developable inputs." />
+                                        <ComboBox SelectedIndex="{Binding SmoothKind, Mode=TwoWay}" Height="20" FontSize="11" VerticalAlignment="Center" Margin="6,0">
+                                            <ComboBoxItem Content="None" />
+                                            <ComboBoxItem Content="Tangential" />
+                                            <ComboBoxItem Content="Taubin" />
+                                        </ComboBox>
+                                    </DockPanel>
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Smooth" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Smoother strength (only active when Smoother is not None)." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding SmoothStrength, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="0" Maximum="1" Value="{Binding SmoothStrength}" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+                                        </StackPanel>
+                                    </Expander>
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>

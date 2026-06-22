@@ -19,14 +19,19 @@ namespace CreasePatchSolver
         // Experimental: adaptive DetMix - raise the lambda_min<->det blend toward 1 at near-degenerate
         // ("twisty") vertices via a = (1-sep)^pow, leaving real creases (sep->1) at the DetMix floor.
         bool _adaptiveDetMix = false; double _adaptiveDetMixPow = 2.0;
-        // Isometric patch-solver OBJECTIVE weights (IsometricLM.Solve, Levenberg-Marquardt). There is no
-        // step / learning rate: LM computes its own step (damped normal equations), so these are pure
-        // objective knobs. Iso is the developability gain: higher = drive relErr lower (LM is stable to
-        // any scale - it can't diverge like the old explicit step did). Anchor is the faithfulness dial:
-        // low = deform M freely toward developable (relErr -> ~0; at anchor 0.001, LM reaches ~0.005%),
-        // high = stay near the original. Fair (uniform-Laplacian smoothing) is largely unneeded under LM
-        // (no zigzag to suppress); leave it low or 0.
-        double _isoWeight = 10.0, _fairWeight = 0.1, _anchorWeight = 0.1;
+        // Isometric patch-solver knobs (IsometricLM.Solve, Levenberg-Marquardt + post-step smoother).
+        // No step/learning rate: LM computes its own step. Iso = developability gain (drive relErr down;
+        // LM is stable at any scale). Scale = global scale-pin weight: the ONLY anti-collapse needed -
+        // it pins total size to the original so M can't shrink flat, and it REPLACES the dense Anchor
+        // (with Anchor=0 + Scale on, LM develops to relErr ~0 with no shrink, headless-verified). Fair =
+        // legacy uniform-Laplacian (shrinks; unneeded under LM - prefer the non-shrinking Smoother below).
+        // Anchor = optional dense point-to-point faithfulness pin to the original; 0 = off (default).
+        double _isoWeight = 10.0, _fairWeight = 0.0, _anchorWeight = 0.0, _scaleWeight = 10.0, _bendWeight = 0.6;   // default = preset D
+        // Post-LM smoother (IsometricSmoothers): 0 None, 1 Tangential, 2 Taubin. Non-shrinking strain
+        // distributors / de-bucklers applied as a filter after each LM step (boundary vertices pinned).
+        // None suffices for the near-developable test patches; the smoothers are insurance for buckling-
+        // prone (high-curvature) inputs. Strength ~0.5.
+        int _smoothKind = 0; double _smoothStrength = 0.5;
 
         public int IterPerRun { get => _iterPerRun; set { if (Set(ref _iterPerRun, value)) OnChanged(nameof(IterLabel)); } }
         public double Step { get => _step; set => Set(ref _step, value); }
@@ -40,10 +45,78 @@ namespace CreasePatchSolver
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
         public int MeshIndex { get => _meshIndex; set => Set(ref _meshIndex, value); }
 
-        // Isometric patch-solver objective weights (drive IsometricLM.Solve via IsometricStep()).
+        // Isometric patch-solver knobs (drive IsometricLM.Solve + IsometricSmoothers via IsometricStep()).
         public double IsoWeight { get => _isoWeight; set => Set(ref _isoWeight, value); }
         public double FairWeight { get => _fairWeight; set => Set(ref _fairWeight, value); }
         public double AnchorWeight { get => _anchorWeight; set => Set(ref _anchorWeight, value); }
+        public double ScaleWeight { get => _scaleWeight; set => Set(ref _scaleWeight, value); }
+        // 2nd-order bending (differential bi-Laplacian) - the anti-wrinkle term, the triangle analog of the
+        // paper's 2nd-difference fairness. Smooths buckles inside the LM without shrinking. Preset C uses 0.6.
+        public double BendWeight { get => _bendWeight; set => Set(ref _bendWeight, value); }
+        public int SmoothKind { get => _smoothKind; set => Set(ref _smoothKind, value); }
+        public double SmoothStrength { get => _smoothStrength; set => Set(ref _smoothStrength, value); }
+
+        // Fair mode: when true the fairness term is DIFFERENTIAL (penalizes change in L(M) from L(M0)) -
+        // non-shrinking, preserves the input's local detail. False = plain Laplacian (shrinks). Set by the
+        // C preset; the developability A/B/C investigation found differential fairness the smoothness win.
+        bool _diffFair;
+        public bool DiffFair { get => _diffFair; set => Set(ref _diffFair, value); }
+
+        // Bend mode: true = DIFFERENTIAL (preserve original curvature, low-drift; presets B/C). false = PLAIN
+        // (drive toward smoothest -> a single entirely-developable patch; the Paper preset D, free deformation).
+        bool _bendDiff = false;   // default = preset D (plain bending -> single entirely-developable patch)
+        public bool BendDiff { get => _bendDiff; set => Set(ref _bendDiff, value); }
+
+        // ---- Fabrication GO knobs (top-level UI; raw solver weights live under Advanced) ----
+        // Accuracy = how developable the result must be, by MATERIAL stiffness (allowable in-plane strain).
+        // 0 Fabric (stretchy) .. 3 Plate Metal (near-perfectly developable). Placeholder strain targets for now.
+        static readonly string[] AccMaterials = { "Fabric", "Paper", "Sheet Metal", "Plate Metal" };
+        static readonly double[] AccStrainPct = { 3.0, 1.0, 0.2, 0.05 };   // fake allowable strain % per material
+        int _accuracyLevel = 2;
+        public int AccuracyLevel { get => _accuracyLevel; set { if (Set(ref _accuracyLevel, value)) { OnChanged(nameof(AccuracyLabel)); OnChanged(nameof(AccuracyStrainPct)); NotifyGo(); } } }
+        public string AccuracyLabel => AccMaterials[System.Math.Clamp(_accuracyLevel, 0, 3)];
+        public double AccuracyStrainPct => AccStrainPct[System.Math.Clamp(_accuracyLevel, 0, 3)];
+
+        // Live developability readout: in-plane strain (relErr %) pushed in by MainWindow after each solve,
+        // compared against the selected material's allowable strain -> a GO acceptance gate (the thing that
+        // makes Accuracy actually mean something). GREEN GO when strain <= the material's target, else amber.
+        double _strainPct = double.NaN;
+        public double StrainPct { get => _strainPct; set { if (Set(ref _strainPct, value)) NotifyGo(); } }
+        public string StrainText => double.IsNaN(_strainPct) ? "—" : _strainPct.ToString("0.####") + "%";
+        public bool IsGo => !double.IsNaN(_strainPct) && _strainPct <= AccuracyStrainPct;
+        public string GoText => double.IsNaN(_strainPct) ? "" : (IsGo ? "GO ✓" : "developing");
+        public System.Windows.Media.Brush GoBrush => double.IsNaN(_strainPct) ? System.Windows.Media.Brushes.Gray : (IsGo ? GoGreen : GoAmber);
+        static readonly System.Windows.Media.Brush GoGreen = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x5F, 0xCF, 0x6A));
+        static readonly System.Windows.Media.Brush GoAmber = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0xE0, 0xA0, 0x30));
+        void NotifyGo() { OnChanged(nameof(StrainText)); OnChanged(nameof(IsGo)); OnChanged(nameof(GoText)); OnChanged(nameof(GoBrush)); }
+
+        // Tolerance = absolute fit-up gap (mm), discrete choices. For later use (panel sizing / acceptance).
+        static readonly double[] TolChoices = { 0.01, 0.1, 0.2, 0.3, 0.5, 0.8, 1, 2, 3, 5, 8 };
+        int _toleranceIndex = 4;   // 0.5 mm
+        public int ToleranceIndex { get => _toleranceIndex; set { if (Set(ref _toleranceIndex, value)) OnChanged(nameof(ToleranceMm)); } }
+        public double ToleranceMm => TolChoices[System.Math.Clamp(_toleranceIndex, 0, TolChoices.Length - 1)];
+
+        // Subdivision level: how many 1->4 subdivide rounds Solve performs (develop -> subdivide -> develop ...).
+        int _subdivLevel = 2;
+        public int SubdivLevel { get => _subdivLevel; set => Set(ref _subdivLevel, value); }
+
+        // Apply a developability preset (see project_patchsolver_abc memory):
+        //   A = current: scale-pin only (max developability, more drift, wrinkly).
+        //   B = low-drift: + small point-to-point anchor.
+        //   C = low-drift + smooth: + 2nd-order DIFFERENTIAL bending (anti-wrinkle, stays faithful).
+        //   D = PAPER (Jiang/Pottmann): no anchor + PLAIN bending -> a single, entirely-developable smooth
+        //       patch via free deformation (relErr ~0.04%); high drift by design. Matches the paper's intent.
+        public void ApplyPreset(char which)
+        {
+            IsoWeight = 10; ScaleWeight = 10; SmoothKind = 0; FairWeight = 0.0; DiffFair = false;   // common to all
+            switch (which)
+            {
+                case 'A': AnchorWeight = 0.0; BendWeight = 0.0; BendDiff = true; break;
+                case 'B': AnchorWeight = 0.05; BendWeight = 0.0; BendDiff = true; break;
+                case 'C': AnchorWeight = 0.05; BendWeight = 0.6; BendDiff = true; break;   // differential bend = faithful de-wrinkler
+                case 'D': AnchorWeight = 0.0; BendWeight = 0.6; BendDiff = false; break;   // plain bend + free deform = single developable
+            }
+        }
 
         // The canonical "100%" deCraze weight — the top of the 0-100% scale used by the deCraze
         // slider (its Maximum maps to DeCrazeMax). Defined once here so the 0.04 isn't a magic number
@@ -52,13 +125,17 @@ namespace CreasePatchSolver
 
         // Shading facet (display): 0 = smooth (averaged normals), 1 = faceted (per-face normals). The
         // shader blends between them, so this is continuous and live. Default faceted.
-        double _facet = 0.9;
+        double _facet = 0.8;
         public double Facet { get => _facet; set => Set(ref _facet, value); }
 
         // Facet response curve: the shader blends by pow(Facet, FacetExp). 1 = linear; higher keeps
         // facets soft until Facet is high, then sharpens quickly.
         double _facetExp = 4.0;
         public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
+
+        // Overlay per-vertex ruling lines (developable generators = zero-curvature directions) on M.
+        bool _showRulings;
+        public bool ShowRulings { get => _showRulings; set => Set(ref _showRulings, value); }
 
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";

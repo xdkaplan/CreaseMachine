@@ -28,6 +28,9 @@ namespace CreasePatchSolver
         public bool HasMesh => _ready;   // true once a mesh has been uploaded
         public bool ShowEdges = false;   // overlay the triangle edges (used for the flat map M', which is otherwise a featureless flat blob)
         public Vector3 EdgeColor = new Vector3(0.10f, 0.10f, 0.13f);
+        public bool ShowRulings = false;                                  // overlay per-vertex ruling segments
+        public Vector3 RulingColor = new Vector3(1.0f, 0.82f, 0.18f);     // gold
+        int _rulVao, _rulVbo, _rulCount;                                  // GL_LINES buffer for rulings (positions only)
 
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
@@ -182,6 +185,21 @@ void main() {
             _ready = _indexCount > 0;
         }
 
+        // Upload ruling line segments (positions only, GL_LINES) computed externally from the live mesh.
+        // posF = [x0,y0,z0, x1,y1,z1, ...]; drawn flat-coloured via the shader's uEdge path.
+        public void SetRulings(float[] posF)
+        {
+            EnsureProgram();
+            _rulCount = posF.Length / 3;
+            if (_rulVao == 0) { _rulVao = GL.GenVertexArray(); _rulVbo = GL.GenBuffer(); }
+            GL.BindVertexArray(_rulVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _rulVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, posF.Length * sizeof(float), posF, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(0);
+            GL.BindVertexArray(0);
+        }
+
         public void Draw(Matrix4 view, Matrix4 proj)
         {
             if (!_ready) return;
@@ -216,6 +234,17 @@ void main() {
                 GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
                 GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
             }
+            // Ruling overlay: GL_LINES from a separate position-only buffer, flat-coloured (uEdge=1). Lifted
+            // off the surface in the field computation, so a normal depth test gives a clean on-surface look.
+            if (ShowRulings && _rulCount > 0)
+            {
+                GL.BindVertexArray(_rulVao);
+                GL.Uniform1(_uEdge, 1);
+                GL.Uniform3(_uEdgeColor, RulingColor.X, RulingColor.Y, RulingColor.Z);
+                GL.LineWidth(1.5f);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _rulCount);
+                GL.LineWidth(1f);
+            }
             GL.BindVertexArray(0);
         }
 
@@ -246,6 +275,7 @@ void main() {
         public void Dispose()
         {
             if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vboPos); GL.DeleteBuffer(_vboNrm); GL.DeleteBuffer(_ebo); }
+            if (_rulVao != 0) { GL.DeleteVertexArray(_rulVao); GL.DeleteBuffer(_rulVbo); }
             if (_tex != 0) GL.DeleteTexture(_tex);
             if (_prog != 0) GL.DeleteProgram(_prog);
         }

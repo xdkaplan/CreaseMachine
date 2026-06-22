@@ -34,7 +34,7 @@ namespace CreasePatchSolver
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         string _meshPath;            // source mesh path, so Reset can reload the input from disk
-        bool _glInit, _meshDirty, _reframe;         // _reframe: re-fit the camera on the next upload
+        bool _glInit, _meshDirty, _reframe, _rulingsDirty;   // _reframe: re-fit camera next upload; _rulingsDirty: recompute ruling overlay
         long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
@@ -126,13 +126,20 @@ namespace CreasePatchSolver
             MatcapList.ItemsSource = thumbs;
             // Initial matcap applied (not recorded) before the SelectionChanged handler is wired, so
             // setting the index here doesn't fire a recorded command.
-            if (_matcapPaths.Length > 0) { MatcapList.SelectedIndex = 0; ApplyMatcap(0); }
+            if (_matcapPaths.Length > 0) { int defMc = System.Math.Min(2, _matcapPaths.Length - 1); MatcapList.SelectedIndex = defMc; ApplyMatcap(defMc); }   // default = 4th matcap (now index 2 after removing the 3rd)
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
-            IterButton.Click += (s, e) => Execute(StudioCommand.Run(_sim.IterPerRun, _sim.ToFlowParams()), record: true);
+            SolveButton.Click += (s, e) => OnSolve();   // bake: develop-to-accuracy + subdivide rounds (not journaled)
             SubdivideButton.Click += (s, e) => Execute(StudioCommand.Subdiv(), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
-            FlattenButton.Click += (s, e) => OnFlatten();   // direct handler (not journaled)
+            // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
+            // click a preset, Ctrl+R to start clean, then hold Space — repeat for each to compare.
+            PresetAButton.Click += (s, e) => _sim.ApplyPreset('A');
+            PresetBButton.Click += (s, e) => _sim.ApplyPreset('B');
+            PresetCButton.Click += (s, e) => _sim.ApplyPreset('C');
+            PresetDButton.Click += (s, e) => _sim.ApplyPreset('D');
+            // recompute the ruling overlay when its toggle flips (so it appears without needing a solve)
+            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.ShowRulings)) { _rulingsDirty = true; _gl?.InvalidateVisual(); } };
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -346,8 +353,9 @@ namespace CreasePatchSolver
             sw.Stop();
             _lastRunMs = sw.Elapsed.TotalMilliseconds;
             _totalIters += n;
-            _meshDirty = true;                                          // OnRender re-uploads M (_view) once
+            _meshDirty = true; _rulingsDirty = true;                    // OnRender re-uploads M (_view) once (+ recompute rulings)
             if (_hasFlat && _flatView != null) _flatView.Upload(_flat); // re-upload M' once per batch, not per step
+            if (_hasFlat && _flat != null) _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;   // live developability readout (Accuracy gate)
             Title = "CreasePatchSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
             UpdateStatus();
             _gl?.InvalidateVisual();
@@ -359,17 +367,58 @@ namespace CreasePatchSolver
         // Returns false if BFF was needed but failed (caller should stop the run).
         bool PatchStep(int lmIters)
         {
-            if (_session == null) return false;
-            if (_bffNeeded)
-            {
-                bool ok = Bff.TryFlatten(_session.Mesh, out var flat, out var log);
-                if (!string.IsNullOrWhiteSpace(log)) Log(log.TrimEnd());
-                if (!ok || flat == null) return false;   // failure logged; don't start the sim
-                ShowFlat(flat);                            // upload M' beside M (shared offset logic)
-                _bffNeeded = false;                        // BFF done for this mesh
-            }
+            if (!EnsureFlat()) return false;   // lazy BFF gate (shared with Solve)
             IsometricStep(lmIters);
             return true;
+        }
+
+        // ===================== Solve (bake) =====================
+
+        // Develop to the selected Accuracy, then subdivide + re-develop for each Subdivision level. Resets to
+        // the input first (idempotent). Synchronous, no live animation; bounded by a wall-clock budget plus
+        // per-round stall detection. Shows the final result + strain.
+        void OnSolve()
+        {
+            if (_session == null || _meshPath == null) return;
+            Title = "CreasePatchSolver — solving…";
+            ApplyReset();                          // start clean from the input mesh
+            _view?.Upload(_session.Mesh);          // current M bounds so M' places correctly on first flatten
+            if (!EnsureFlat()) { Title = "CreasePatchSolver — BFF failed"; UpdateStatus(); return; }
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            const long budgetMs = 10000;           // hard cap on the whole bake (UI is frozen meanwhile)
+            double target = _sim.AccuracyStrainPct;
+            SolveToAccuracy(target, sw, budgetMs);
+            for (int lvl = 0; lvl < _sim.SubdivLevel && sw.ElapsedMilliseconds < budgetMs; lvl++)
+            {
+                ApplySubdivide();
+                SolveToAccuracy(target, sw, budgetMs);
+            }
+
+            _meshDirty = true; _rulingsDirty = true;
+            if (_hasFlat && _flatView != null) _flatView.Upload(_flat);
+            double pct = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
+            _sim.StrainPct = pct;
+            Title = "CreasePatchSolver — solved " + (double.IsNaN(pct) ? "" : pct.ToString("0.###") + "%  ")
+                  + "(" + _session.Mesh.Vertices.Count + " verts)";
+            UpdateStatus(); _gl?.InvalidateVisual();
+        }
+
+        // LM iterations until strain (relErr) <= targetPct, convergence (no progress), or the time budget.
+        void SolveToAccuracy(double targetPct, System.Diagnostics.Stopwatch sw, long budgetMs)
+        {
+            if (_flat == null || _M0 == null) return;
+            double prev = double.MaxValue;
+            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs; it++)
+            {
+                _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
+                    _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight,
+                    _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref _lmLambda);
+                double pct = RelErr(_session.Mesh, _flat) * 100.0;
+                if (pct <= targetPct) break;            // reached the accuracy bar
+                if (prev - pct < 1e-5) break;           // converged (no further progress) -> subdivide may help
+                prev = pct;
+            }
         }
 
         // `lmIters` Levenberg-Marquardt iterations co-refining M (3D) and its flat image M' toward
@@ -383,8 +432,15 @@ namespace CreasePatchSolver
         {
             if (_session == null || _flat == null || _M0 == null) return;
             _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
-                          _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight,
+                          _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight, _sim.DiffFair, _sim.BendWeight, _sim.BendDiff,
                           lmIters, LmCgIters, ref _lmLambda);
+            // optional non-shrinking smoother (strain distributor / de-buckler) after the LM step
+            var sm = (IsometricSmoothers.Kind)_sim.SmoothKind;
+            if (sm != IsometricSmoothers.Kind.None)
+            {
+                IsometricSmoothers.Apply(sm, _session.Mesh, _sim.SmoothStrength, 2, false);
+                IsometricSmoothers.Apply(sm, _flat, _sim.SmoothStrength, 2, true);
+            }
         }
 
         // One 1->4 subdivision of the live mesh. Geometry-preserving (midpoints are linear). When a
@@ -429,6 +485,7 @@ namespace CreasePatchSolver
                 _isoResFactor = (_refMeanLen2 > 0 && cur > 0) ? Math.Pow(_refMeanLen2 / cur, 1.5) : 1.0;
                 _lmLambda = 0;                               // resolution changed -> fresh LM trust region
                 _flatView?.Upload(_flat);                    // re-upload the refined M'
+                _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;   // refresh strain readout (stays ~constant: subdivide is metric-preserving)
             }
 
             _meshDirty = true;
@@ -471,14 +528,20 @@ namespace CreasePatchSolver
         // Run Boundary First Flattening on the live mesh and show the flat map M' beside M. BFF returns
         // an OBJ already on the XY plane (z=0) with the SAME vertex/face count + ordering as the input,
         // so M'[i] corresponds to M[i]. We offset M' in +X so it sits on the ground plane next to M.
-        void OnFlatten()
+        // BFF gate: run Boundary First Flattening once for the current mesh (lazy), show M', arm the solver.
+        // Returns true once a usable flat map + anchor exist. Shared by spacebar (PatchStep) and Solve.
+        bool EnsureFlat()
         {
-            if (_session == null) return;
-            bool ok = Bff.TryFlatten(_session.Mesh, out var flat, out var log);
-            if (!string.IsNullOrWhiteSpace(log)) Log(log.TrimEnd());
-            if (!ok || flat == null) return;   // failure already logged; don't crash
-            ShowFlat(flat);
-            _bffNeeded = false;   // share the gate: a manual Flatten satisfies PatchStep's lazy BFF
+            if (_session == null) return false;
+            if (_bffNeeded)
+            {
+                bool ok = Bff.TryFlatten(_session.Mesh, out var flat, out var log);
+                if (!string.IsNullOrWhiteSpace(log)) Log(log.TrimEnd());
+                if (!ok || flat == null) return false;   // failure logged; don't start the sim
+                ShowFlat(flat);
+                _bffNeeded = false;
+            }
+            return _flat != null && _M0 != null;
         }
 
         // Upload the BFF flat map M' and place it beside M on the z=0 plane (to +X of M by both radii
@@ -545,6 +608,24 @@ namespace CreasePatchSolver
                 s += dx * dx + dy * dy + dz * dz; n++;
             }
             return n > 0 ? s / n : 0.0;
+        }
+
+        // Relative L2 edge-length error between M and its flat image M' = the in-plane STRAIN (the paper's
+        // developability metric, ‖L'−L‖/‖L‖). Drives the live Accuracy/GO readout. M' is on z=0.
+        static double RelErr(PlanktonMesh M, PlanktonMesh Mp)
+        {
+            if (M == null || Mp == null || Mp.Vertices.Count != M.Vertices.Count) return double.NaN;
+            double num = 0, den = 0; int nH = M.Halfedges.Count;
+            for (int h = 0; h < nH; h += 2)
+            {
+                if (M.Halfedges[h].IsUnused) continue;
+                int i = M.Halfedges[h].StartVertex, j = M.Halfedges[h + 1].StartVertex;
+                var a = M.Vertices[i]; var b = M.Vertices[j]; var c = Mp.Vertices[i]; var d = Mp.Vertices[j];
+                double lM = System.Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y) + (a.Z - b.Z) * (a.Z - b.Z));
+                double lP = System.Math.Sqrt((c.X - d.X) * (c.X - d.X) + (c.Y - d.Y) * (c.Y - d.Y) + (c.Z - d.Z) * (c.Z - d.Z));
+                num += (lM - lP) * (lM - lP); den += lM * lM;
+            }
+            return den > 0 ? System.Math.Sqrt(num / den) : double.NaN;
         }
 
         // ===================== journal save / replay =====================
@@ -779,7 +860,14 @@ namespace CreasePatchSolver
                 MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
-            if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp; _view.Draw(view, proj); }   // Facet -> shader
+            if (_view != null)
+            {
+                _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
+                _view.ShowRulings = _sim.ShowRulings;
+                if (_sim.ShowRulings && _view.HasMesh && _session != null && _rulingsDirty)
+                { _view.SetRulings(RulingField.Compute(_session.Mesh, 0.45, 0.02)); _rulingsDirty = false; }
+                _view.Draw(view, proj);
+            }
             if (_hasFlat && _flatView != null && _flatView.HasMesh)   // BFF flat map M', beside M on the z=0 plane
             {
                 _flatView.Sharpness = (float)_sim.Facet; _flatView.FacetExp = (float)_sim.FacetExp;
