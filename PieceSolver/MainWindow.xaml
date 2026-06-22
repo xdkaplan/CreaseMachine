@@ -193,9 +193,13 @@
                                         <Slider Minimum="0" Maximum="10" Value="{Binding ToleranceIndex}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
                                     <DockPanel Margin="0,6,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
-                                        <CheckBox Content="Show rulings (developable generators)" IsChecked="{Binding ShowRulings, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
-                                                  ToolTip="Overlay per-vertex ruling lines — the zero-curvature straight generators (gold). Clean parallel rulings = genuinely developable; swirling = not there yet." />
+                                        <TextBlock DockPanel.Dock="Left" Text="Field" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Flow-aligned LIC grain painted on M, modulating the matcap. Ruling = the developable generators (zero-curvature directions); Gradient = the developability flow field (tinted by |grad|). Clean parallel grain = genuinely developable; swirling = not there yet." />
+                                        <ComboBox SelectedIndex="{Binding FieldMode, Mode=TwoWay}" Height="20" FontSize="11" VerticalAlignment="Center" Margin="6,0">
+                                            <ComboBoxItem Content="Off" />
+                                            <ComboBoxItem Content="Ruling LIC (developable grain)" />
+                                            <ComboBoxItem Content="Gradient LIC (flow field)" />
+                                        </ComboBox>
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="" Width="62" />

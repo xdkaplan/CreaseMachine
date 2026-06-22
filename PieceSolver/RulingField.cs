@@ -85,6 +85,74 @@ namespace PieceSolver
             return outv.ToArray();
         }
 
+        // Per-vertex ruling DIRECTION field for the surface LIC (instead of discrete segments). Returns
+        // float[nV*3]: the unit ruling direction scaled by an ANISOTROPY confidence in [0,1] — 0 where the
+        // vertex is flat / isotropic / has no defined ruling, so the LIC grain fades out smoothly exactly
+        // where no meaningful ruling exists (no hard skip). Same shape-operator fit as Compute. The vector
+        // length (= confidence) is what the shader tints by; fieldMax is 1 (already normalized).
+        public static float[] ComputeField(PlanktonMesh M, out float fieldMax)
+        {
+            fieldMax = 1f;
+            int nV = M.Vertices.Count;
+            var field = new float[nV * 3];
+            var pos = new Vec3[nV]; var nrm = new Vec3[nV];
+            for (int v = 0; v < nV; v++) { if (M.Vertices[v].IsUnused) continue; var p = M.Vertices[v]; pos[v] = new Vec3(p.X, p.Y, p.Z); }
+
+            for (int f = 0; f < M.Faces.Count; f++)
+            {
+                if (M.Faces[f].IsUnused) continue;
+                int[] fv = M.Faces.GetFaceVertices(f); if (fv.Length < 3) continue;
+                Vec3 cr = Vec3.Cross(pos[fv[1]] - pos[fv[0]], pos[fv[2]] - pos[fv[0]]);
+                nrm[fv[0]] += cr; nrm[fv[1]] += cr; nrm[fv[2]] += cr;
+            }
+            for (int v = 0; v < nV; v++) { double L = nrm[v].Length; nrm[v] = L > 1e-20 ? nrm[v] * (1.0 / L) : new Vec3(0, 0, 1); }
+
+            for (int v = 0; v < nV; v++)
+            {
+                if (M.Vertices[v].IsUnused) continue;
+                var nb = M.Vertices.GetVertexNeighbours(v); if (nb == null || nb.Length < 3) continue;
+                Vec3 n = nrm[v];
+                Vec3 t1 = Vec3.Cross(n, Math.Abs(n.X) < 0.9 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0));
+                double t1l = t1.Length; if (t1l < 1e-12) continue; t1 = t1 * (1.0 / t1l);
+                Vec3 t2 = Vec3.Cross(n, t1);
+
+                double m00 = 0, m01 = 0, m02 = 0, m11 = 0, m12 = 0, m22 = 0, b0 = 0, b1 = 0, b2 = 0;
+                foreach (int u in nb)
+                {
+                    if (u < 0 || M.Vertices[u].IsUnused) continue;
+                    Vec3 e = pos[u] - pos[v]; double ee = e * e; if (ee < 1e-18) continue;
+                    double kappa = 2.0 * (e * n) / ee;
+                    double a = e * t1, bb = e * t2; double tl = Math.Sqrt(a * a + bb * bb); if (tl < 1e-12) continue;
+                    double ca = a / tl, cb = bb / tl;
+                    double c0 = ca * ca, c1 = 2 * ca * cb, c2 = cb * cb;
+                    m00 += c0 * c0; m01 += c0 * c1; m02 += c0 * c2; m11 += c1 * c1; m12 += c1 * c2; m22 += c2 * c2;
+                    b0 += c0 * kappa; b1 += c1 * kappa; b2 += c2 * kappa;
+                }
+                if (!Solve3(m00, m01, m02, m11, m12, m22, b0, b1, b2, out double II11, out double II12, out double II22)) continue;
+
+                double tr = II11 + II22, det = II11 * II22 - II12 * II12;
+                double disc = Math.Sqrt(Math.Max(0, tr * tr * 0.25 - det));
+                double l1 = tr * 0.5 + disc, l2 = tr * 0.5 - disc;
+                double lbig = Math.Abs(l1) >= Math.Abs(l2) ? l1 : l2;
+                double lsmall = Math.Abs(l1) < Math.Abs(l2) ? l1 : l2;
+                if (Math.Abs(lbig) < 1e-20) continue;
+                double aniso = 1.0 - Math.Abs(lsmall) / Math.Abs(lbig);    // 1 = developable, 0 = isotropic
+                if (aniso <= 0.0) continue;
+
+                double ex, ey;   // eigenvector for lsmall (~zero-curvature) = ruling direction (in t1,t2)
+                if (Math.Abs(II12) > 1e-12) { ex = II12; ey = lsmall - II11; }
+                else if (Math.Abs(II11) <= Math.Abs(II22)) { ex = 1; ey = 0; }
+                else { ex = 0; ey = 1; }
+                double el = Math.Sqrt(ex * ex + ey * ey); if (el < 1e-12) continue; ex /= el; ey /= el;
+
+                Vec3 r = t1 * ex + t2 * ey;
+                field[v * 3]     = (float)(r.X * aniso);
+                field[v * 3 + 1] = (float)(r.Y * aniso);
+                field[v * 3 + 2] = (float)(r.Z * aniso);
+            }
+            return field;
+        }
+
         // Solve the symmetric 3x3 [[a,b,c],[b,d,e],[c,e,f]] x = (r0,r1,r2) via cofactor inverse. False if singular.
         static bool Solve3(double a, double b, double c, double d, double e, double f, double r0, double r1, double r2,
                            out double x, out double y, out double z)
