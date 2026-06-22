@@ -381,6 +381,7 @@ namespace CreasePatchSolver
             // ---- LM outer loop ----
             double curE = Energy(Mx, My, Mz, Px, Py);
             if (lambda <= 0) lambda = 1.0;
+            double nu = 2.0;   // Nielsen damping: reject-doubling factor
             for (int outer = 0; outer < outerIters; outer++)
             {
                 ComputeR(Mx, My, Mz, Px, Py, r0);
@@ -420,13 +421,20 @@ namespace CreasePatchSolver
                         tPx[v] = Px[v] + x[oP + 2 * v]; tPy[v] = Py[v] + x[oP + 2 * v + 1];
                     }
                     double trialE = Energy(tMx, tMy, tMz, tPx, tPy);
-                    if (trialE < curE)
+                    // Nielsen gain-ratio damping (Madsen et al. 2004): size lambda from the actual-vs-predicted
+                    // energy reduction so a good step lands on the first try far more often -> fewer rejected
+                    // tries (each of which re-runs a full CG). rho ~ 1 means the local model was accurate.
+                    double predicted = 0.0; for (int k = 0; k < N; k++) predicted += x[k] * (lam * x[k] + b[k]);
+                    double rho = predicted > 0.0 ? (curE - trialE) / predicted : (trialE < curE ? 1.0 : -1.0);
+                    if (rho > 0.0 && trialE < curE)   // accept (model agrees with a genuine decrease)
                     {
                         Array.Copy(tMx, Mx, nV); Array.Copy(tMy, My, nV); Array.Copy(tMz, Mz, nV);
                         Array.Copy(tPx, Px, nV); Array.Copy(tPy, Py, nV);
-                        curE = trialE; lambda = Math.Max(lambda * 0.5, 1e-9); accepted = true;
+                        curE = trialE; accepted = true;
+                        double g = 2.0 * rho - 1.0;
+                        lambda = Math.Max(lambda * Math.Max(1.0 / 3.0, 1.0 - g * g * g), 1e-9); nu = 2.0;
                     }
-                    else lambda = Math.Min(lambda * 4.0, 1e12);
+                    else { lambda = Math.Min(lambda * nu, 1e12); nu *= 2.0; }
                 }
                 if (!accepted) break;   // damping maxed out without progress -> converged / stuck
             }
