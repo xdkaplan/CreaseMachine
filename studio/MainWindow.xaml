@@ -74,9 +74,13 @@
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="CreaseStudio" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
-                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | +N iter. -->
+                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | Solve | +N iter. -->
                 <Button x:Name="IterButton" DockPanel.Dock="Right" Content="{Binding IterLabel}"
                         Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center" />
+                <Button x:Name="SolveButton" DockPanel.Dock="Right" Content="Solve"
+                        Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
+                        Background="#3D5A9E" Foreground="#F0F2F6"
+                        ToolTip="Develop a copy of the mesh (no collapse), then propose piece-boundary creases at edges whose fold angle ≥ Crease ∠." />
                 <Button x:Name="ResetButton" DockPanel.Dock="Right" Content="Reset"
                         Padding="10,2" FontSize="12" VerticalAlignment="Center"
                         ToolTip="Reload the input mesh and reset the flow" />
@@ -218,6 +222,15 @@
                                         <TextBlock DockPanel.Dock="Left" Text="MomFix" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" />
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MomFix}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="1" Maximum="4" Value="{Binding MomFix}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
+                                    </DockPanel>
+
+                                    <Separator Margin="0,8,0,2" Background="#3F3F46" />
+                                    <TextBlock Text="CREASE PROPOSER" Foreground="#8A8A98" FontSize="10" FontWeight="SemiBold" Margin="0,0,0,2" />
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Crease ∠" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="After Solve, edges whose settled fold angle ≥ this are proposed as piece boundaries. Live — re-labels the overlay without re-solving." />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding CreaseAngleDeg, StringFormat={}{0:0.#}°}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="5" Maximum="90" Value="{Binding CreaseAngleDeg}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
                                 </StackPanel>
                             </ScrollViewer>
@@ -366,5 +379,22 @@
                 </ScrollViewer>
             </DockPanel>
         </Border>
+
+        <!-- SOLVE overlay: full-window modal shown during the (async, cancelable) crease-proposer bake.
+             Spans every row and sits on top (ZIndex), so it dims the UI and swallows input until done. -->
+        <Grid x:Name="SolveOverlay" Grid.Row="0" Grid.RowSpan="4" Panel.ZIndex="100"
+              Background="#B0000000" Visibility="Collapsed">
+            <Border Background="#2A2A2E" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="6"
+                    Padding="24,18" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel MinWidth="280">
+                    <TextBlock Text="Solving developability…" Foreground="#E6E6EA" FontSize="14" FontWeight="SemiBold" />
+                    <TextBlock x:Name="SolveStatus" Text="" Foreground="#9AA0A8" FontSize="11" Margin="0,8,0,0" />
+                    <ProgressBar IsIndeterminate="True" Height="4" Margin="0,12,0,0"
+                                 Background="#1A1A1C" Foreground="#FF7A4A" BorderThickness="0" />
+                    <Button x:Name="SolveCancelButton" Content="Cancel" HorizontalAlignment="Right"
+                            Margin="0,14,0,0" Padding="16,3" FontSize="12" />
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

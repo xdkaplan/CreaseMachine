@@ -22,6 +22,15 @@ namespace CreaseStudio
         long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
+        // Crease proposer: the last Solve's per-edge settled fold angles (radians) with endpoint
+        // vertex indices, kept so the Crease ∠ slider re-labels the overlay without re-solving. The
+        // overlay line vertices are staged here and uploaded on the GL thread (like the mesh/matcap).
+        double[] _creaseFold; int[] _creaseA, _creaseB;
+        float[] _creasePts; bool _creaseDirty;      // staged GL_LINES endpoints + upload-pending flag
+        int _creaseCount;                           // proposed edges at the current threshold (for the log)
+        bool _solving;                              // a Solve bake is in flight (gates flow/input/re-entry)
+        System.Threading.CancellationTokenSource _solveCts;
+
         // Display state (render-only). Facet (smooth<->faceted) is a shader uniform from _sim.Facet.
         string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
         byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
@@ -145,6 +154,8 @@ namespace CreaseStudio
             // Top-bar actions route through Execute() so each is recorded to the session journal.
             IterButton.Click += (s, e) => Execute(StudioCommand.Run(_sim.IterPerRun, _sim.ToFlowParams()), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
+            SolveButton.Click += (s, e) => StartSolve();
+            SolveCancelButton.Click += (s, e) => _solveCts?.Cancel();
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -160,6 +171,8 @@ namespace CreaseStudio
             // Facet slider binds straight to the view-model; a render is kicked when it changes.
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
             _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual(); };
+            // Crease ∠ slider: re-label the proposed-crease overlay from the cached fold angles (no re-solve).
+            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) RelabelCreases(); };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
             _console.SaveButton.Click += (s, e) => SaveSession();
@@ -192,7 +205,7 @@ namespace CreaseStudio
                 }
                 else if (e.Key == Key.Space)              // hold to run the flow continuously
                 {
-                    if (!_spaceHeld) { _spaceHeld = true; _spaceIters = 0; _flowTimer.Start(); }
+                    if (!_solving && !_spaceHeld) { _spaceHeld = true; _spaceIters = 0; _flowTimer.Start(); }
                     e.Handled = true;   // also stops Space from "clicking" a focused button
                 }
             };
@@ -202,7 +215,7 @@ namespace CreaseStudio
             _flowTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
             _flowTimer.Tick += (s, e) =>
             {
-                if (_session == null) { _flowTimer.Stop(); return; }
+                if (_session == null || _solving) { _flowTimer.Stop(); return; }
                 ApplyRun(1, _sim.ToFlowParams());   // ApplyRun doesn't journal (Execute does), so no flooding
                 _spaceIters++;
             };
@@ -372,6 +385,7 @@ namespace CreaseStudio
             _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
+            ClearProposedCreases();   // labels reference the prior mesh's vertices
             Title = "CreaseStudio — " + System.IO.Path.GetFileName(path);
             _gl?.InvalidateVisual();
         }
@@ -393,6 +407,7 @@ namespace CreaseStudio
             _lastRunMs = sw.Elapsed.TotalMilliseconds;
             _totalIters += n;
             _meshDirty = true;
+            ClearProposedCreases();   // the flow moved/collapsed the mesh -> the proposal is now stale
             Title = "CreaseStudio — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
             UpdateStatus();
             _gl?.InvalidateVisual();
@@ -407,6 +422,7 @@ namespace CreaseStudio
             if (_session == null) return;
             _session.Subdivide();
             _meshDirty = true;
+            ClearProposedCreases();   // 1->4 renumbers vertices -> labels invalid
             Title = "CreaseStudio — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
         }
@@ -419,6 +435,7 @@ namespace CreaseStudio
             catch (Exception ex) { Title = "CreaseStudio — reset failed: " + ex.Message; return; }
             _totalIters = 0;
             _meshDirty = true;
+            ClearProposedCreases();   // fresh mesh from disk
             Title = "CreaseStudio — " + System.IO.Path.GetFileName(_meshPath);
             _gl?.InvalidateVisual();
         }
@@ -435,6 +452,128 @@ namespace CreaseStudio
                 _gl?.InvalidateVisual();
             }
             catch { }
+        }
+
+        // ===================== crease proposer (async-modal Solve) =====================
+
+        // Develop a COPY of the current geometry to a settled (developable) state behind a modal —
+        // WITHOUT any edge collapse/heal, so topology is preserved and the settled mesh's edges map
+        // 1:1 back to the original vertices. We flow IN PLACE (snapshot positions + velocity, flow,
+        // measure per-edge fold angles, then restore the original geometry for display), so there is no
+        // clone and no provenance bookkeeping. The fold angles are cached; the Crease ∠ slider then
+        // labels edges >= threshold as proposed piece boundaries (re-label is free — no re-solve).
+        async void StartSolve()
+        {
+            if (_session == null || _solving) return;
+            _solving = true;
+            _solveCts = new System.Threading.CancellationTokenSource();
+            var ct = _solveCts.Token;
+            ShowSolveOverlay(true);
+            SetActionsEnabled(false);
+
+            FlowParams p = _sim.ToFlowParams();
+            PlanktonMesh P = _session.Mesh;
+            int nV = P.Vertices.Count;
+            var sx = new double[nV]; var sy = new double[nV]; var sz = new double[nV];
+            for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; sx[v] = pv.X; sy[v] = pv.Y; sz[v] = pv.Z; }
+            Vec3[] savedVel = (Vec3[])_session.Vel.Clone();
+
+            double[] fold = null; int[] ea = null, eb = null;
+            bool canceled = false;
+            try
+            {
+                await System.Threading.Tasks.Task.Run(() =>
+                {
+                    const int maxIter = 1200;
+                    double g0 = -1.0;
+                    for (int i = 0; i < maxIter; i++)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        double g = _session.NesterovStep(p, out _);   // NO collapse/heal -> topology fixed
+                        if (g0 < 0) { g0 = g; if (g0 <= 1e-12) break; }   // already developable
+                        if ((i & 15) == 0)
+                        {
+                            int it = i; double gg = g;
+                            Dispatcher.BeginInvoke(new Action(() => SolveStatus.Text = $"iter {it}    |grad| {gg:0.###e0}"));
+                        }
+                        if (g0 > 0 && g < 1e-3 * g0) break;   // settled
+                    }
+                    fold = MeshOps.EdgeDihedrals(_session.Mesh, out ea, out eb);
+                }, ct);
+            }
+            catch (OperationCanceledException) { canceled = true; }
+            catch (Exception ex) { Log("solve failed: " + ex.Message); }
+
+            // Restore the original geometry + momentum: the viewport returns to the input mesh, and the
+            // cached fold labels reference exactly these (unrenumbered) vertices.
+            for (int v = 0; v < nV; v++) P.Vertices.SetVertex(v, sx[v], sy[v], sz[v]);
+            _session.Vel = savedVel;
+            _meshDirty = true;
+
+            if (!canceled && fold != null)
+            {
+                _creaseFold = fold; _creaseA = ea; _creaseB = eb;
+                RelabelCreases();
+                Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at ≥ {_sim.CreaseAngleDeg:0.#}°");
+            }
+
+            ShowSolveOverlay(false);
+            SetActionsEnabled(true);
+            _solving = false;
+            _gl?.InvalidateVisual();
+        }
+
+        // Rebuild the crease overlay from the cached fold angles at the current Crease ∠ threshold.
+        // CPU-only (stages the line vertices; the GL upload happens in OnRender), so it runs live on
+        // every slider tick. No cached angles -> clears the overlay.
+        void RelabelCreases()
+        {
+            if (_creaseFold == null || _session == null)
+            {
+                _creaseCount = 0; _creasePts = Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
+                return;
+            }
+            double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
+            PlanktonMesh P = _session.Mesh;
+            int nV = P.Vertices.Count;
+            var pts = new System.Collections.Generic.List<float>();
+            int n = 0;
+            for (int i = 0; i < _creaseFold.Length; i++)
+            {
+                if (_creaseFold[i] < thr) continue;
+                int a = _creaseA[i], b = _creaseB[i];
+                if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
+                if (P.Vertices[a].IsUnused || P.Vertices[b].IsUnused) continue;
+                var pa = P.Vertices[a]; var pb = P.Vertices[b];
+                pts.Add((float)pa.X); pts.Add((float)pa.Y); pts.Add((float)pa.Z);
+                pts.Add((float)pb.X); pts.Add((float)pb.Y); pts.Add((float)pb.Z);
+                n++;
+            }
+            _creasePts = pts.ToArray();
+            _creaseCount = n;
+            _creaseDirty = true;
+            _gl?.InvalidateVisual();
+        }
+
+        // Drop the cached crease proposal + overlay (a fresh mesh, or topology changed under the flow,
+        // invalidates the 1:1 edge labels). Idempotent.
+        void ClearProposedCreases()
+        {
+            if (_creaseFold == null && (_creasePts == null || _creasePts.Length == 0)) return;
+            _creaseFold = null; _creaseA = null; _creaseB = null;
+            _creaseCount = 0; _creasePts = Array.Empty<float>(); _creaseDirty = true;
+        }
+
+        void ShowSolveOverlay(bool show)
+        {
+            SolveOverlay.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            if (show) SolveStatus.Text = "";
+        }
+
+        // Gate the top-bar actions during a Solve bake (the modal overlay also swallows viewport input).
+        void SetActionsEnabled(bool enabled)
+        {
+            IterButton.IsEnabled = enabled; ResetButton.IsEnabled = enabled; SolveButton.IsEnabled = enabled;
         }
 
         // ===================== journal save / replay =====================
@@ -989,6 +1128,9 @@ namespace CreaseStudio
             // apply a queued matcap texture (GL thread = here)
             if (_matcapDirty && _view != null && _matcapPx != null) { _view.SetMatcap(_matcapPx, _matcapW, _matcapH); _matcapDirty = false; }
 
+            // upload queued crease-overlay line vertices (GL thread = here, like the mesh/matcap)
+            if (_creaseDirty && _view != null) { _view.SetCreases(_creasePts); _creaseDirty = false; }
+
             // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
             // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
             if (_meshDirty && _session != null)
@@ -1049,6 +1191,7 @@ namespace CreaseStudio
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
             if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp; _view.Draw(view, proj); }   // Facet -> shader
+            _view?.DrawCreases(view, proj);   // proposed piece-boundary creases, overlaid on the surface
         }
     }
 }

@@ -20,6 +20,11 @@ namespace CreaseStudio
         int _indexCount;
         bool _ready;
 
+        // Crease overlay: proposed piece-boundary edges, drawn as GL_LINES on top of the surface
+        // (depth test off so they never z-fight the faces they lie on). Position-only, flat colour.
+        int _lineVao, _lineVbo, _lineProg, _uLineMvp, _uLineColor;
+        int _lineCount;
+
         public Vector3 Center { get; private set; }
         public float Radius { get; private set; } = 1f;
         public float Sharpness = 1f;     // 0 = smooth, 1 = faceted; set per frame from the Facet slider
@@ -173,6 +178,60 @@ void main() {
             _ready = _indexCount > 0;
         }
 
+        const string LINE_VERT = @"#version 330 core
+layout(location=0) in vec3 aPos;
+uniform mat4 uMvp;
+void main() { gl_Position = uMvp * vec4(aPos, 1.0); }";
+
+        const string LINE_FRAG = @"#version 330 core
+out vec4 FragColor;
+uniform vec3 uColor;
+void main() { FragColor = vec4(uColor, 1.0); }";
+
+        void EnsureLineProgram()
+        {
+            if (_lineProg != 0) return;
+            _lineProg = Link(LINE_VERT, LINE_FRAG);
+            _uLineMvp = GL.GetUniformLocation(_lineProg, "uMvp");
+            _uLineColor = GL.GetUniformLocation(_lineProg, "uColor");
+        }
+
+        // Upload the proposed-crease line segments: xyz is a flat array of endpoint triples, two
+        // consecutive points per segment (GL_LINES). Empty / null clears the overlay.
+        public void SetCreases(float[] xyz)
+        {
+            EnsureLineProgram();
+            _lineCount = xyz == null ? 0 : xyz.Length / 3;
+            if (_lineCount == 0) return;
+            if (_lineVao == 0) { _lineVao = GL.GenVertexArray(); _lineVbo = GL.GenBuffer(); }
+            GL.BindVertexArray(_lineVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _lineVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, xyz.Length * sizeof(float), xyz, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(0);
+            GL.BindVertexArray(0);
+        }
+
+        public void ClearCreases() { _lineCount = 0; }
+
+        // Draw the crease overlay on top of the surface. Depth test is disabled for the pass (and
+        // restored after) so on-surface creases always read clearly without z-fighting.
+        public void DrawCreases(Matrix4 view, Matrix4 proj)
+        {
+            if (_lineCount == 0 || _lineProg == 0) return;
+            Matrix4 mvp = view * proj;
+            bool depth = GL.IsEnabled(EnableCap.DepthTest);
+            GL.Disable(EnableCap.DepthTest);
+            GL.UseProgram(_lineProg);
+            GL.UniformMatrix4(_uLineMvp, false, ref mvp);
+            GL.Uniform3(_uLineColor, 1.0f, 0.42f, 0.12f);   // warm orange — reads against any matcap
+            GL.LineWidth(2f);
+            GL.BindVertexArray(_lineVao);
+            GL.DrawArrays(PrimitiveType.Lines, 0, _lineCount);
+            GL.BindVertexArray(0);
+            if (depth) GL.Enable(EnableCap.DepthTest);
+        }
+
         public void Draw(Matrix4 view, Matrix4 proj)
         {
             if (!_ready) return;
@@ -223,8 +282,10 @@ void main() {
         public void Dispose()
         {
             if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vboPos); GL.DeleteBuffer(_vboNrm); GL.DeleteBuffer(_ebo); }
+            if (_lineVao != 0) { GL.DeleteVertexArray(_lineVao); GL.DeleteBuffer(_lineVbo); }
             if (_tex != 0) GL.DeleteTexture(_tex);
             if (_prog != 0) GL.DeleteProgram(_prog);
+            if (_lineProg != 0) GL.DeleteProgram(_lineProg);
         }
     }
 }
