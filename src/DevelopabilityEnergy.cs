@@ -1791,19 +1791,6 @@ namespace CreaseMachine
             return lMin;
         }
 
-        // Backwards-compatible single-eigenpair shim: returns lambda_min + its eigenvector.
-        // Kept so existing call sites (the !useMaxCov branch) keep compiling unchanged in mode 0.
-        private static double MinTangentEigenpair(double m00, double m01, double m02,
-                                                  double m11, double m12, double m22,
-                                                  Vec3 Nv, out Vec3 x)
-        {
-            Vec3 xMin, xMax;
-            double lMin, lMax;
-            TangentEigenpairs(m00, m01, m02, m11, m12, m22, Nv, out lMin, out xMin, out lMax, out xMax);
-            x = xMin;
-            return lMin;
-        }
-
         // Both tangent eigenpairs of M (smaller AND larger). The energy is lambda_min in the
         // paper-faithful mode (0); modes 1 (det = lambda_min * lambda_max) and 2 (harmonic mean
         // = det/trace) use both eigenpairs and produce a basis-invariant gradient even when
@@ -1906,67 +1893,6 @@ namespace CreaseMachine
             if (sharpness <= 0.0) return 1.0;
             double r = defectAbs / (0.25 * Math.PI);
             return 1.0 / (1.0 + Math.Pow(r, sharpness));
-        }
-
-        // Jacobi eigenvalue algorithm for 3x3 symmetric matrix.
-        // Returns eigenvalues sorted by |value| ascending, with corresponding eigenvectors.
-        private static void SymEigen3x3(
-            double a00, double a01, double a02,
-            double a11, double a12, double a22,
-            double[] evals, Vec3[] evecs)
-        {
-            // Working copy (full symmetric matrix)
-            double[,] A = { { a00, a01, a02 }, { a01, a11, a12 }, { a02, a12, a22 } };
-            // Eigenvector matrix (columns = eigenvectors), starts as identity
-            double[,] V = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
-
-            for (int iter = 0; iter < 50; iter++)
-            {
-                // Find largest off-diagonal |A[p,q]|
-                int p = 0, q = 1;
-                double best = Math.Abs(A[0, 1]);
-                if (Math.Abs(A[0, 2]) > best) { best = Math.Abs(A[0, 2]); p = 0; q = 2; }
-                if (Math.Abs(A[1, 2]) > best) { best = Math.Abs(A[1, 2]); p = 1; q = 2; }
-
-                if (best < 1e-15) break;
-
-                double app = A[p, p], aqq = A[q, q], apq = A[p, q];
-                double tau = (aqq - app) / (2.0 * apq);
-                double t = Math.Sign(tau) / (Math.Abs(tau) + Math.Sqrt(1.0 + tau * tau));
-                double c = 1.0 / Math.Sqrt(1.0 + t * t);
-                double s = t * c;
-
-                // Update A: rotate rows/cols p,q
-                A[p, p] = app - t * apq;
-                A[q, q] = aqq + t * apq;
-                A[p, q] = 0; A[q, p] = 0;
-
-                int r = 3 - p - q; // the other index
-                double arp = A[r, p], arq = A[r, q];
-                A[r, p] = c * arp - s * arq; A[p, r] = A[r, p];
-                A[r, q] = s * arp + c * arq; A[q, r] = A[r, q];
-
-                // Update eigenvectors
-                for (int i = 0; i < 3; i++)
-                {
-                    double vip = V[i, p], viq = V[i, q];
-                    V[i, p] = c * vip - s * viq;
-                    V[i, q] = s * vip + c * viq;
-                }
-            }
-
-            // Extract and sort by |eigenvalue| ascending
-            int[] idx = { 0, 1, 2 };
-            double[] d = { A[0, 0], A[1, 1], A[2, 2] };
-            if (Math.Abs(d[idx[0]]) > Math.Abs(d[idx[1]])) { int tmp = idx[0]; idx[0] = idx[1]; idx[1] = tmp; }
-            if (Math.Abs(d[idx[0]]) > Math.Abs(d[idx[2]])) { int tmp = idx[0]; idx[0] = idx[2]; idx[2] = tmp; }
-            if (Math.Abs(d[idx[1]]) > Math.Abs(d[idx[2]])) { int tmp = idx[1]; idx[1] = idx[2]; idx[2] = tmp; }
-
-            for (int i = 0; i < 3; i++)
-            {
-                evals[i] = d[idx[i]];
-                evecs[i] = new Vec3(V[0, idx[i]], V[1, idx[i]], V[2, idx[i]]);
-            }
         }
     }
 }
