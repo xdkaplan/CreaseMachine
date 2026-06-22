@@ -107,7 +107,8 @@ namespace CreasePatchSolver
             double[] jvtmp = new double[nR];   // J * v
             double[] b = new double[N];        // -J^T r0
             double[] x = new double[N];        // CG solution (delta)
-            double[] cgR = new double[N], cgP = new double[N], cgAp = new double[N];
+            double[] cgR = new double[N], cgP = new double[N], cgAp = new double[N], cgZ = new double[N], cgMinv = new double[N], cgDiag = new double[N];
+            double[] gsx = new double[nV], gsy = new double[nV], gsz = new double[nV];   // scale-row gradient (for the Jacobi diagonal)
             double[] tMx = new double[nV], tMy = new double[nV], tMz = new double[nV], tPx = new double[nV], tPy = new double[nV];
 
             // ---- 2nd-order bending (bi-Laplacian) setup. U(x)_i = mean_nbr(x) - x_i (umbrella Laplacian);
@@ -323,6 +324,59 @@ namespace CreasePatchSolver
 
             double Dot(double[] a, double[] c) { double s = 0; for (int k = 0; k < a.Length; k++) s += a[k] * c[k]; return s; }
 
+            // diag(J^T J) for Jacobi (diagonal) preconditioning of CG: sum of squared Jacobian column entries
+            // per variable. iso + scale + fairness + pos handled exactly; bending (bi-Laplacian) is smooth and
+            // left to the lambda floor. The CG was hitting its iteration cap un-converged (ill-conditioned),
+            // so this is the high-value win. Computed once per outer iteration (depends on the linearization).
+            void DiagJtJ(double[] dg)
+            {
+                Array.Clear(dg, 0, N);
+                for (int e = 0; e < nE; e++)
+                {
+                    int i = ei[e], j = ej[e];
+                    double cx = 2.0 * sIso * (Mx[i] - Mx[j]), cy = 2.0 * sIso * (My[i] - My[j]), cz = 2.0 * sIso * (Mz[i] - Mz[j]);
+                    double ex = cx * cx, ey = cy * cy, ez = cz * cz;
+                    dg[3 * i] += ex; dg[3 * i + 1] += ey; dg[3 * i + 2] += ez;
+                    dg[3 * j] += ex; dg[3 * j + 1] += ey; dg[3 * j + 2] += ez;
+                    double hx = 2.0 * sIso * (Px[i] - Px[j]), hy = 2.0 * sIso * (Py[i] - Py[j]);
+                    double fx = hx * hx, fy = hy * hy;
+                    dg[oP + 2 * i] += fx; dg[oP + 2 * i + 1] += fy;
+                    dg[oP + 2 * j] += fx; dg[oP + 2 * j + 1] += fy;
+                }
+                if (sScale > 0.0 && S0 > 0.0)   // one global row: accumulate the per-vertex gradient, then square
+                {
+                    Array.Clear(gsx, 0, nV); Array.Clear(gsy, 0, nV); Array.Clear(gsz, 0, nV);
+                    for (int e = 0; e < nE; e++)
+                    {
+                        int i = ei[e], j = ej[e];
+                        double dx = 2.0 * (Mx[i] - Mx[j]), dy = 2.0 * (My[i] - My[j]), dz = 2.0 * (Mz[i] - Mz[j]);
+                        gsx[i] += dx; gsy[i] += dy; gsz[i] += dz; gsx[j] -= dx; gsy[j] -= dy; gsz[j] -= dz;
+                    }
+                    double s = sScale / S0;
+                    for (int v = 0; v < nV; v++) { double a = s * gsx[v], b2 = s * gsy[v], c2 = s * gsz[v]; dg[3 * v] += a * a; dg[3 * v + 1] += b2 * b2; dg[3 * v + 2] += c2 * c2; }
+                }
+                if (sFair > 0.0)
+                    for (int v = 0; v < nV; v++)
+                    {
+                        var nb = nbr[v]; int d = nb.Length; if (d == 0) continue;
+                        double diag = sFair * sFair;
+                        for (int k = 0; k < d; k++) { int u = nb[k]; int du = nbr[u].Length; if (du > 0) diag += sFair * sFair / ((double)du * du); }
+                        dg[3 * v] += diag; dg[3 * v + 1] += diag; dg[3 * v + 2] += diag;
+                        if (!diffFair) { dg[oP + 2 * v] += diag; dg[oP + 2 * v + 1] += diag; }
+                    }
+                if (sPos > 0.0)
+                    for (int v = 0; v < nV; v++) { if (!used[v]) continue; double p = sPos * sPos; dg[3 * v] += p; dg[3 * v + 1] += p; dg[3 * v + 2] += p; }
+                if (sBend > 0.0)   // bending diag estimate: sBend^2*(U^2 self-coeff)^2, so Minv doesn't blow up here
+                    for (int v = 0; v < nV; v++)
+                    {
+                        if (!used[v]) continue; var nb = nbr[v]; int d = nb.Length; if (d == 0) continue;
+                        double iv = 1.0 / d, u2 = 1.0;                              // (U^2)_vv = 1 + sum_{k in nbr} 1/(d_v d_k)
+                        for (int k = 0; k < d; k++) { int du = nbr[nb[k]].Length; if (du > 0) u2 += iv / du; }
+                        double bd = sBend * sBend * u2 * u2;
+                        dg[3 * v] += bd; dg[3 * v + 1] += bd; dg[3 * v + 2] += bd;
+                    }
+            }
+
             // ---- LM outer loop ----
             double curE = Energy(Mx, My, Mz, Px, Py);
             if (lambda <= 0) lambda = 1.0;
@@ -331,26 +385,30 @@ namespace CreasePatchSolver
                 ComputeR(Mx, My, Mz, Px, Py, r0);
                 ApplyJt(r0, b);                        // b0 = J^T r0  (we solve A x = -b0)
                 for (int k = 0; k < N; k++) b[k] = -b[k];
+                DiagJtJ(cgDiag);                       // Jacobi diagonal (fixed per outer iter; lambda added per try)
 
                 bool accepted = false;
                 for (int tries = 0; tries < 6 && !accepted; tries++)
                 {
                     double lam = lambda;
-                    // ---- matrix-free CG: solve (J^T J + lam I) x = b ----
+                    for (int k = 0; k < N; k++) cgMinv[k] = 1.0 / (cgDiag[k] + lam);   // M^-1 = 1/(diag(J^T J) + lambda)
+                    // ---- matrix-free Jacobi-PRECONDITIONED CG: solve (J^T J + lam I) x = b ----
                     Array.Clear(x, 0, N);
                     Array.Copy(b, cgR, N);             // r = b - A*0 = b
-                    Array.Copy(b, cgP, N);
-                    double rs = Dot(cgR, cgR), rs0 = rs;
-                    for (int it = 0; it < cgIters && rs > 1e-18 * (rs0 + 1e-30); it++)
+                    for (int k = 0; k < N; k++) cgZ[k] = cgMinv[k] * cgR[k];   // z = M^-1 r
+                    Array.Copy(cgZ, cgP, N);
+                    double rz = Dot(cgR, cgZ), rr0 = Dot(cgR, cgR);
+                    for (int it = 0; it < cgIters && Dot(cgR, cgR) > 1e-18 * (rr0 + 1e-30); it++)
                     {
                         ApplyJ(cgP, jvtmp); ApplyJt(jvtmp, cgAp);          // cgAp = J^T J p
                         for (int k = 0; k < N; k++) cgAp[k] += lam * cgP[k];  // + lambda p
                         double pAp = Dot(cgP, cgAp); if (pAp <= 0) break;
-                        double alpha = rs / pAp;
+                        double alpha = rz / pAp;
                         for (int k = 0; k < N; k++) { x[k] += alpha * cgP[k]; cgR[k] -= alpha * cgAp[k]; }
-                        double rsn = Dot(cgR, cgR), beta = rsn / rs;
-                        for (int k = 0; k < N; k++) cgP[k] = cgR[k] + beta * cgP[k];
-                        rs = rsn;
+                        for (int k = 0; k < N; k++) cgZ[k] = cgMinv[k] * cgR[k];   // apply preconditioner
+                        double rzn = Dot(cgR, cgZ), beta = rzn / rz;
+                        for (int k = 0; k < N; k++) cgP[k] = cgZ[k] + beta * cgP[k];
+                        rz = rzn;
                     }
 
                     // ---- trial step + accept/reject ----
