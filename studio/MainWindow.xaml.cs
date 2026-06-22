@@ -144,7 +144,6 @@ namespace CreaseStudio
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
             IterButton.Click += (s, e) => Execute(StudioCommand.Run(_sim.IterPerRun, _sim.ToFlowParams()), record: true);
-            SubdivideButton.Click += (s, e) => Execute(StudioCommand.Subdiv(), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
@@ -400,7 +399,9 @@ namespace CreaseStudio
         }
 
         // One 1->4 subdivision of the live mesh (geometry-preserving; momentum resets inside
-        // FlowSession.Subdivide as indices are renumbered). Camera unchanged.
+        // FlowSession.Subdivide as indices are renumbered). Camera unchanged. The toolbar button was
+        // removed (the Solve proposer workflow supersedes manual subdivide-then-flow), but the command
+        // path is retained so existing .journal recordings (and the shared CLI grammar) still replay.
         void ApplySubdivide()
         {
             if (_session == null) return;

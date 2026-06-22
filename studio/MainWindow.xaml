@@ -74,12 +74,9 @@
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="CreaseStudio" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
-                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | SubD | +N iter. -->
+                <!-- Right-docked: first declared sits rightmost. Layout L->R: Reset | +N iter. -->
                 <Button x:Name="IterButton" DockPanel.Dock="Right" Content="{Binding IterLabel}"
                         Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center" />
-                <Button x:Name="SubdivideButton" DockPanel.Dock="Right" Content="SubD"
-                        Padding="10,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
-                        ToolTip="One 1-to-4 subdivision (refine, then keep flowing)" />
                 <Button x:Name="ResetButton" DockPanel.Dock="Right" Content="Reset"
                         Padding="10,2" FontSize="12" VerticalAlignment="Center"
                         ToolTip="Reload the input mesh and reset the flow" />
