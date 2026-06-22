@@ -32,8 +32,10 @@ namespace CreasePatchSolver
         public Vector3 RulingColor = new Vector3(1.0f, 0.82f, 0.18f);     // gold
         int _rulVao, _rulVbo, _rulCount;                                  // GL_LINES buffer for rulings (positions only)
         public bool ShowSeams = false;                                    // overlay fixed B-spline seam wires
-        public Vector3 SeamColor = new Vector3(0.30f, 0.85f, 1.0f);       // cyan
-        int _seamVao, _seamVbo, _seamCount;                               // GL_LINES buffer for seam wires (positions only)
+        public Vector3 SeamColor = new Vector3(0.30f, 0.85f, 1.0f);       // cyan: the smooth degree-3 curve
+        public Vector3 SeamCtrlColor = new Vector3(1.0f, 0.65f, 0.20f);   // amber: control polygon + control points
+        int _seamVao, _seamVbo, _seamCount;                               // GL_LINES buffer for the seam curve
+        int _seamCtrlVao, _seamCtrlVbo, _seamCtrlCount;                   // GL_LINES buffer for the control polygon + crosses
 
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
@@ -203,14 +205,28 @@ void main() {
             GL.BindVertexArray(0);
         }
 
-        // Upload fixed B-spline seam wires (GL_LINES position pairs), same flat-coloured path as rulings.
+        // Upload the fitted seam curve (GL_LINES position pairs), same flat-coloured path as rulings.
         public void SetSeams(float[] posF)
         {
+            _seamCount = posF.Length / 3; if (_seamCount == 0) return;
             EnsureProgram();
-            _seamCount = posF.Length / 3;
             if (_seamVao == 0) { _seamVao = GL.GenVertexArray(); _seamVbo = GL.GenBuffer(); }
             GL.BindVertexArray(_seamVao);
             GL.BindBuffer(BufferTarget.ArrayBuffer, _seamVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, posF.Length * sizeof(float), posF, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(0);
+            GL.BindVertexArray(0);
+        }
+
+        // Upload the seam control polygon + control-point markers (GL_LINES position pairs).
+        public void SetSeamControls(float[] posF)
+        {
+            _seamCtrlCount = posF.Length / 3; if (_seamCtrlCount == 0) return;
+            EnsureProgram();
+            if (_seamCtrlVao == 0) { _seamCtrlVao = GL.GenVertexArray(); _seamCtrlVbo = GL.GenBuffer(); }
+            GL.BindVertexArray(_seamCtrlVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _seamCtrlVbo);
             GL.BufferData(BufferTarget.ArrayBuffer, posF.Length * sizeof(float), posF, BufferUsageHint.DynamicDraw);
             GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
             GL.EnableVertexAttribArray(0);
@@ -262,7 +278,7 @@ void main() {
                 GL.DrawArrays(PrimitiveType.Lines, 0, _rulCount);
                 GL.LineWidth(1f);
             }
-            // Fixed B-spline seam wires (cyan), same flat-coloured GL_LINES path.
+            // Fixed B-spline seam wires: the smooth degree-3 curve (cyan) ...
             if (ShowSeams && _seamCount > 0)
             {
                 GL.BindVertexArray(_seamVao);
@@ -270,6 +286,16 @@ void main() {
                 GL.Uniform3(_uEdgeColor, SeamColor.X, SeamColor.Y, SeamColor.Z);
                 GL.LineWidth(2.5f);
                 GL.DrawArrays(PrimitiveType.Lines, 0, _seamCount);
+                GL.LineWidth(1f);
+            }
+            // ... and its control polygon + control-point markers (amber).
+            if (ShowSeams && _seamCtrlCount > 0)
+            {
+                GL.BindVertexArray(_seamCtrlVao);
+                GL.Uniform1(_uEdge, 1);
+                GL.Uniform3(_uEdgeColor, SeamCtrlColor.X, SeamCtrlColor.Y, SeamCtrlColor.Z);
+                GL.LineWidth(1.5f);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _seamCtrlCount);
                 GL.LineWidth(1f);
             }
             GL.BindVertexArray(0);
@@ -304,6 +330,7 @@ void main() {
             if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vboPos); GL.DeleteBuffer(_vboNrm); GL.DeleteBuffer(_ebo); }
             if (_rulVao != 0) { GL.DeleteVertexArray(_rulVao); GL.DeleteBuffer(_rulVbo); }
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
+            if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }
             if (_tex != 0) GL.DeleteTexture(_tex);
             if (_prog != 0) GL.DeleteProgram(_prog);
         }

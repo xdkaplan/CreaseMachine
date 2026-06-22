@@ -158,6 +158,7 @@ namespace CreasePatchSolver
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual();
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.LoadSolid)) OnMeshIndexChanged();
+                else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
@@ -317,6 +318,7 @@ namespace CreasePatchSolver
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // new mesh -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // new mesh -> BFF must (re)run before the sim can step
             Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(path);
+            RefreshSeamDisplay();     // show the fitted seam wires immediately if Fix B-spline edges is on
             _gl?.InvalidateVisual();
         }
 
@@ -381,41 +383,89 @@ namespace CreasePatchSolver
 
         // ---- fixed B-spline seam edges (bent-wire pins) ----
         bool[] _pinned;        // per-vertex: true where pinned to a seam wire (Dirichlet during the solve)
-        float[] _seamLineF;    // GL_LINES positions for the fitted seam wires (display)
-        bool _seamsDirty;      // seam display needs re-upload
+        float[] _seamLineF;    // GL_LINES positions for the fitted seam curve (cyan)
+        float[] _seamCtrlF;    // GL_LINES positions for the control polygon + control-point crosses (amber)
+        bool _seamsDirty;      // seam overlay needs re-upload
 
-        // Fit a low-DOF degree-3 B-spline ("bent wire", ~1 control point per SeamRatio mesh points) to each
-        // boundary loop of the live mesh, SNAP the boundary vertices onto it, and mark them pinned so the
-        // solve holds them fixed. Builds the cyan display polyline too. Call on the (fresh/subdivided) mesh
-        // before flattening, since it moves boundary positions.
+        // Fit a low-DOF bent-wire B-spline to each boundary loop, SNAP the boundary vertices onto it, and
+        // mark them pinned so the solve holds them fixed; then refresh the overlay so it tracks the wires.
+        // Call on the (fresh/subdivided) mesh before flattening, since it moves boundary positions.
         void SetupSeamPins()
         {
-            _pinned = null; _seamLineF = null;
+            _pinned = null;
             if (_session == null) return;
             var mesh = _session.Mesh;
             var loops = CreaseMachine.MeshOps.BoundaryLoops(mesh);
             if (loops.Count == 0) return;
             int ratio = Math.Max(2, _sim.SeamRatio);
             var pin = new bool[mesh.Vertices.Count];
-            var seg = new System.Collections.Generic.List<float>();
             foreach (var loop in loops)
             {
-                var pts = new CreaseMachine.Vec3[loop.Length];
-                for (int i = 0; i < loop.Length; i++) { var p = mesh.Vertices[loop[i]]; pts[i] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
-                var tgt = CreaseMachine.BSplineFit.LowDofTargets(pts, ratio);
+                var tgt = CreaseMachine.BSpline.FitClosed(LoopPts(mesh, loop), ratio).EvenTargets(loop.Length);
                 for (int i = 0; i < loop.Length; i++)
                 {
                     mesh.Vertices[loop[i]].X = (float)tgt[i].X; mesh.Vertices[loop[i]].Y = (float)tgt[i].Y; mesh.Vertices[loop[i]].Z = (float)tgt[i].Z;
                     pin[loop[i]] = true;
                 }
-                var curve = CreaseMachine.BSplineFit.SampleCurve(pts, ratio, 8);
-                for (int i = 0; i + 1 < curve.Length; i++)
-                {
-                    seg.Add((float)curve[i].X); seg.Add((float)curve[i].Y); seg.Add((float)curve[i].Z);
-                    seg.Add((float)curve[i + 1].X); seg.Add((float)curve[i + 1].Y); seg.Add((float)curve[i + 1].Z);
-                }
             }
-            _pinned = pin; _seamLineF = seg.ToArray(); _seamsDirty = true;
+            _pinned = pin;
+            RefreshSeamDisplay();   // overlay now coincides with the snapped boundary
+        }
+
+        // Read-only: fit the bent-wire B-splines to the CURRENT boundary loops and build the overlay —
+        // the smooth curve (cyan) plus the control polygon + control-point markers (amber). No mesh
+        // mutation, so the seam wires are visible immediately on load, before (and without) any Solve.
+        void RefreshSeamDisplay()
+        {
+            _seamLineF = null; _seamCtrlF = null; _seamsDirty = true;
+            if (_session == null || !_sim.FixBSplineEdges) return;
+            var loops = CreaseMachine.MeshOps.BoundaryLoops(_session.Mesh);
+            if (loops.Count == 0) return;
+            int ratio = Math.Max(2, _sim.SeamRatio);
+            double h = 0.006 * MeshDiag(_session.Mesh);            // control-point marker half-size
+            var curve = new System.Collections.Generic.List<float>();
+            var ctrl = new System.Collections.Generic.List<float>();
+            foreach (var loop in loops)
+            {
+                var bs = CreaseMachine.BSpline.FitClosed(LoopPts(_session.Mesh, loop), ratio);
+                AddPolyline(curve, bs.SampleCurve(8), true);       // the smooth degree-3 curve
+                AddPolyline(ctrl, bs.Control, true);               // the control polygon
+                foreach (var cp in bs.Control) AddCross(ctrl, cp, h);   // control points
+            }
+            _seamLineF = curve.ToArray(); _seamCtrlF = ctrl.ToArray();
+        }
+
+        static CreaseMachine.Vec3[] LoopPts(PlanktonMesh mesh, int[] loop)
+        {
+            var pts = new CreaseMachine.Vec3[loop.Length];
+            for (int i = 0; i < loop.Length; i++) { var p = mesh.Vertices[loop[i]]; pts[i] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
+            return pts;
+        }
+        static double MeshDiag(PlanktonMesh m)
+        {
+            if (m.Vertices.Count == 0) return 1.0;
+            var a = m.Vertices[0]; double lx = a.X, ly = a.Y, lz = a.Z, hx = a.X, hy = a.Y, hz = a.Z;
+            for (int v = 1; v < m.Vertices.Count; v++) { var p = m.Vertices[v]; lx = Math.Min(lx, p.X); ly = Math.Min(ly, p.Y); lz = Math.Min(lz, p.Z); hx = Math.Max(hx, p.X); hy = Math.Max(hy, p.Y); hz = Math.Max(hz, p.Z); }
+            double dx = hx - lx, dy = hy - ly, dz = hz - lz; return Math.Sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        // Append a polyline as GL_LINES segment pairs (closed -> also connect last back to first).
+        static void AddPolyline(System.Collections.Generic.List<float> seg, CreaseMachine.Vec3[] pts, bool closed)
+        {
+            int n = pts.Length; if (n < 2) return; int last = closed ? n : n - 1;
+            for (int i = 0; i < last; i++)
+            {
+                var a = pts[i]; var b = pts[(i + 1) % n];
+                seg.Add((float)a.X); seg.Add((float)a.Y); seg.Add((float)a.Z);
+                seg.Add((float)b.X); seg.Add((float)b.Y); seg.Add((float)b.Z);
+            }
+        }
+        // Small 3D cross at p (half-size h) as 3 GL_LINES segments.
+        static void AddCross(System.Collections.Generic.List<float> seg, CreaseMachine.Vec3 p, double h)
+        {
+            float x = (float)p.X, y = (float)p.Y, z = (float)p.Z, hf = (float)h;
+            seg.Add(x - hf); seg.Add(y); seg.Add(z); seg.Add(x + hf); seg.Add(y); seg.Add(z);
+            seg.Add(x); seg.Add(y - hf); seg.Add(z); seg.Add(x); seg.Add(y + hf); seg.Add(z);
+            seg.Add(x); seg.Add(y); seg.Add(z - hf); seg.Add(x); seg.Add(y); seg.Add(z + hf);
         }
 
         // ===================== Solve (bake) =====================
@@ -916,8 +966,12 @@ namespace CreasePatchSolver
                 if (_sim.ShowRulings && _view.HasMesh && _session != null && _rulingsDirty)
                 { _view.SetRulings(RulingField.Compute(_session.Mesh, 0.45, 0.02)); _rulingsDirty = false; }
                 _view.ShowSeams = _sim.FixBSplineEdges;
-                if (_sim.FixBSplineEdges && _view.HasMesh && _seamLineF != null && _seamsDirty)
-                { _view.SetSeams(_seamLineF); _seamsDirty = false; }
+                if (_sim.FixBSplineEdges && _view.HasMesh && _seamsDirty)
+                {
+                    _view.SetSeams(_seamLineF ?? System.Array.Empty<float>());
+                    _view.SetSeamControls(_seamCtrlF ?? System.Array.Empty<float>());
+                    _seamsDirty = false;
+                }
                 _view.Draw(view, proj);
             }
             if (_hasFlat && _flatView != null && _flatView.HasMesh)   // BFF flat map M', beside M on the z=0 plane

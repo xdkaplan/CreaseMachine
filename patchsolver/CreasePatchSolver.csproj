@@ -25,7 +25,7 @@
     <Compile Include="..\src\Session.cs" />
     <Compile Include="..\src\MeshIO.cs" />
     <Compile Include="..\src\FlowMetrics.cs" />
-    <Compile Include="..\src\BSplineFit.cs" />
+    <Compile Include="..\src\BSpline.cs" />
     <Compile Include="..\src\FbxIO.cs" />
   </ItemGroup>
   <!-- bundled MatCap textures (nidorx-style lit spheres); copied next to the exe and loaded at runtime -->
