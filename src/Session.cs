@@ -22,6 +22,7 @@ namespace CreaseMachine
         public int    MomFix;        // momentum-restart mode (1..4)
         public bool   AdaptiveDetMix;     // raise the blend toward 1 at near-degenerate vertices
         public double AdaptiveDetMixPower; // ramp exponent: a_degeneracy = (1 - sep)^power (<=0 -> 2.0)
+        public double Stabilize;     // projected tangential relaxer weight (vertex-slippage fix); 0 = off
     }
 
     /// <summary>
@@ -185,6 +186,15 @@ namespace CreaseMachine
                 if (vl > capLen && vl > 1e-20) vel[v] = vel[v] * (capLen / vl);
                 P.Vertices.SetVertex(v, bx[v] + vel[v].X, by[v] + vel[v].Y, bz[v] + vel[v].Z);
             }
+
+            // Projected tangential relaxation (vertex-slippage stabilizer): redistribute interior
+            // vertices toward their 1-ring centroid with the developability-gradient component
+            // projected out, so the motion stays on the zero-energy level set and cannot move the
+            // converged target. Reuses the grad just computed; position-only (momentum untouched).
+            // eps floor = 0.25 * median|grad|. Default OFF (Stabilize 0) -> shipping path unchanged.
+            if (p.Stabilize > 0.0)
+                MeshOps.ProjectedTangentialRelax(P, grad, p.Stabilize, 0.25);
+
             return maxG;
         }
 

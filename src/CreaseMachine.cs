@@ -180,6 +180,19 @@ namespace CreaseMachine
               + "creases; raise toward 0.2-0.3 if it still buzzes, lower if real creases soften. "
               + "0 = off (original pure-L1 behaviour). Only active when deCraze > 0. Live-tunable.",
                 GH_ParamAccess.item, 0.1);
+
+            //15
+            pManager.AddNumberParameter("Stabilize", "Stabilize",
+                "Weight (0 to ~0.5) of the projected tangential relaxer - the vertex-slippage fix. "
+              + "Pulls each interior vertex a fraction of the way toward its 1-ring centroid, but "
+              + "FIRST removes the part of that pull lying along the developability gradient, so the "
+              + "motion is confined to the zero-energy (developable-preserving) directions. It cannot "
+              + "oppose or assist the develop force and does not move the converged shape - it only "
+              + "stops low-angle, multi-panel vertices from sliding along their normal/tangent plane "
+              + "(the 'slippage' that turns symmetric inputs like icosahedra oblong). Internally "
+              + "scale/resolution-invariant (no per-mesh tuning); the weight only sets how fast slip "
+              + "is damped. 0 = off. Start ~0.2. Live-tunable.",
+                GH_ParamAccess.item, 0.0);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -240,6 +253,7 @@ namespace CreaseMachine
             public double detMix;
             public int momFix;
             public double crazeBand;
+            public double stabilize;
             public bool subdivRequest;   // edge-triggered: SolveInstance sets, worker consumes
         }
 
@@ -260,6 +274,7 @@ namespace CreaseMachine
             double detMix = 0.0;
             int momFix = 4;
             double crazeBand = 0.1;
+            double stabilize = 0.0;
 
             DA.GetData(0, ref inMesh);
             DA.GetData(1, ref Step);
@@ -276,9 +291,11 @@ namespace CreaseMachine
             DA.GetData(12, ref detMix);
             DA.GetData(13, ref momFix);
             DA.GetData(14, ref crazeBand);
+            DA.GetData(15, ref stabilize);
             if (detMix < 0) detMix = 0; else if (detMix > 1) detMix = 1;
             if (momFix < 1) momFix = 1; else if (momFix > 4) momFix = 4;
             if (crazeBand < 0) crazeBand = 0; else if (crazeBand > Math.PI) crazeBand = Math.PI;
+            if (stabilize < 0) stabilize = 0;
             // Static config read by both the flow's analytic gradient and EmitSnapshot's energy.
             DevelopabilityEnergy.CrazeBand = crazeBand;
 
@@ -319,6 +336,7 @@ namespace CreaseMachine
                 shared.detMix = detMix;
                 shared.momFix = momFix;
                 shared.crazeBand = crazeBand;
+                shared.stabilize = stabilize;
                 if (subdiv && !prevSubdiv) shared.subdivRequest = true;
             }
             prevSubdiv = subdiv;
@@ -345,7 +363,7 @@ namespace CreaseMachine
         private void DoFlowStep()
         {
             // Snapshot current params under sharedLock to avoid holding it through the whole step.
-            double Step, Momentum, deBranch, deConsolidate, sharpness, deCraze, detMix, crazeBand;
+            double Step, Momentum, deBranch, deConsolidate, sharpness, deCraze, detMix, crazeBand, stabilize;
             int Iter, momFix;
             bool useMaxCov, subdivRequest;
             lock (sharedLock)
@@ -361,6 +379,7 @@ namespace CreaseMachine
                 detMix = shared.detMix;
                 momFix = shared.momFix;
                 crazeBand = shared.crazeBand;
+                stabilize = shared.stabilize;
                 subdivRequest = shared.subdivRequest;
                 shared.subdivRequest = false;
             }
@@ -385,7 +404,7 @@ namespace CreaseMachine
             {
                 Step = Step, Momentum = Momentum, deBranch = deBranch, deConsolidate = deConsolidate,
                 Sharpness = sharpness, deCraze = deCraze, CrazeBand = crazeBand, DetMix = detMix,
-                UseMaxCov = useMaxCov, MomFix = momFix,
+                UseMaxCov = useMaxCov, MomFix = momFix, Stabilize = stabilize,
             };
             bool[] foldFlags = null;
             for (int s = 0; s < Iter; s++) session.NesterovStep(fp, out foldFlags);

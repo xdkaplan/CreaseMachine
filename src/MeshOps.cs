@@ -321,5 +321,82 @@ namespace CreaseMachine
             }
             return pieces;
         }
+
+        /// <summary>
+        /// Projected tangential relaxation - the vertex-slippage stabilizer. Pulls each interior
+        /// vertex a fraction <paramref name="weight"/> of the way toward its 1-ring centroid
+        /// (a uniform Laplacian), but FIRST removes the component of that pull lying along the
+        /// developability gradient <paramref name="grad"/> at the vertex. The surviving
+        /// displacement is confined to the first-order developable level set, so it shares no
+        /// direction with the developability force - it can neither oppose nor assist it, and
+        /// cannot move the converged target. It only redistributes vertices within the
+        /// developable family, removing the zero-energy "slippage" of low-angle, multi-panel
+        /// vertices (and the resulting symmetry-breaking drift).
+        ///
+        /// Projection per vertex:  r_perp = r - g * (g . r) / (|g|^2 + eps^2),  where r is the
+        /// centroid pull and g = grad[v]. With
+        ///   eps = <paramref name="epsFrac"/> * median(|g|)   over interior vertices,
+        /// the eps floor fades the projection to a no-op exactly where |g| -> 0 (the slip zone,
+        /// where g's direction is also numerically arbitrary): the relaxer then acts at full
+        /// strength there and steps aside where the developability force is strong (seams).
+        /// Tying eps to the per-vertex gradient median - the same statistic the kink filter keys
+        /// on - keeps it scale-, resolution-, and subdivision-invariant with no per-mesh constant.
+        ///
+        /// Position-only: it mutates positions and does NOT touch momentum velocity. Call it AFTER
+        /// the gradient step, reusing the <paramref name="grad"/> already computed for that step
+        /// (no extra energy evaluation). Boundary and unused vertices are held. The Laplacian reads
+        /// a position snapshot so it is order-independent (Jacobi, not Gauss-Seidel).
+        /// </summary>
+        public static void ProjectedTangentialRelax(PlanktonMesh P, Vec3[] grad, double weight, double epsFrac)
+        {
+            if (weight <= 0.0 || grad == null) return;
+            int nV = P.Vertices.Count;
+            if (grad.Length < nV) return;
+
+            // eps^2 from the median gradient magnitude over interior vertices. If there is no
+            // gradient anywhere, eps2 stays 0 and the projection becomes the identity - the raw
+            // Laplacian relaxes freely, which is correct (no developability force to protect).
+            double eps2 = 0.0;
+            int m = 0;
+            for (int v = 0; v < nV; v++)
+                if (!P.Vertices[v].IsUnused && !P.Vertices.IsBoundary(v) && grad[v].Length > 0) m++;
+            if (m > 0)
+            {
+                double[] mg = new double[m];
+                int k = 0;
+                for (int v = 0; v < nV; v++)
+                    if (!P.Vertices[v].IsUnused && !P.Vertices.IsBoundary(v) && grad[v].Length > 0) mg[k++] = grad[v].Length;
+                Array.Sort(mg);
+                double eps = epsFrac * mg[m / 2];
+                eps2 = eps * eps;
+            }
+
+            // Snapshot positions so the Laplacian is order-independent (Jacobi-style).
+            double[] px = new double[nV], py = new double[nV], pz = new double[nV];
+            for (int v = 0; v < nV; v++)
+            {
+                px[v] = P.Vertices[v].X; py[v] = P.Vertices[v].Y; pz[v] = P.Vertices[v].Z;
+            }
+
+            for (int v = 0; v < nV; v++)
+            {
+                if (P.Vertices[v].IsUnused || P.Vertices.IsBoundary(v)) continue;
+                int[] nb = P.Vertices.GetVertexNeighbours(v);
+                if (nb == null || nb.Length == 0) continue;
+
+                double cx = 0, cy = 0, cz = 0;
+                for (int n = 0; n < nb.Length; n++) { cx += px[nb[n]]; cy += py[nb[n]]; cz += pz[nb[n]]; }
+                double inv = 1.0 / nb.Length;
+                Vec3 r = new Vec3(cx * inv - px[v], cy * inv - py[v], cz * inv - pz[v]);
+
+                Vec3 g = grad[v];
+                double denom = (g * g) + eps2;        // |g|^2 + eps^2  (Vec3*Vec3 is dot)
+                if (denom > 1e-300)
+                    r = r - g * ((g * r) / denom);     // strip the developability-changing component
+
+                if (!r.IsValid) continue;
+                P.Vertices.SetVertex(v, px[v] + weight * r.X, py[v] + weight * r.Y, pz[v] + weight * r.Z);
+            }
+        }
     }
 }

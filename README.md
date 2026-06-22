@@ -1,14 +1,14 @@
 # CreaseMachine - Human authored ReadMe, agentic code.
 
 This GH component builds surfaces based on **Stein, Grinspun & Crane**, 
-*"Developability of Triangle Meshes"* (ACM TOG 37(4), 2018), with optional 
-paper-faithful subgradients based on sections B.2 / B.4 / B.5.1. "Decraze"
-is my own force. All four of these seem to conflict with the main
+*"Developability of Triangle Meshes"* (ACM TOG 37(4), 2018), with all of the
+papers 'subgradients' (forces) which are listed in sections B.2 / B.4 / B.5.1. 
+"Decraze" is my (our?) own force. All four of these seem to conflict with the main
 developablize force and create jitter at high step sizes.
 
 Subdividng in the middle of the run helps add resolution. Sometimes
-or mid-surface facets accumulate which remind me of ceramic crazing.
-I've been unable to resolve them so far.
+small facets accumulate within larger sheets which remind me of ceramic crazing.
+I've been unable to resolve them so far. https://youtu.be/uj7UTQ_s8sA?t=97 taunts me.
 
 This is multi-core parallel, and has a tendency to eat all processing power.
 Disabling "Running" will freeze all calculations.
