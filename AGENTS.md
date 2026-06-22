@@ -152,7 +152,7 @@ Two front-ends over the same engine, for development / fabrication exploration w
   `reset`, `stats`, `zero-momentum`, `export <file.obj|.ply>` (PLY carries per-vertex
   developability energy as vertex colour). Metrics per run: developability `sumE` (regularizers
   excluded), `maxGrad`, `panels`, `crazeRMS`, `maxDih` (crease cutoff = `CrazeBand`).
-- **`gui/`** (`CreaseGUI` → `CreaseGUI.exe`): a basic WinForms control panel that **drives
+- **`gui/`** (`CreaseGUI` → `CreaseGUI.exe`, *legacy — superseded by the in-process PieceSolver app*): a basic WinForms control panel that **drives
   `crease.exe` as a subprocess** (composes commands → stdin, streams output → log). No 3D viewer;
   Export writes PLY/OBJ for MeshLab/Blender/Rhino, with an optional auto-export-to-watch-file for
   live-reload review. Locates `crease.exe` in `cli/bin` (Browse fallback).
@@ -174,48 +174,65 @@ still the caller's choice (GH collapses once per `Iter`-step solve; the CLI coll
 step) — legitimate per-host policy, not shared math. The bench's `FlowAndWatch` and `repro/`
 keep their own loop copies on purpose: diagnostic harnesses, not under a sync contract
 (`FlowAndWatch` omits the momFix restarts; `repro/` is a frozen racking experiment). The
-in-process GUI will hold a persistent `FlowSession` rather than the per-step transient the
-plugin/CLI wrap today.
+in-process PieceSolver app holds a persistent `FlowSession` (`_session`); note its **Solve** develops
+via the IsometricLM patch-solver, a separate path from this shared `NesterovStep`.
 
-## In-process GUI — `studio/` (in active development)
+## In-process app — `PieceSolver/` (the active studio)
 
-`studio/` (`CreaseStudio` → `CreaseStudio.exe`) is the real interactive viewer, heading toward a
-brush-to-freeze-creases design tool. Build:
+`PieceSolver/` (`PieceSolver` → `PieceSolver.exe`) is the active in-process interactive app: load a
+mesh, flatten it, and develop it into a piecewise-developable sheet, all in one net8 process. (It was
+renamed from `patchsolver/CreasePatchSolver`; the older `studio/` directory is a **stale earlier fork**,
+retained untouched for reference.) **Direction:** PieceSolver will become a *module* within the eventual
+**CreaseStudio** — its standalone window goes away and its GUI is fully consumed into CreaseStudio, with
+PieceSolver providing the per-piece flatten/develop solver + workflow. Build:
 
 ```sh
-dotnet build studio/CreaseStudio.csproj -c Release && studio/bin/Release/net8.0-windows/CreaseStudio.exe
+dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Release/net8.0-windows/PieceSolver.exe
 ```
 
-Settled architecture (decided deliberately — don't drift from it without reason):
+### The Solve workflow
 
-- **net8 WPF, engine in-process.** The studio targets `net8.0-windows` and compiles the SAME
-  Rhino-free engine sources (`Vec3`/`DevelopabilityEnergy`/`MeshOps`/`Session`/`MeshIO`) directly,
-  driving a persistent (eventually) `FlowSession` in-process — no subprocess, no IPC. This is why
-  Plankton was retargeted to `netstandard2.0` (loads in both the net48 plugin and net8 here).
-- **WPF, not web/React.** The 3D viewport + in-process engine coupling (live re-upload each bake,
-  upcoming brush picking on per-vertex fields) is the dominant constraint; a JS boundary or a
-  WebView-over-GL airspace split would be a regression. Decision: native WPF all the way.
-- **3D via OpenTK + GLWpfControl** (`MeshView.cs`): MatCap / lit-sphere shader, Z-up (Rhino)
-  orbit camera. GLWpfControl's framebuffer is colour-only, so the studio attaches its own depth
-  renderbuffer each frame (a missing-depth bug, now fixed). Smooth shading uses plain area-weighted
-  vertex normals + a camera-orient in the shader (winding-independent).
-- **MVVM for the chrome** (`SimSettings.cs`): panel controls two-way bind to a view-model, NOT
-  code-behind, so the UI stays manageable as panels fill in. 4-panel docked layout (fixed top/bottom
-  bars, drag-resizable + chevron-collapsible left/right panels, center viewport).
-- **Command sink + journal harness** (`Journal.cs`): every action (load/run/subdivide/reset/shading/
-  matcap) routes through one `Execute(StudioCommand, record)` chokepoint — the architectural spine
-  for record/replay (and, later, undo). A recorded session saves to a `.journal` and replays live
-  against the GUI one command per timer tick, logging per-command ms + `FlowMetrics` (sumE/panels/
-  maxDih) — a *soft* perf/value drift signal across commits (GUI-inclusive: includes the mesh
-  re-upload), not a hard gate. Run commands carry a full `FlowParams` snapshot, so they replay
-  identically regardless of slider state. The `.journal` grammar is a **superset of the CLI's
-  run-param vocabulary**, so the same file drives both harnesses — headed studio (visual/workflow)
-  and headless `crease.exe` (value/perf CI); verified by running a studio-format journal through the
-  CLI with no unknown-param warnings. Display controls sync on replay via a suppress flag (no
-  re-record). Camera orbit is intentionally not journaled (high-frequency/noisy); golden-image
-  render diffing and hard assertions are deferred.
+- **Load** OBJ / STL / **FBX**. Binary FBX is read by `src/FbxIO.cs` preserving Rhino's *unwelded* seam
+  topology, so a 6-sided solid loads as one connected component per brep face. STL can't carry that
+  (triangle soup → re-welded), so FBX is the piecing-friendly format.
+- **Solve** is an **async, cancelable, modal bake** (a background worker behind a progress + cancel
+  overlay; it is the *single* develop path — the old hold-Space live-step and the SubD button were
+  removed). It develops to the selected **Accuracy** (allowable in-plane strain %, by material) and then,
+  per **Subdivision level**, subdivides + re-develops. A single open patch develops directly; a
+  multi-component mesh (an FBX solid) is split into per-face patches (`MeshOps.SplitComponents`), each
+  BFF-flattened + isometric-developed with its boundary **frozen (Dirichlet)** so the solid stays joined
+  at the seams, then reassembled — flat panels laid out beside the model, with a worst-panel-strain GO gate.
+- **Develop solver:** `PieceSolver/IsometricLM.cs` — Levenberg–Marquardt + matrix-free Jacobi-
+  preconditioned CG, co-refining M (3-D) and its flat image M′ toward isometry (= developability). The
+  paper's developability solver, NOT the covariance flow. Perf-tuned (preconditioner, per-edge
+  precompute, Nielsen damping, a parallel gather-by-vertex apply) and gated by an opt-in finite-
+  difference gradient check (`DebugGradCheck`). An optional `pinned` Dirichlet holds chosen vertices
+  fixed — the seam pin.
+- **Flatten:** `PieceSolver/Bff.cs` — Boundary First Flattening via the external `bff-command-line.exe`,
+  per patch.
+- **B-spline seams:** `src/BSpline.cs` — a low-DOF periodic cubic "bent wire" fit to a boundary loop; the
+  **Fix B-spline edges** toggle pins the boundary onto it (Dirichlet) and draws the curve + control
+  polygon. The MVP freezes seams; *relaxing* them (control points move under the same `E_iso`, a soft-
+  constraint spectrum) is a deliberate later feature.
 
-End goal and the open design notes live in the user's memory (`project-gui-northstar`).
+### Architecture (settled — don't drift from it without reason)
+
+- **net8 WPF, engine in-process.** Compiles the SAME Rhino-free engine sources
+  (`Vec3`/`DevelopabilityEnergy`/`MeshOps`/`MeshIO`/`Session`/`BSpline`/`FbxIO`) **plus the patch solver
+  `IsometricLM.cs`** directly — no subprocess, no IPC. This is why Plankton was retargeted to
+  `netstandard2.0` (loads in both the net48 plugin and net8 here).
+- **3D via OpenTK + GLWpfControl** (`MeshView.cs`): MatCap shader, Z-up orbit camera, own per-frame depth
+  renderbuffer (GLWpfControl's framebuffer is colour-only). Overlays: ruling lines + B-spline seam wires.
+- **MVVM** (`SimSettings.cs`): panel controls two-way bind to a view-model, not code-behind. 4-panel
+  docked layout (fixed top/bottom bars, drag-resizable left/right panels, centre viewport).
+- **Command sink + journal** (`Journal.cs`): every action routes through one `Execute(StudioCommand,
+  record)` chokepoint — the spine for record/replay (and, later, undo). The async **Solve** is journaled
+  as a `solve` command carrying a full `BakeParams` snapshot; replay gates on the bake's completion
+  before advancing. The `.journal` grammar is a **superset of the CLI's**, so the same file drives both
+  the headed app and the headless `crease.exe` (the CLI maps `solve` to its Nesterov bake equivalent).
+  Camera orbit is intentionally not journaled.
+
+The brush-to-freeze-creases north star and the CreaseStudio consolidation plan live in the user's memory.
 
 ## Vendored dependencies
 
@@ -223,7 +240,7 @@ End goal and the open design notes live in the user's memory (`project-gui-north
 [Plankton](https://github.com/meshmash/Plankton) (0.4.3) by Daniel Piker and
 Will Pearson. `lib/Plankton.dll` is that same unmodified 0.4.3 source recompiled
 to **netstandard2.0** (zero code changes, same `0.4.3.0` version) so one assembly
-serves both the net48 plugin and a future net8 headless GUI; net48 loads it
+serves both the net48 plugin and the net8 in-process app (PieceSolver); net48 loads it
 transparently and `PlanktonGh.dll` binds to it unchanged. Vendored so the project
 builds without a separate Plankton checkout. Plankton is LGPL — see
 [`docs/NOTICE.md`](docs/NOTICE.md) for the netstandard2.0 rebuild recipe.
