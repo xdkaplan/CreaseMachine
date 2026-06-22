@@ -115,7 +115,7 @@ void main() {
     }
 
     // Surface LIC: convolve the solid noise along the (re-normalized) per-fragment field direction.
-    // Symmetric ±d taps -> the streak is a line, not an arrow (matches the field's director nature).
+    // Symmetric +/-d taps -> the streak is a line, not an arrow (matches the field's director nature).
     if (uLicMode != 0) {
         float fmag = length(vField);
         if (fmag > 1e-5) {
@@ -442,6 +442,14 @@ void main() {
 
         static int Compile(ShaderType type, string src)
         {
+            // OpenTK's GL.ShaderSource marshals the source to UTF-8 but passes the .NET char COUNT as the
+            // byte length, so a single non-ASCII char makes the driver read short and report a cryptic
+            // 'pre-mature EOF' (the trailing brace is truncated). Catch it here with a clear message;
+            // shader source MUST stay ASCII.
+            for (int i = 0; i < src.Length; i++)
+                if (src[i] > 127)
+                    throw new Exception(type + " shader has a non-ASCII char '" + src[i] + "' (U+" +
+                        ((int)src[i]).ToString("X4") + ") at index " + i + " — shaders must be ASCII (OpenTK truncates otherwise)");
             int s = GL.CreateShader(type);
             GL.ShaderSource(s, src);
             GL.CompileShader(s);
