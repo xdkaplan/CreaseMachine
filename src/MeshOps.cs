@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Plankton;
 
 namespace CreaseMachine
@@ -255,6 +256,70 @@ namespace CreaseMachine
             foreach (var loop in BoundaryLoops(M))
                 foreach (int v in loop) if (v >= 0 && v < mask.Length) mask[v] = true;
             return mask;
+        }
+
+        private static int UfFind(int[] p, int x) { while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; } return x; }
+        private static void UfUnion(int[] p, int a, int b) { a = UfFind(p, a); b = UfFind(p, b); if (a != b) p[a] = b; }
+
+        /// <summary>Number of connected components (faces joined through shared interior edges). An FBX
+        /// solid loaded with its unwelded seams returns one component per face (e.g. 6 for a 6-sided solid).</summary>
+        public static int ComponentCount(PlanktonMesh M)
+        {
+            int nF = M.Faces.Count, nH = M.Halfedges.Count;
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            for (int h = 0; h < nH; h++)
+            {
+                if (M.Halfedges[h].IsUnused) continue;
+                int pr = M.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = M.Halfedges[h].AdjacentFace, f2 = M.Halfedges[pr].AdjacentFace;
+                if (f1 >= 0 && f2 >= 0) UfUnion(uf, f1, f2);
+            }
+            var roots = new HashSet<int>();
+            for (int f = 0; f < nF; f++) if (!M.Faces[f].IsUnused) roots.Add(UfFind(uf, f));
+            return roots.Count;
+        }
+
+        /// <summary>Split a mesh into one sub-mesh per connected component (faces joined through shared
+        /// interior edges). vertexMaps[c][localVertex] = the source mesh's vertex index, so a solved piece
+        /// can be written back in place. Each sub-mesh keeps its own boundary loop(s).</summary>
+        public static List<PlanktonMesh> SplitComponents(PlanktonMesh M, out List<int[]> vertexMaps)
+        {
+            int nF = M.Faces.Count, nH = M.Halfedges.Count;
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            for (int h = 0; h < nH; h++)
+            {
+                if (M.Halfedges[h].IsUnused) continue;
+                int pr = M.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = M.Halfedges[h].AdjacentFace, f2 = M.Halfedges[pr].AdjacentFace;
+                if (f1 >= 0 && f2 >= 0) UfUnion(uf, f1, f2);
+            }
+            var groups = new Dictionary<int, List<int>>();
+            for (int f = 0; f < nF; f++)
+            {
+                if (M.Faces[f].IsUnused) continue;
+                int r = UfFind(uf, f);
+                if (!groups.TryGetValue(r, out var g)) { g = new List<int>(); groups[r] = g; }
+                g.Add(f);
+            }
+            var pieces = new List<PlanktonMesh>(); vertexMaps = new List<int[]>();
+            foreach (var g in groups.Values)
+            {
+                var sub = new PlanktonMesh();
+                var localOf = new Dictionary<int, int>(); var vmap = new List<int>();
+                foreach (int f in g)
+                {
+                    int[] fv = M.Faces.GetFaceVertices(f); var lf = new int[fv.Length];
+                    for (int k = 0; k < fv.Length; k++)
+                    {
+                        int gv = fv[k];
+                        if (!localOf.TryGetValue(gv, out int lv)) { var p = M.Vertices[gv]; lv = sub.Vertices.Add(p.X, p.Y, p.Z); localOf[gv] = lv; vmap.Add(gv); }
+                        lf[k] = lv;
+                    }
+                    sub.Faces.AddFace(lf);
+                }
+                pieces.Add(sub); vertexMaps.Add(vmap.ToArray());
+            }
+            return pieces;
         }
     }
 }

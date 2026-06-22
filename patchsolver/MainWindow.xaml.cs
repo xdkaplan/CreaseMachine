@@ -478,6 +478,7 @@ namespace CreasePatchSolver
             if (_session == null || _meshPath == null) return;
             Title = "CreasePatchSolver — solving…";
             ApplyReset();                          // start clean from the input mesh
+            if (_session != null && CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) { OnSolveMulti(); return; }   // multi-piece (FBX solid): per-component flatten + develop
             if (_sim.FixBSplineEdges) SetupSeamPins();   // snap boundaries onto bent-wire seams + pin them (before flatten)
             _view?.Upload(_session.Mesh);          // current M bounds so M' places correctly on first flatten
             if (!EnsureFlat()) { Title = "CreasePatchSolver — BFF failed"; UpdateStatus(); return; }
@@ -500,6 +501,85 @@ namespace CreasePatchSolver
             Title = "CreasePatchSolver — solved " + (double.IsNaN(pct) ? "" : pct.ToString("0.###") + "%  ")
                   + "(" + _session.Mesh.Vertices.Count + " verts)";
             UpdateStatus(); _gl?.InvalidateVisual();
+        }
+
+        // ===================== multi-piece (per-component) solve =====================
+
+        // Solve a multi-component mesh (e.g. an FBX solid -> one patch per face): flatten + develop each
+        // component independently, then reassemble in place. Each piece's boundary is FROZEN (Dirichlet)
+        // during its develop, so the solid stays joined at the shared seams while each face's interior
+        // flattens. (Smoothing / matching the seams to a shared B-spline is a later step.)
+        void OnSolveMulti()
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            const long budgetMs = 10000;
+            double target = _sim.AccuracyStrainPct;
+            double worst = 0; int pieces = 0, flattened = 0;
+            for (int lvl = 0; lvl <= _sim.SubdivLevel && sw.ElapsedMilliseconds < budgetMs; lvl++)
+            {
+                if (lvl > 0) ApplySubdivide();
+                var comps = CreaseMachine.MeshOps.SplitComponents(_session.Mesh, out var vmaps);
+                pieces = comps.Count; flattened = 0; worst = 0;
+                var flatCombined = TopologyClone(_session.Mesh);
+                double xoff = 0;
+                for (int c = 0; c < comps.Count && sw.ElapsedMilliseconds < budgetMs; c++)
+                {
+                    var pc = comps[c];
+                    if (!Bff.TryFlatten(pc, out var flat, out var log)) { if (!string.IsNullOrWhiteSpace(log)) Log("panel " + c + ": " + log.TrimEnd()); continue; }
+                    DevelopPiece(pc, flat, target, sw, budgetMs);
+                    var vmap = vmaps[c];
+                    for (int v = 0; v < vmap.Length; v++) { var p = pc.Vertices[v]; _session.Mesh.Vertices[vmap[v]].X = p.X; _session.Mesh.Vertices[vmap[v]].Y = p.Y; _session.Mesh.Vertices[vmap[v]].Z = p.Z; }
+                    xoff = PlaceFlatPiece(flat, flatCombined, vmap, xoff);
+                    double e = RelErr(pc, flat); if (e > worst) worst = e; flattened++;
+                }
+                _flat = flatCombined; _hasFlat = true; _bffNeeded = false;
+            }
+            _meshDirty = true; _rulingsDirty = true;
+            RefreshSeamDisplay();
+            if (_flatView != null && _flat != null) { _flatView.Upload(_flat); PlaceFlat(); }
+            _sim.StrainPct = worst * 100.0;
+            Title = "CreasePatchSolver — " + flattened + "/" + pieces + " panels  worst strain "
+                  + (worst * 100.0).ToString("0.###") + "%  (" + _session.Mesh.Vertices.Count + " verts)";
+            UpdateStatus(); _gl?.InvalidateVisual();
+        }
+
+        // Develop one component to the accuracy target with its boundary FROZEN (Dirichlet) so it stays
+        // joined to its neighbours. BFF (the flat) is already computed by the caller.
+        void DevelopPiece(PlanktonMesh pc, PlanktonMesh flat, double target, System.Diagnostics.Stopwatch sw, long budgetMs)
+        {
+            var pin = CreaseMachine.MeshOps.BoundaryVertexMask(pc);   // freeze the seam boundary in place
+            var m0 = new CreaseMachine.Vec3[pc.Vertices.Count];
+            for (int v = 0; v < m0.Length; v++) { var p = pc.Vertices[v]; m0[v] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
+            double lam = 0, prev = double.MaxValue;
+            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs; it++)
+            {
+                IsometricLM.Solve(pc, flat, m0, _sim.IsoWeight, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight, _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref lam, pin);
+                double pct = RelErr(pc, flat) * 100.0;
+                if (pct <= target) break;
+                if (prev - pct < 1e-5) break;
+                prev = pct;
+            }
+        }
+
+        // Clone a mesh's topology (positions copied, then overwritten per piece).
+        static PlanktonMesh TopologyClone(PlanktonMesh M)
+        {
+            var c = new PlanktonMesh();
+            for (int v = 0; v < M.Vertices.Count; v++) { var p = M.Vertices[v]; c.Vertices.Add(p.X, p.Y, p.Z); }
+            for (int f = 0; f < M.Faces.Count; f++) { if (M.Faces[f].IsUnused) continue; var fv = M.Faces.GetFaceVertices(f); if (fv.Length >= 3) c.Faces.AddFace(fv); }
+            return c;
+        }
+
+        // Lay a piece's flat (BFF output on z=0) at the running x-offset and write it into the combined
+        // flat at the piece's global vertex indices. Panels in a row with a gap. Returns the next offset.
+        double PlaceFlatPiece(PlanktonMesh flat, PlanktonMesh flatCombined, int[] vmap, double xoff)
+        {
+            double minx = double.MaxValue, maxx = double.MinValue, miny = double.MaxValue;
+            for (int v = 0; v < flat.Vertices.Count; v++) { var p = flat.Vertices[v]; if (p.X < minx) minx = p.X; if (p.X > maxx) maxx = p.X; if (p.Y < miny) miny = p.Y; }
+            double dx = xoff - minx, dy = -miny;
+            int n = Math.Min(vmap.Length, flat.Vertices.Count);
+            for (int v = 0; v < n; v++) { var p = flat.Vertices[v]; flatCombined.Vertices[vmap[v]].X = (float)(p.X + dx); flatCombined.Vertices[vmap[v]].Y = (float)(p.Y + dy); flatCombined.Vertices[vmap[v]].Z = 0f; }
+            double w = maxx - minx; return xoff + w + 0.15 * (w + 1e-6);
         }
 
         // LM iterations until strain (relErr) <= targetPct, convergence (no progress), or the time budget.
