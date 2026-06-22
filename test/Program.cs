@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Plankton;
 using CreaseMachine;
+using PieceSolver;   // IsometricLM — the develop engine, benched by `perf -PieceSolve`
 
 // Finite-difference gradient checker, plus self-tests that validate the checker
 // itself against energies whose gradients are known by hand.
@@ -14,6 +15,15 @@ class Program
         // "perf" => fast mode: FD correctness gate + perf bench + value checksums only,
         // skipping the long C:\Temp flow/inspect diagnostics (most of whose files are absent).
         bool perfOnly = Array.IndexOf(args, "perf") >= 0;
+
+        // `perf -PieceSolve` (alias `-Jacobi`) => focused bench of the IsometricLM patch-solver (the
+        // develop engine the studio's async Solve drives), serial vs multicore, across subdiv levels.
+        // Skips the covariance-flow self-tests/bench — a separate perf surface.
+        if (Array.IndexOf(args, "-PieceSolve") >= 0 || Array.IndexOf(args, "-Jacobi") >= 0)
+        {
+            PieceSolveBench(@"C:\Temp\Bunny 2.5k.stl");
+            return 0;
+        }
 
         PlanktonMesh P = BuildBumpyGrid(7);
         Console.WriteLine("mesh: " + P.Vertices.Count + " verts, " + P.Faces.Count + " faces");
@@ -632,6 +642,75 @@ class Program
             DevelopabilityEnergy.ComputeHingeEnergy(P, out e, out ff,
                 0.0, 0.0, false, 4.0, 0.5);
         });
+    }
+
+    // IsometricLM (PieceSolver develop) perf bench: times the LM patch-solve — the develop engine the
+    // studio's async Solve drives, NOT the covariance flow — across 1->4 subdivision levels, serial vs
+    // multicore. Mirrors the GUI's production call: profile B weights (wIso=10, wFair=0, wAnchor=0.05,
+    // wScale=10, bendDiff), 4 LM outer iters, 80 CG iters/solve. The flat image M' is seeded by XY-plane
+    // projection (no external BFF needed — the per-iteration cost the perf passes targeted is independent
+    // of M''s quality). The serial-vs-parallel column re-measures the documented multicore gather-by-
+    // vertex apply speedup (toggled via IsometricLM.ParThreshold). One Solve call == 4 LM outer iters.
+    static void PieceSolveBench(string path)
+    {
+        Console.WriteLine("=== PieceSolve (IsometricLM) perf bench: " + System.IO.Path.GetFileName(path) + " ===");
+        if (!System.IO.File.Exists(path)) { Console.WriteLine("  (file not found — drop the bunny STLs in C:\\Temp)"); return; }
+        PlanktonMesh baseM = LoadBinaryStl(path);
+        Console.WriteLine("  base: " + baseM.Vertices.Count + " verts, " + baseM.Faces.Count + " faces" +
+            "   ·   profile B · 4 LM iters · 80 CG/iter · 1 Solve call = 4 LM iters");
+        Console.WriteLine("  (min ms over reps; serial forces ParThreshold=inf, parallel = default 2000)");
+        Console.WriteLine();
+
+        const int MAXSUB = 3;
+        PlanktonMesh M = baseM;
+        for (int lvl = 0; lvl <= MAXSUB; lvl++)
+        {
+            if (lvl > 0) M = MeshOps.UniformSubdivide(M);
+            int nV = M.Vertices.Count;
+            int nF = 0; for (int f = 0; f < M.Faces.Count; f++) if (!M.Faces[f].IsUnused) nF++;
+            int iters = nV < 20000 ? 6 : (nV < 80000 ? 3 : 2);
+
+            // one timed Solve from a fresh start (M' = plane projection, M0 = anchor copy, lambda = 0),
+            // with ParThreshold set to force serial / allow the multicore apply. Min over reps = least noise.
+            Func<int, double> timeSolve = (parThresh) =>
+            {
+                IsometricLM.ParThreshold = parThresh;
+                double best = double.MaxValue;
+                for (int r = 0; r < 1 + iters; r++)   // r==0 is warmup
+                {
+                    PlanktonMesh Mwork = new PlanktonMesh(M);   // Solve refines M's positions — fresh each rep
+                    PlanktonMesh Mp = PlaneProjectXY(M);        // ...and M' too
+                    Vec3[] M0 = new Vec3[nV];
+                    for (int v = 0; v < nV; v++) { var p = M.Vertices[v]; M0[v] = new Vec3(p.X, p.Y, p.Z); }
+                    double lam = 0.0;
+                    if (r == 0) { IsometricLM.Solve(Mwork, Mp, M0, 10, 0.0, 0.05, 10, false, 0.0, true, 4, 80, ref lam); continue; }
+                    GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    IsometricLM.Solve(Mwork, Mp, M0, 10, 0.0, 0.05, 10, false, 0.0, true, 4, 80, ref lam);
+                    sw.Stop();
+                    double ms = sw.Elapsed.TotalMilliseconds;
+                    if (ms < best) best = ms;
+                }
+                return best;
+            };
+
+            double ser = timeSolve(int.MaxValue);
+            double par = timeSolve(2000);
+            IsometricLM.ParThreshold = 2000;   // restore default
+            string spd = par > 0 ? (ser / par).ToString("F2") + "x" : "-";
+            Console.WriteLine("  sub" + lvl + "  " + (nV + "v/" + nF + "f").PadRight(20) +
+                "serial " + ser.ToString("F1").PadLeft(9) + " ms    parallel " + par.ToString("F1").PadLeft(9) +
+                " ms    multicore " + spd);
+        }
+    }
+
+    // Flat image seed for the perf bench: copy topology + XY, drop Z onto the z=0 plane. Non-degenerate
+    // enough to drive the LM apply at full per-iteration cost (this is a perf seed, not an accuracy one).
+    static PlanktonMesh PlaneProjectXY(PlanktonMesh M)
+    {
+        PlanktonMesh Mp = new PlanktonMesh(M);
+        for (int v = 0; v < Mp.Vertices.Count; v++) { var p = Mp.Vertices[v]; Mp.Vertices.SetVertex(v, p.X, p.Y, 0.0); }
+        return Mp;
     }
 
     // Value-preservation gate for perf refactors. Runs the flow config the user actually drives

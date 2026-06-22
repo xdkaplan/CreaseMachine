@@ -14,6 +14,8 @@
     <Compile Include="..\src\Vec3.cs" />
     <Compile Include="..\src\DevelopabilityEnergy.cs" />
     <Compile Include="..\src\MeshOps.cs" />
+    <!-- the PieceSolver develop engine, so `perf -PieceSolve` can bench it in-process (it only needs Vec3 + Plankton) -->
+    <Compile Include="..\PieceSolver\IsometricLM.cs" />
     <Compile Include="Program.cs" />
   </ItemGroup>
 </Project>
