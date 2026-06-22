@@ -5,7 +5,7 @@ using System.Text;
 using Plankton;
 using CreaseMachine;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Boundary First Flattening (Sawhney/Crane). Drives the standalone bff-command-line.exe as a
     // subprocess: write the live mesh to a temp OBJ, run BFF with --writeOnlyUVs, read back the

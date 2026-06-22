@@ -1,7 +1,7 @@
 using System;
 using System.Windows;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Non-modal log window. Hidden by default; toggled from Window > Console or Ctrl+Shift+J. The
     // main window owns the single instance and writes lines via AppendLine.

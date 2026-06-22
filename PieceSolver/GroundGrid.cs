@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // A subtle reference grid of dots on the world ground plane (Z = 0; Rhino Z-up) at a fixed world
     // spacing. World-anchored (dots sit on the global N*spacing lattice); rebuilt to cover the current

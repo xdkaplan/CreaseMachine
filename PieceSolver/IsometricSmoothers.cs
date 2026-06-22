@@ -1,7 +1,7 @@
 using System;
 using Plankton;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Non-shrinking smoothing filters for the isometric flow. The uniform Laplacian shrinks because it
     // moves each vertex toward its neighbours' centroid - which has an inward NORMAL component (mean-

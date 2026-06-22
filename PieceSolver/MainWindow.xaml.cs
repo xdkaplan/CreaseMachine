@@ -9,7 +9,7 @@ using OpenTK.Mathematics;
 using Plankton;
 using CreaseMachine;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     public partial class MainWindow : Window
     {
@@ -109,7 +109,7 @@ namespace CreasePatchSolver
             // Default = Mesh 1 (NURBS test surface 0.stl), not the bunny. Missing -> status, no crash.
             string def = MeshPath(_sim.MeshIndex);
             if (System.IO.File.Exists(def)) Execute(StudioCommand.Load(def), record: true);
-            else Title = "CreasePatchSolver — (no mesh at " + def + ")";
+            else Title = "PieceSolver — (no mesh at " + def + ")";
 
             // DISPLAY tab: bundled matcaps (assets/matcaps, copied next to the exe). Thumbnails feed
             // the switcher ListBox; the selected one is decoded to a GL texture by SelectMatcap. The
@@ -301,9 +301,9 @@ namespace CreasePatchSolver
 
         void ApplyLoad(string path)
         {
-            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { Title = "CreasePatchSolver — missing: " + path; return; }
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { Title = "PieceSolver — missing: " + path; return; }
             try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
-            catch (Exception ex) { Title = "CreasePatchSolver — load failed: " + ex.Message; return; }
+            catch (Exception ex) { Title = "PieceSolver — load failed: " + ex.Message; return; }
             _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
@@ -311,7 +311,7 @@ namespace CreasePatchSolver
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // new mesh -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // new mesh -> BFF must (re)run before the sim can step
-            Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(path);
+            Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
             RefreshSeamDisplay();     // show the fitted seam wires immediately if Fix B-spline edges is on
             _gl?.InvalidateVisual();
         }
@@ -339,12 +339,12 @@ namespace CreasePatchSolver
             {
                 string path = MeshPath(_sim.MeshIndex);
                 if (System.IO.File.Exists(path)) Execute(StudioCommand.Load(path), record: true);
-                else Title = "CreasePatchSolver — (no mesh at " + path + ")";
+                else Title = "PieceSolver — (no mesh at " + path + ")";
             }
             finally { _meshSwitching = false; }
         }
 
-        // Run n PatchSolver steps in-process (on the UI thread). This is the PatchSolver paradigm —
+        // Run n PieceSolver steps in-process (on the UI thread). This is the PieceSolver paradigm —
         // it does NOT touch the Stein/DetMix developability flow (NesterovStep & friends). The
         // FlowParams `p` is intentionally ignored (kept only so the journal/Run plumbing is untouched
         // this pass). Times the loop for the perf-drift readout.
@@ -359,12 +359,12 @@ namespace CreasePatchSolver
             _meshDirty = true; _rulingsDirty = true;                    // OnRender re-uploads M (_view) once (+ recompute rulings)
             if (_hasFlat && _flatView != null) _flatView.Upload(_flat); // re-upload M' once per batch, not per step
             if (_hasFlat && _flat != null) _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;   // live developability readout (Accuracy gate)
-            Title = "CreasePatchSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
+            Title = "PieceSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
             UpdateStatus();
             _gl?.InvalidateVisual();
         }
 
-        // One PatchSolver step. Lazy-BFF gate: the first step for a given mesh runs Boundary First
+        // One PieceSolver step. Lazy-BFF gate: the first step for a given mesh runs Boundary First
         // Flattening (once), uploads the flat map M' beside M, and arms the sim. Subsequent steps (and
         // any step after a manual Flatten already ran for this mesh) skip straight to IsometricStep.
         // Returns false if BFF was needed but failed (caller should stop the run).
@@ -503,7 +503,7 @@ namespace CreasePatchSolver
                 _meshDirty = false; _rulingsDirty = true;     // mesh just uploaded; recompute rulings if shown
                 RefreshSeamDisplay();
                 if (!double.IsNaN(_bakeStrain)) _sim.StrainPct = _bakeStrain;
-                Title = "CreasePatchSolver — " + (_bakeToken.IsCancellationRequested ? "cancelled · " : "") + _bakeSummary;
+                Title = "PieceSolver — " + (_bakeToken.IsCancellationRequested ? "cancelled · " : "") + _bakeSummary;
                 UpdateStatus(); _gl?.InvalidateVisual();
                 _bakeCts?.Dispose(); _bakeCts = null; _bakeProgress = null;
             }
@@ -720,7 +720,7 @@ namespace CreasePatchSolver
                 _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;    // strain stays ~constant (subdivide is metric-preserving)
             }
             _meshDirty = true;
-            Title = "CreasePatchSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
+            Title = "PieceSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
         }
 
@@ -729,14 +729,14 @@ namespace CreasePatchSolver
         {
             if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
-            catch (Exception ex) { Title = "CreasePatchSolver — reset failed: " + ex.Message; return; }
+            catch (Exception ex) { Title = "PieceSolver — reset failed: " + ex.Message; return; }
             _totalIters = 0;
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // reset -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // reset -> BFF must (re)run before the sim can step
-            Title = "CreasePatchSolver — " + System.IO.Path.GetFileName(_meshPath);
+            Title = "PieceSolver — " + System.IO.Path.GetFileName(_meshPath);
             _gl?.InvalidateVisual();
         }
 
@@ -866,7 +866,7 @@ namespace CreasePatchSolver
             var dlg = new Microsoft.Win32.SaveFileDialog
             { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*", FileName = "session.journal", InitialDirectory = @"C:\Temp" };
             if (dlg.ShowDialog() != true) return;
-            var lines = new System.Collections.Generic.List<string> { "# CreasePatchSolver session journal" };
+            var lines = new System.Collections.Generic.List<string> { "# PieceSolver session journal" };
             foreach (var c in _journal) lines.Add(c.Serialize());
             try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands -> " + System.IO.Path.GetFileName(dlg.FileName)); }
             catch (Exception ex) { Log("save failed: " + ex.Message); }

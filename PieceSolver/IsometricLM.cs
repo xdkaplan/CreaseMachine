@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 using Plankton;
 using CreaseMachine;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Levenberg-Marquardt solver for discrete isometry (developability): co-refines the 3D mesh M and
     // its flat image M' (on z=0) so corresponding edge lengths match, while M stays near M0 (anchor)

@@ -5,8 +5,8 @@
     <UseWPF>true</UseWPF>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <AssemblyName>CreasePatchSolver</AssemblyName>
-    <RootNamespace>CreasePatchSolver</RootNamespace>
+    <AssemblyName>PieceSolver</AssemblyName>
+    <RootNamespace>PieceSolver</RootNamespace>
   </PropertyGroup>
   <!-- In-process net8 WPF viewer/patch-solver. Renders via OpenTK + GLWpfControl (MatCap shader).
        Drives the same Rhino-free engine the plugin/CLI use, in-process. -->

@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using System.Windows.Data;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Remaps a slider value within [min, max] to a 0-100% readout string. Reusable across sliders:
     // bind a readout TextBlock to a MultiBinding of the slider's {Value, Minimum, Maximum}. Keeping

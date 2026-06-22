@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Non-modal About window. The owner reuses a single instance (Close just hides it).
     public partial class AboutWindow : Window

@@ -4,7 +4,7 @@ using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using Plankton;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Uploads a PlanktonMesh to the GPU and draws it with a MatCap / lit-sphere shader (a texture
     // sampled by the view-space surface normal). Two upload modes: WELDED/smooth (shared vertices

@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using CreaseMachine;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     enum CmdKind { Load, Run, Subdivide, Reset, Matcap, Solve }
 

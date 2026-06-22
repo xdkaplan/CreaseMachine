@@ -1,4 +1,4 @@
-<Window x:Class="CreasePatchSolver.ConsoleWindow"
+<Window x:Class="PieceSolver.ConsoleWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Console" Height="360" Width="480" Background="#1E1E20"

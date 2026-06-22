@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Plankton;
 using CreaseMachine;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // Derives per-vertex RULING directions on the (developing) mesh and returns them as line segments for
     // display. A ruling is the surface's zero-curvature direction - the straight generator of a developable.

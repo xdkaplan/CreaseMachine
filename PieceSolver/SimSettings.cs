@@ -2,7 +2,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using CreaseMachine;
 
-namespace CreasePatchSolver
+namespace PieceSolver
 {
     // View-model for the simulation settings (right toolbar). Bindable (INotifyPropertyChanged) so
     // panel controls bind two-way and the flow reads a snapshot each run - the MVVM seam that keeps
@@ -10,7 +10,7 @@ namespace CreasePatchSolver
     sealed class SimSettings : INotifyPropertyChanged
     {
         int _iterPerRun = 10, _momFix = 4;
-        // PatchSolver mesh picker: 1..30 maps to the NURBS test surfaces 0.stl..29.stl. Changing it
+        // PieceSolver mesh picker: 1..30 maps to the NURBS test surfaces 0.stl..29.stl. Changing it
         // resets the app to that mesh (load + clear flat + re-arm BFF) from the MainWindow handler.
         int _meshIndex = 1;
         // CrazeBand is shown to the user in DEGREES (more intuitive than radians); the engine wants
