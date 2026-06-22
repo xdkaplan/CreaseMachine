@@ -34,6 +34,14 @@ namespace CreasePatchSolver
     // (lambda *= 4). lambda persists across calls (ref) so the trust region carries between ticks.
     static class IsometricLM
     {
+        // FD gradient gate (test-only; default off so production pays nothing). When DebugGradCheck is set,
+        // the first outer iteration central-differences the total energy E=||r||^2 against the analytic
+        // gradient 2*(J^T r) over every variable and stores the max relative error in LastGradCheckErr.
+        // A correct J^T gives <~1e-5; a sign/missing-term bug gives O(1). This is the patchsolver analogue
+        // of the covariance engine's GradCheck, and the gate for any ApplyJ/ApplyJt rewrite (e.g. parallel).
+        public static bool DebugGradCheck = false;
+        public static double LastGradCheckErr = 0.0;
+
         // Run `outerIters` LM iterations on (M, Mp). Weights define the objective (no step size). lambda
         // persists via ref. Returns the raw E_iso (Sum of squared-length mismatches, unweighted) for the
         // convergence readout - same quantity IsometricSolver.Step returns, so the GUI display is parity.
@@ -387,6 +395,24 @@ namespace CreasePatchSolver
                 ComputeR(Mx, My, Mz, Px, Py, r0);
                 for (int e = 0; e < nE; e++) { int i = ei[e], j = ej[e]; eDMx[e] = Mx[i] - Mx[j]; eDMy[e] = My[i] - My[j]; eDMz[e] = Mz[i] - Mz[j]; eDPx[e] = Px[i] - Px[j]; eDPy[e] = Py[i] - Py[j]; }   // freeze edge vectors for this outer iter
                 ApplyJt(r0, b);                        // b0 = J^T r0  (we solve A x = -b0)
+                if (DebugGradCheck && outer == 0)      // central-difference E=||r||^2 vs analytic 2*(J^T r)=2*b
+                {
+                    double eps = 1e-6, maxAbsDiff = 0.0, gInf = 0.0;
+                    for (int k = 0; k < N; k++)
+                    {
+                        double[] arr; int idx;
+                        if (k < 3 * nV) { int v = k / 3, c = k % 3; arr = c == 0 ? Mx : (c == 1 ? My : Mz); idx = v; }
+                        else { int k2 = k - oP, v = k2 / 2; arr = (k2 % 2 == 0) ? Px : Py; idx = v; }
+                        double save = arr[idx];
+                        arr[idx] = save + eps; double ep = Energy(Mx, My, Mz, Px, Py);
+                        arr[idx] = save - eps; double em = Energy(Mx, My, Mz, Px, Py);
+                        arr[idx] = save;
+                        double fd = (ep - em) / (2.0 * eps), an = 2.0 * b[k];
+                        double ad = Math.Abs(fd - an); if (ad > maxAbsDiff) maxAbsDiff = ad;
+                        double aa = Math.Abs(an); if (aa > gInf) gInf = aa;
+                    }
+                    LastGradCheckErr = maxAbsDiff / (gInf + 1e-12);   // max abs error normalized by gradient inf-norm
+                }
                 for (int k = 0; k < N; k++) b[k] = -b[k];
                 DiagJtJ(cgDiag);                       // Jacobi diagonal (fixed per outer iter; lambda added per try)
 
