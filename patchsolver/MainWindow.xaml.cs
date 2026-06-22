@@ -138,7 +138,9 @@ namespace CreasePatchSolver
             if (_matcapPaths.Length > 0) { int defMc = System.Math.Min(2, _matcapPaths.Length - 1); MatcapList.SelectedIndex = defMc; ApplyMatcap(defMc); }   // default = 4th matcap (now index 2 after removing the 3rd)
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
-            SolveButton.Click += async (s, e) => await OnSolveAsync();   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal (not journaled)
+            // Solve is the studio's main develop; it records a full BakeParams snapshot so a recorded
+            // session reproduces the bake on replay (and via the headless CLI value-check).
+            SolveButton.Click += (s, e) => Execute(StudioCommand.Solve(_sim.ToBakeParams()), record: true);   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
@@ -250,6 +252,11 @@ namespace CreasePatchSolver
         // authoritative record of what happened - and replay drives the exact same code paths.
         void Execute(StudioCommand c, bool record)
         {
+            // For a replayed Solve, apply the recorded BakeParams onto _sim BEFORE the bake launches, so
+            // RunBake (which reads _sim live) develops with the captured settings. For a live Solve, _sim
+            // is already the source of truth, so this sync is skipped (record:true -> no SyncControls).
+            if (c.Kind == CmdKind.Solve && !record) SyncControls(c);
+
             switch (c.Kind)
             {
                 case CmdKind.Load: ApplyLoad(c.Path); break;
@@ -257,9 +264,12 @@ namespace CreasePatchSolver
                 case CmdKind.Subdivide: ApplySubdivide(); break;
                 case CmdKind.Reset: ApplyReset(); break;
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
+                // Launch the async bake (fire-and-forget; _baking flips synchronously before the first
+                // await, so the replay loop can wait on it). On a live user click this is the develop.
+                case CmdKind.Solve: _ = OnSolveAsync(); break;
             }
             if (record) { _journal.Add(c); Log(c.Serialize()); }
-            else SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
+            else if (c.Kind != CmdKind.Solve) SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
                                     // LIVE run the controls are already the source of truth, and
                                     // re-writing them here round-trips params lossily (it collapsed the
                                     // deCraze slider by ×DeCrazeMax every iteration).
@@ -274,6 +284,7 @@ namespace CreasePatchSolver
             try
             {
                 if (c.Kind == CmdKind.Matcap && c.N >= 0 && c.N < MatcapList.Items.Count) MatcapList.SelectedIndex = c.N;
+                else if (c.Kind == CmdKind.Solve) _sim.ApplyBakeParams(c.B);   // restore the recorded bake settings before the replayed bake runs
                 else if (c.Kind == CmdKind.Run)
                 {
                     // show the replayed run's parameters on the sliders (cosmetic; the run used c.P).
@@ -887,10 +898,38 @@ namespace CreasePatchSolver
             _replayTimer.Start();
         }
 
+        long _replaySolveStartMs;   // wall-clock at the moment the in-flight replayed Solve was launched
+
         void ReplayTick(object sender, EventArgs e)
         {
+            // A Solve is async (runs on a worker behind the modal). Don't advance to the next command
+            // while a bake is in flight — wait for it to finish, then log + continue on a later tick. This
+            // is the replay gate that keeps the harness from firing the next command mid-bake.
+            if (_baking) return;
+            if (_replaySolvePending)
+            {
+                _replaySolvePending = false;
+                double ms = Environment.TickCount64 - _replaySolveStartMs;
+                string ex = "";
+                if (_session != null)
+                {
+                    var mm = FlowMetrics.Compute(_session.Mesh, 0.1, false, 4.0);
+                    ex = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                        "  sumE={0:0.000} panels={1} maxDih={2:0.0}  strain={3:0.###}%", mm.SumE, mm.Panels, mm.MaxDihDeg, _sim.StrainPct);
+                }
+                Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "{0,3}/{1}  {2}  [{3:0.0} ms]{4}", _replayPos, _replayQueue.Count, _replaySolveLine, ms, ex));
+            }
             if (_replayQueue == null || _replayPos >= _replayQueue.Count) { _replayTimer.Stop(); Log("--- replay done ---"); return; }
             var c = _replayQueue[_replayPos++];
+            // A Solve sets _baking synchronously inside Execute; defer its log line until the bake completes
+            // (a subsequent tick, once _baking clears) so the timing + metrics reflect the finished bake.
+            if (c.Kind == CmdKind.Solve)
+            {
+                _replaySolvePending = true; _replaySolveLine = c.Serialize(); _replaySolveStartMs = Environment.TickCount64;
+                Execute(c, record: false);
+                return;
+            }
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Execute(c, record: false);
             sw.Stop();
@@ -904,6 +943,8 @@ namespace CreasePatchSolver
             Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "{0,3}/{1}  {2}  [{3:0.0} ms]{4}", _replayPos, _replayQueue.Count, c.Serialize(), sw.Elapsed.TotalMilliseconds, extra));
         }
+        bool _replaySolvePending;   // a replayed Solve is in flight; log + advance once _baking clears
+        string _replaySolveLine;    // the serialized Solve line, held for the deferred completion log
 
         void Log(string msg) => _console?.AppendLine(msg);
 

@@ -11,6 +11,7 @@ using CreaseMachine;
 // Commands:
 //   load <file.stl|.obj>            load + weld a mesh (resets state)
 //   run <N> [param=v | param=a>b]   run N flow steps; ramps interpolate a->b over the run
+//   solve [acc=p subdiv=n ...]      studio bake (develop + subdivide rounds); shared-journal command
 //   subdivide                       one 1->4 midpoint subdivision (paper's refine step)
 //   stats                           print metrics at the current state (no flow)
 //   export <file.obj|.ply>          write mesh (.ply carries per-vertex energy as colour)
@@ -75,6 +76,7 @@ static class Program
             {
                 case "load":      CmdLoad(tok); break;
                 case "run":       CmdRun(tok); break;
+                case "solve":     CmdSolve(tok); break;
                 case "subdivide":
                 case "subd":      CmdSubdivide(); break;
                 case "stats":     PrintMetrics("stats"); break;
@@ -83,6 +85,7 @@ static class Program
                 case "zero-momentum":
                 case "zm":        CmdZeroMomentum(); break;
                 case "params":    PrintParams(); break;
+                case "matcap":    break;   // studio-only display state (shading); no-op here so a full studio journal runs clean
                 case "help":      PrintHelp(); break;
                 case "quit":
                 case "exit":      return false;
@@ -148,6 +151,57 @@ static class Program
             "   " + (sw.Elapsed.TotalSeconds).ToString("0.0") + "s");
     }
 
+    // Consume the studio's `solve` command (develop-to-accuracy + subdivide) from a shared .journal.
+    // The studio bakes via its IsometricLM patch-solver; the CLI has no such paradigm, so this maps to
+    // the CLI's nearest equivalent: develop with the Nesterov flow, then subdivide + re-develop for each
+    // requested subdivision round. The LM-only weights (iso/fair/anchor/scale/bend/difffair/benddiff/
+    // fixedges/seamratio) are accepted and ignored WITHOUT warnings, preserving the shared-grammar
+    // contract (a studio-authored journal runs here with no unknown-param noise). `acc` (target strain %)
+    // is informational only — the Nesterov flow has no strain gate — so a fixed develop budget is used.
+    static void CmdSolve(string[] tok)
+    {
+        if (P == null) { Console.WriteLine("  ! load a mesh first"); return; }
+        double acc = double.NaN; int subdiv = 0;
+        const int developIters = 200;   // per-round flow budget (the CLI's bake-to-accuracy stand-in)
+        for (int i = 1; i < tok.Length; i++)
+        {
+            int eq = tok[i].IndexOf('=');
+            if (eq <= 0) continue;
+            string name = tok[i].Substring(0, eq).ToLowerInvariant();
+            string val = tok[i].Substring(eq + 1);
+            switch (name)
+            {
+                case "acc": case "accuracy": case "strain": double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out acc); break;
+                case "subdiv": case "subdivlevel": int.TryParse(val, out subdiv); break;
+                // LM-only weights: accepted + ignored (the CLI's flow paradigm has no equivalent).
+                case "iso": case "fair": case "anchor": case "scale": case "bend":
+                case "difffair": case "fairdiff": case "benddiff": case "fixedges": case "fixbsplineedges": case "seamratio": break;
+                default: Console.WriteLine("  ! unknown solve param '" + name + "'"); break;
+            }
+        }
+
+        var R = new RunRamps(step, mom, deCraze, band, detMix, deBranch, deConsolidate, sharpness);
+        double startE = FlowMetrics.DevEnergy(P, maxCov, sharpness);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long iters = 0;
+        for (int s = 0; s < developIters; s++) { FlowStep(R, developIters <= 1 ? 0.0 : (double)s / (developIters - 1)); totalIters++; iters++; }
+        for (int lvl = 0; lvl < subdiv; lvl++)
+        {
+            P = MeshOps.UniformSubdivide(P); vel = new Vec3[P.Vertices.Count];
+            for (int s = 0; s < developIters; s++) { FlowStep(R, developIters <= 1 ? 0.0 : (double)s / (developIters - 1)); totalIters++; iters++; }
+        }
+        sw.Stop();
+
+        var m = FlowMetrics.Compute(P, band, maxCov, sharpness);
+        Console.WriteLine("  solved (" + iters + " iters, subdiv " + subdiv +
+            (double.IsNaN(acc) ? "" : ", acc target " + acc.ToString("0.###", CultureInfo.InvariantCulture) + "%") + ")" +
+            "  sumE " + Fmt(startE) + "->" + Fmt(m.SumE) +
+            "  panels " + m.Panels +
+            "  maxDih " + m.MaxDihDeg.ToString("0.0") + "deg" +
+            "  verts " + P.Vertices.Count +
+            "   " + (sw.Elapsed.TotalSeconds).ToString("0.0") + "s");
+    }
+
     static void CmdSubdivide()
     {
         if (P == null) { Console.WriteLine("  ! load a mesh first"); return; }
@@ -208,6 +262,7 @@ static class Program
     {
         Console.WriteLine(@"  load <f.stl|.obj>            load + weld a mesh (resets state)
   run <N> [p=v | p=a>b ...]    run N flow steps; ramps interpolate a->b over the run
+  solve [acc=p subdiv=n ...]   studio bake: develop + n subdivide rounds (shared-journal command)
   subdivide                    one 1->4 midpoint subdivision
   stats                        metrics at current state
   export <f.obj|.ply>          write mesh (.ply = per-vertex energy colour)

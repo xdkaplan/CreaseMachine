@@ -167,6 +167,43 @@ namespace CreasePatchSolver
             UseMaxCov = false,
         };
 
+        // Snapshot the bake (Solve) parameters for the journal: the Accuracy target strain %, the
+        // subdivide-round count, and the IsometricLM weights + seam-pin settings RunBake reads. Mirrors
+        // ToFlowParams()'s role for the Run command, so a recorded Solve replays deterministically.
+        public BakeParams ToBakeParams() => new BakeParams
+        {
+            TargetStrainPct = AccuracyStrainPct,
+            SubdivLevel = SubdivLevel,
+            Iso = IsoWeight, Fair = FairWeight, Anchor = AnchorWeight, Scale = ScaleWeight, Bend = BendWeight,
+            DiffFair = DiffFair, BendDiff = BendDiff,
+            FixEdges = FixBSplineEdges, SeamRatio = SeamRatio,
+        };
+
+        // Apply a recorded BakeParams back onto the view-model so a replayed Solve develops with the
+        // captured settings (RunBake reads these live from _sim). AccuracyLevel is mapped from the target
+        // strain % by picking the nearest material band, so the GO readout + label stay coherent on replay.
+        public void ApplyBakeParams(BakeParams b)
+        {
+            AccuracyLevel = NearestAccuracyLevel(b.TargetStrainPct);
+            SubdivLevel = b.SubdivLevel;
+            IsoWeight = b.Iso; FairWeight = b.Fair; AnchorWeight = b.Anchor; ScaleWeight = b.Scale; BendWeight = b.Bend;
+            DiffFair = b.DiffFair; BendDiff = b.BendDiff;
+            FixBSplineEdges = b.FixEdges; SeamRatio = b.SeamRatio;
+        }
+
+        // Map a target strain % back to the discrete Accuracy material band whose allowable strain is
+        // closest to it (inverse of AccuracyStrainPct), so a replayed/parsed Solve restores the slider.
+        static int NearestAccuracyLevel(double pct)
+        {
+            int best = 0; double bestD = double.MaxValue;
+            for (int i = 0; i < AccStrainPct.Length; i++)
+            {
+                double d = System.Math.Abs(AccStrainPct[i] - pct);
+                if (d < bestD) { bestD = d; best = i; }
+            }
+            return best;
+        }
+
         public event PropertyChangedEventHandler PropertyChanged;
         void OnChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
         bool Set<T>(ref T field, T value, [CallerMemberName] string name = null)
