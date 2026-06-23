@@ -868,7 +868,9 @@ namespace PieceSolver
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                Vector3 cc = (pieceId[f] == _brushRegion) ? ActiveRegionColor : PieceColor(pieceId[f]);   // active paint region reads light blue
+                // Pieces are NOT colour-coded: only the active paint region is tinted (light blue); every other
+                // piece renders as the plain neutral matcap (white tint). Grooves still delineate the regions.
+                Vector3 cc = (pieceId[f] == _brushRegion) ? ActiveRegionColor : Vector3.One;
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
@@ -1536,7 +1538,7 @@ namespace PieceSolver
         {
             if (_faceRegion == null || _brushRegion < 0 || _session == null) return false;
             var P = _session.Mesh;
-            float R2 = (float)(_sim.BrushSize * _sim.BrushSize);
+            float R2 = (float)(BrushWorldRadius * BrushWorldRadius);
             int nF = P.Faces.Count;
             bool changed = false;
             for (int f = 0; f < nF; f++)
@@ -1645,6 +1647,10 @@ namespace PieceSolver
             _previewDot.Visibility = Visibility.Visible;
         }
 
+        // World-space brush radius. The slider value (1..100) maps at half scale so its low end is fine enough.
+        // Used by BOTH the paint footprint and the screen preview, so they always agree.
+        double BrushWorldRadius => _sim.BrushSize * 0.5;
+
         // The brush's world radius projected to screen pixels at the given surface point's depth.
         double ScreenRadiusPx(Vector3 hit)
         {
@@ -1653,7 +1659,7 @@ namespace PieceSolver
             double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
             double h = Math.Max(1, _gl.ActualHeight);
             double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
-            return _sim.BrushSize * h / (2.0 * dist * tanH);
+            return BrushWorldRadius * h / (2.0 * dist * tanH);
         }
 
         void InvalidateView() { _gl?.InvalidateVisual(); }
