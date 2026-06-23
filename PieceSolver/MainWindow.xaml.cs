@@ -94,7 +94,7 @@ namespace PieceSolver
         System.Collections.Generic.Dictionary<long, (int, int)> _edgeApex;   // edge key -> its two opposite apex vertices (topology cache for the brush)
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
-        float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist;
+        float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
         bool _pieceDirty, _showPieces; float _pieceInset = 0.05f;
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
@@ -808,16 +808,30 @@ namespace PieceSolver
                 vN[fv[0]] += fn; vN[fv[1]] += fn; vN[fv[2]] += fn;
             }
 
-            // SPLIT buffers: 3 corners per triangle, each carrying its piece colour + boundary distance.
+            // SPLIT buffers: 3 corners per triangle, each carrying its piece colour, the per-vertex boundary
+            // distance, and the per-corner perpendicular distance to each of the triangle's 3 edges (BIG when
+            // that edge is NOT a crease). The latter interpolates to the EXACT distance to the tri's own crease
+            // edges, fixing the all-corners-on-crease ("V") triangle that the per-vertex field renders solid.
+            const float BIG = 1e9f;
+            static float PerpDist(Vector3 p, Vector3 a, Vector3 b)
+            {
+                Vector3 ab = b - a; float L = ab.Length;
+                return L < 1e-12f ? (p - a).Length : Vector3.Cross(p - a, ab).Length / L;
+            }
             var pos = new System.Collections.Generic.List<float>(nF * 9);
             var nrm = new System.Collections.Generic.List<float>(nF * 9);
             var col = new System.Collections.Generic.List<float>(nF * 9);
             var dst = new System.Collections.Generic.List<float>(nF * 3);
+            var edg = new System.Collections.Generic.List<float>(nF * 9);
             for (int f = 0; f < nF; f++)
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
                 Vector3 cc = PieceColor(pieceId[f]);
+                Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
+                bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
+                bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
+                bool c2 = _creaseEdges.Contains(EdgeKey(fv[2], fv[0]));   // edge 2 = (v2,v0)
                 for (int k = 0; k < 3; k++)
                 {
                     int v = fv[k]; Vector3 pp = Pos(v);
@@ -826,9 +840,12 @@ namespace PieceSolver
                     nrm.Add(nn.X); nrm.Add(nn.Y); nrm.Add(nn.Z);
                     col.Add(cc.X); col.Add(cc.Y); col.Add(cc.Z);
                     dst.Add(dist[v]);
+                    edg.Add(c0 ? PerpDist(pp, p0, p1) : BIG);
+                    edg.Add(c1 ? PerpDist(pp, p1, p2) : BIG);
+                    edg.Add(c2 ? PerpDist(pp, p2, p0) : BIG);
                 }
             }
-            _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray();
+            _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
             _pieceDirty = true; _showPieces = _piecePos.Length > 0;
             Log($"pieces: {pieceCount} region(s)");
             _gl?.InvalidateVisual();
@@ -1642,7 +1659,7 @@ namespace PieceSolver
             // staged piece-visualization buffers (GL thread)
             if (_pieceDirty && !_baking && _view != null)
             {
-                if (_piecePos != null && _piecePos.Length > 0) _view.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist);
+                if (_piecePos != null && _piecePos.Length > 0) _view.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge);
                 else _view.ClearPieces();
                 _pieceDirty = false;
             }
