@@ -95,6 +95,7 @@ namespace PieceSolver
         int _brushRegion = -1;   // active region being painted with = the region of the face clicked on mouse-down (shown light blue)
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
+        bool _angleDragging;     // Crease angle slider thumb is being dragged: re-segment + show edges live, defer colour fills to mouse-up
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -231,7 +232,13 @@ namespace PieceSolver
                     || e.PropertyName == nameof(SimSettings.InsetWidthFrac)) _gl?.InvalidateVisual();
                 else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RebuildCreaseOverlay(); RebuildPieces(); _gl?.InvalidateVisual(); }   // re-place creases + pieces on the new positions (keep edits)
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
-                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) { RelabelCreases(); RebuildPieces(); }   // re-seed creases (discards nudges) + re-piece
+                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg))
+                {
+                    RelabelCreases();                          // recompute regions + crease-EDGE overlay (live in both cases)
+                    if (_angleDragging) _showPieces = false;   // mid-drag: edges only -- defer the colour FILLS to mouse-up
+                    else RebuildPieces();                      // settled (release / keyboard / track-click): build + show fills
+                    _gl?.InvalidateVisual();
+                }
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
 
@@ -758,6 +765,12 @@ namespace PieceSolver
             };
             slider.SetBinding(System.Windows.Controls.Slider.ValueProperty,
                 new System.Windows.Data.Binding("CreaseAngleDeg") { Mode = System.Windows.Data.BindingMode.TwoWay });
+            // While the thumb is dragged, the angle handler shows EDGES only (re-segmenting live) and suppresses
+            // the colour fills; on release we rebuild + show the fills. (Thumb drag events bubble to the slider.)
+            slider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragStartedEvent,
+                new System.Windows.Controls.Primitives.DragStartedEventHandler((s, e) => _angleDragging = true));
+            slider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragCompletedEvent,
+                new System.Windows.Controls.Primitives.DragCompletedEventHandler((s, e) => { _angleDragging = false; RebuildPieces(); }));
             dp.Children.Add(label);
             dp.Children.Add(val);
             dp.Children.Add(slider);
