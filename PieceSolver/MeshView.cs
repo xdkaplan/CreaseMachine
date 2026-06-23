@@ -434,14 +434,16 @@ void main() {
             GL.ActiveTexture(TextureUnit.Texture1);
             GL.BindTexture(TextureTarget.Texture3D, _noiseTex);
             GL.BindVertexArray(_vao);
-            // Filled pass. When edges are on, push the fill back a touch (polygon offset) so the
-            // wireframe overlay drawn at true depth wins the depth test (clean hidden-line look).
+            // Filled pass. When edges OR on-surface creases are shown, push the fill back a touch (polygon
+            // offset) so a line overlay drawn at true depth wins the depth test on the NEAR surface (clean
+            // hidden-line look) while the mesh still occludes lines on the FAR side.
             GL.Uniform1(_uEdge, 0);
-            if (ShowEdges) { GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1f, 1f); }
+            bool offsetFill = ShowEdges || (ShowCreases && _creaseCount > 0);
+            if (offsetFill) { GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1f, 1f); }
             GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
+            if (offsetFill) GL.Disable(EnableCap.PolygonOffsetFill);   // line overlays below draw at true depth
             if (ShowEdges)
             {
-                GL.Disable(EnableCap.PolygonOffsetFill);
                 GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
                 GL.Uniform1(_uEdge, 1);
                 GL.Uniform3(_uEdgeColor, EdgeColor.X, EdgeColor.Y, EdgeColor.Z);
@@ -479,18 +481,17 @@ void main() {
                 GL.DrawArrays(PrimitiveType.Lines, 0, _seamCtrlCount);
                 GL.LineWidth(1f);
             }
-            // Proposed creases (orange): overlaid on the surface with depth test OFF so on-surface
-            // segments never z-fight the faces they lie on.
+            // Proposed creases (orange): drawn at true depth (depth test ON) so the mesh occludes the far
+            // side — 3D, like the B-spline seam preview. The fill was pushed back above, so near-surface
+            // segments still win the depth test instead of z-fighting the faces they lie on.
             if (ShowCreases && _creaseCount > 0)
             {
-                GL.Disable(EnableCap.DepthTest);
                 GL.BindVertexArray(_creaseVao);
                 GL.Uniform1(_uEdge, 1);
                 GL.Uniform3(_uEdgeColor, CreaseColor.X, CreaseColor.Y, CreaseColor.Z);
                 GL.LineWidth(2f);
                 GL.DrawArrays(PrimitiveType.Lines, 0, _creaseCount);
                 GL.LineWidth(1f);
-                GL.Enable(EnableCap.DepthTest);
             }
             GL.BindVertexArray(0);
         }
