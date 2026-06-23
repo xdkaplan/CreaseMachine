@@ -15,10 +15,15 @@ namespace CreaseStudio
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
         int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp;
-        int _tex;
-        bool _hasMatcap;
+        int _uNeutral, _uEnv, _uHasShade, _uUseMatcap, _uShine;
+        int _tex;                        // hand-picked override matcap (Advanced > Use Matcap)
+        int _texNeutral, _texEnv;        // the default shading pair: neutral light + environment map
+        bool _hasMatcap, _hasNeutral, _hasEnv;
         int _indexCount;
         bool _ready;
+
+        public float Shine = 0.4f;       // neutral(0) -> environment(1) blend, set per frame from the Shine slider
+        public bool UseMatcap = false;   // true -> the picked matcap overrides the neutral+Shine shading
 
         // Crease overlay: proposed piece-boundary edges, drawn as GL_LINES on top of the surface
         // (depth test off so they never z-fight the faces they lie on). Position-only, flat colour.
@@ -48,8 +53,13 @@ void main() {
 in vec3 vN;
 in vec3 vViewPos;
 out vec4 FragColor;
-uniform sampler2D uMatcap;
-uniform int uHasMatcap;
+uniform sampler2D uMatcap;    // hand-picked override matcap
+uniform sampler2D uNeutral;   // default shading: neutral lighting matcap
+uniform sampler2D uEnv;       // default shading: environment-map matcap
+uniform int uHasMatcap;       // a picked matcap is loaded
+uniform int uHasShade;        // the neutral+env pair is loaded
+uniform int uUseMatcap;       // Advanced override: sample the picked matcap instead of the blend
+uniform float uShine;         // neutral(0) -> environment(1) blend
 uniform float uSharpness;     // 0 = smooth (averaged normal), 1 = faceted (per-face normal)
 uniform float uFacetExp;      // response curve: blend = pow(sharpness, exp). 1 = linear
 void main() {
@@ -60,11 +70,14 @@ void main() {
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
     vec3 n = normalize(mix(sn, fn, s));
     if (n.z < 0.0) n = -n;       // orient toward camera (view looks down -z) - winding-independent
-    if (uHasMatcap == 1) {
-        vec2 uv = n.xy * 0.5 + 0.5;
-        FragColor = texture(uMatcap, uv);
+    vec2 uv = n.xy * 0.5 + 0.5;
+    if (uUseMatcap == 1 && uHasMatcap == 1) {
+        FragColor = texture(uMatcap, uv);               // Advanced: explicit matcap
+    } else if (uHasShade == 1) {
+        vec3 c = mix(texture(uNeutral, uv).rgb, texture(uEnv, uv).rgb, clamp(uShine, 0.0, 1.0));
+        FragColor = vec4(c, 1.0);                        // default: neutral + environment by Shine
     } else {
-        vec3 L = normalize(vec3(0.35, 0.55, 0.75));
+        vec3 L = normalize(vec3(0.35, 0.55, 0.75));      // procedural fallback (no textures loaded)
         float wrap = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
         vec3 col = mix(vec3(0.16, 0.17, 0.21), vec3(0.82, 0.80, 0.77), wrap);
         FragColor = vec4(col, 1.0);
@@ -79,16 +92,27 @@ void main() {
             _uView = GL.GetUniformLocation(_prog, "uView");
             _uNormalMat = GL.GetUniformLocation(_prog, "uNormalMat");
             _uMatcap = GL.GetUniformLocation(_prog, "uMatcap");
+            _uNeutral = GL.GetUniformLocation(_prog, "uNeutral");
+            _uEnv = GL.GetUniformLocation(_prog, "uEnv");
             _uHasMatcap = GL.GetUniformLocation(_prog, "uHasMatcap");
+            _uHasShade = GL.GetUniformLocation(_prog, "uHasShade");
+            _uUseMatcap = GL.GetUniformLocation(_prog, "uUseMatcap");
+            _uShine = GL.GetUniformLocation(_prog, "uShine");
             _uSharpness = GL.GetUniformLocation(_prog, "uSharpness");
             _uFacetExp = GL.GetUniformLocation(_prog, "uFacetExp");
         }
 
-        public void SetMatcap(byte[] bgra, int w, int h)
+        // The hand-picked override matcap (Advanced > Use Matcap).
+        public void SetMatcap(byte[] bgra, int w, int h) { UploadMatcap(ref _tex, bgra, w, h); _hasMatcap = true; }
+        // The default shading pair: neutral lighting + environment map, blended by Shine.
+        public void SetNeutralMatcap(byte[] bgra, int w, int h) { UploadMatcap(ref _texNeutral, bgra, w, h); _hasNeutral = true; }
+        public void SetEnvMatcap(byte[] bgra, int w, int h) { UploadMatcap(ref _texEnv, bgra, w, h); _hasEnv = true; }
+
+        void UploadMatcap(ref int tex, byte[] bgra, int w, int h)
         {
             EnsureProgram();
-            if (_tex == 0) _tex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _tex);
+            if (tex == 0) tex = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, tex);
             GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, w, h, 0,
                 PixelFormat.Bgra, PixelType.UnsignedByte, bgra);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
@@ -96,7 +120,6 @@ void main() {
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
             GL.BindTexture(TextureTarget.Texture2D, 0);
-            _hasMatcap = true;
         }
 
         // Always uploads the welded/smooth mesh (shared verts + area-averaged normals). The faceted
@@ -243,13 +266,13 @@ void main() { FragColor = vec4(uColor, 1.0); }";
             GL.UniformMatrix3(_uNormalMat, false, ref normalMat);
             GL.Uniform1(_uSharpness, Sharpness);
             GL.Uniform1(_uFacetExp, FacetExp);
+            GL.Uniform1(_uShine, Shine);
+            GL.Uniform1(_uUseMatcap, UseMatcap ? 1 : 0);
             GL.Uniform1(_uHasMatcap, _hasMatcap ? 1 : 0);
-            if (_hasMatcap)
-            {
-                GL.ActiveTexture(TextureUnit.Texture0);
-                GL.BindTexture(TextureTarget.Texture2D, _tex);
-                GL.Uniform1(_uMatcap, 0);
-            }
+            GL.Uniform1(_uHasShade, (_hasNeutral && _hasEnv) ? 1 : 0);
+            GL.ActiveTexture(TextureUnit.Texture0); GL.BindTexture(TextureTarget.Texture2D, _texNeutral); GL.Uniform1(_uNeutral, 0);
+            GL.ActiveTexture(TextureUnit.Texture1); GL.BindTexture(TextureTarget.Texture2D, _texEnv); GL.Uniform1(_uEnv, 1);
+            GL.ActiveTexture(TextureUnit.Texture2); GL.BindTexture(TextureTarget.Texture2D, _tex); GL.Uniform1(_uMatcap, 2);
             GL.BindVertexArray(_vao);
             GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
             GL.BindVertexArray(0);
@@ -284,6 +307,8 @@ void main() { FragColor = vec4(uColor, 1.0); }";
             if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vboPos); GL.DeleteBuffer(_vboNrm); GL.DeleteBuffer(_ebo); }
             if (_lineVao != 0) { GL.DeleteVertexArray(_lineVao); GL.DeleteBuffer(_lineVbo); }
             if (_tex != 0) GL.DeleteTexture(_tex);
+            if (_texNeutral != 0) GL.DeleteTexture(_texNeutral);
+            if (_texEnv != 0) GL.DeleteTexture(_texEnv);
             if (_prog != 0) GL.DeleteProgram(_prog);
             if (_lineProg != 0) GL.DeleteProgram(_lineProg);
         }

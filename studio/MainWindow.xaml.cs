@@ -33,8 +33,11 @@ namespace CreaseStudio
 
         // Display state (render-only). Facet (smooth<->faceted) is a shader uniform from _sim.Facet.
         string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
-        byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
-        bool _matcapDirty;                          // re-upload the matcap texture on the next render
+        byte[] _matcapPx; int _matcapW, _matcapH;   // pending picked matcap pixels (BGRA, GL row order)
+        bool _matcapDirty;                          // re-upload the picked matcap texture on the next render
+        // Default shading pair (neutral lighting + environment map), blended live by the Shine slider.
+        byte[] _neutralPx, _envPx; int _neutralW, _neutralH, _envW, _envH;
+        bool _neutralDirty, _envDirty;
 
         // Journal harness: every action routes through Execute(), which records the semantic command
         // (record/replay), so a saved .journal replays the live workflow and times each step for
@@ -151,6 +154,12 @@ namespace CreaseStudio
             // setting the index here doesn't fire a recorded command.
             if (_matcapPaths.Length > 0) { MatcapList.SelectedIndex = 0; ApplyMatcap(0); }
 
+            // Default shading is a fixed neutral-lighting matcap + an environment matcap, blended live
+            // by the Shine slider (the picker above is only consulted when Use Matcap is on). Decode
+            // both here and stage them for upload on the GL thread.
+            StageShadingMatcap("5D5E5A_A1A29B_2A2927", isEnv: false);   // neutral grey matte
+            StageShadingMatcap("54584E_B1BAC5_818B91", isEnv: true);    // sky / landscape environment map
+
             // Top-bar actions route through Execute() so each is recorded to the session journal.
             IterButton.Click += (s, e) => Execute(StudioCommand.Run(_sim.IterPerRun, _sim.ToFlowParams()), record: true);
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
@@ -170,7 +179,7 @@ namespace CreaseStudio
             // DISPLAY tab: matcap switcher (recorded; _suppressUi stops replay-sync re-recording). The
             // Facet slider binds straight to the view-model; a render is kicked when it changes.
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
-            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual(); };
+            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp) || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual(); };
             // Crease ∠ slider: re-label the proposed-crease overlay from the cached fold angles (no re-solve).
             _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) RelabelCreases(); };
 
@@ -452,6 +461,27 @@ namespace CreaseStudio
                 _gl?.InvalidateVisual();
             }
             catch { }
+        }
+
+        // Find a bundled matcap by filename prefix and stage its pixels for the default shading's
+        // neutral or environment slot (decoded next to the picked matcap, uploaded on the GL thread).
+        // Missing file -> the slot stays empty and the shader falls back (no crash).
+        void StageShadingMatcap(string namePrefix, bool isEnv)
+        {
+            if (_matcapPaths == null) return;
+            foreach (var path in _matcapPaths)
+            {
+                if (!System.IO.Path.GetFileName(path).StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    var px = DecodeMatcapBgra(path, out int w, out int h);
+                    if (isEnv) { _envPx = px; _envW = w; _envH = h; _envDirty = true; }
+                    else { _neutralPx = px; _neutralW = w; _neutralH = h; _neutralDirty = true; }
+                    _gl?.InvalidateVisual();
+                }
+                catch { }
+                return;
+            }
         }
 
         // ===================== crease proposer (async-modal Solve) =====================
@@ -1125,8 +1155,11 @@ namespace CreaseStudio
         {
             if (!_glInit) { _view = new MeshView(); _grid = new GroundGrid(); _glInit = true; }
 
-            // apply a queued matcap texture (GL thread = here)
+            // apply queued matcap textures (GL thread = here): the picked override + the default
+            // neutral/environment shading pair.
             if (_matcapDirty && _view != null && _matcapPx != null) { _view.SetMatcap(_matcapPx, _matcapW, _matcapH); _matcapDirty = false; }
+            if (_neutralDirty && _view != null && _neutralPx != null) { _view.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH); _neutralDirty = false; }
+            if (_envDirty && _view != null && _envPx != null) { _view.SetEnvMatcap(_envPx, _envW, _envH); _envDirty = false; }
 
             // upload queued crease-overlay line vertices (GL thread = here, like the mesh/matcap)
             if (_creaseDirty && _view != null) { _view.SetCreases(_creasePts); _creaseDirty = false; }
@@ -1190,7 +1223,7 @@ namespace CreaseStudio
                 MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
-            if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp; _view.Draw(view, proj); }   // Facet -> shader
+            if (_view != null) { _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp; _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap; _view.Draw(view, proj); }   // shading knobs -> shader
             _view?.DrawCreases(view, proj);   // proposed piece-boundary creases, overlaid on the surface
         }
     }
