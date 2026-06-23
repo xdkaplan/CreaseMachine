@@ -287,13 +287,11 @@ void main() {
     float band = max(uInset, 1e-6);
     float t = clamp(d / band, 0.0, 1.0);
 
-    // --- ELLIPSOIDAL groove profile w(t): the single weight that SHAPES the whole deboss (bevel tilt,
-    // darkening and sheen all scale by it). It is full (1) at the crease and follows a quarter-ellipse to a
-    // SMOOTH zero-slope landing at the rim, so the groove reads as a rounded valley that feathers gently into
-    // the flat field (no harsh edge where the crease-edge triangle ends) -- a real shape change, not a linear
-    // ramp. (u: 1 at crease -> 0 at rim.) ---
-    float u = 1.0 - t;
-    float w = 1.0 - sqrt(max(0.0, 1.0 - u * u));
+    // --- groove profile w(t): the single weight that SHAPES the whole deboss (bevel tilt, darkening and
+    // sheen all scale by it). A smooth DOME -- STRONGEST at the crease (the centre, t=0), feathering to a
+    // zero-slope landing at the rim (t=1). Both ends are flat, so the effect peaks broadly on the seam and
+    // fades out softly (no thin spike, no harsh edge where the crease-edge triangle ends). ---
+    float w = 0.5 + 0.5 * cos(t * 3.14159265);
 
     // --- debossed (pressed-in) bevel: tilt the shading normal toward the crease (downhill), scaled by w.
     // grad(d) points uphill (away from the crease); negate it for the deboss. ---
