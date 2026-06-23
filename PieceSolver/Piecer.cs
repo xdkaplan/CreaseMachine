@@ -168,25 +168,10 @@ namespace PieceSolver
         public void ClearSelection() { _selection = null; }
 
         // ---- colours (the active-region highlight + the remove-gesture preview tints) ----
-        // Active paint region: light blue, picked from the rainbow palette's hue/sat/val so it sits naturally
-        // among the piece colours. Remove preview: light red = marked, dark red = wholly-marked (to be removed).
-        static readonly Vector3 ActiveRegionColor = HsvToRgb(0.56f, 0.5f, 0.97f);
+        // Active paint region: light blue (= HSV 0.56,0.5,0.97, picked from the rainbow piece palette so it
+        // sits naturally among the piece colours). Remove preview: light red = marked, dark red = wholly-marked.
+        static readonly Vector3 ActiveRegionColor = new Vector3(0.485f, 0.7954f, 0.97f);
         static readonly Vector3 RemoveLight = new Vector3(0.96f, 0.62f, 0.60f);
         static readonly Vector3 RemoveDark = new Vector3(0.80f, 0.16f, 0.16f);
-
-        static Vector3 HsvToRgb(float h, float s, float v)
-        {
-            float i = (float)Math.Floor(h * 6f), f = h * 6f - i;
-            float p = v * (1f - s), q = v * (1f - f * s), t = v * (1f - (1f - f) * s);
-            switch (((int)i) % 6)
-            {
-                case 0: return new Vector3(v, t, p);
-                case 1: return new Vector3(q, v, p);
-                case 2: return new Vector3(p, v, t);
-                case 3: return new Vector3(p, q, v);
-                case 4: return new Vector3(t, p, v);
-                default: return new Vector3(v, p, q);
-            }
-        }
     }
 }
