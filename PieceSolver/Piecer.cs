@@ -178,7 +178,7 @@ namespace PieceSolver
             if (_marked != null && _marked.Contains(face))
             {
                 if (_carve)
-                    return (_selection.HasValue && region == _selection.Value.Value) ? ToDelete : CarveAffordance;
+                    return (_selection.HasValue && region == _selection.Value.Value) ? ToDelete : PreHighlight;
                 return (_fullyMarked != null && _fullyMarked.Contains(region)) ? ToDelete : PreHighlight;
             }
             // Active paint region -> light blue.
@@ -194,12 +194,12 @@ namespace PieceSolver
         // ---- colours ----
         // Active-piece highlight — open-color Indigo 3.
         static readonly Vector3 ActiveRegionColor = OpenColor.Indigo3;
-        // Ctrl-gesture preview, on open-color reds:
-        //   no-selection REMOVE -> PreHighlight (Red 3) for a marked face, ToDelete (Red 5) for a wholly-marked piece.
-        //   CARVE               -> ToDelete (Red 5) for the active piece's faces, CarveAffordance (Red 1) for the
-        //                          other (non-carvable) faces under the brush — a no-op affordance.
-        static readonly Vector3 PreHighlight = OpenColor.Red3;
+        // Ctrl-gesture preview, on open-color reds (the "marked but not deleting" cue is the SAME in both
+        // modes — it does not diverge by context):
+        //   PreHighlight (Red 2) = a marked face that will NOT be deleted — the no-selection remove pre-highlight
+        //                          AND the carve no-op affordance (non-active faces under the brush).
+        //   ToDelete    (Red 5) = a piece/face that WILL be deleted (a wholly-marked piece, or a carved face).
+        static readonly Vector3 PreHighlight = OpenColor.Red2;
         static readonly Vector3 ToDelete = OpenColor.Red5;
-        static readonly Vector3 CarveAffordance = OpenColor.Red1;
     }
 }

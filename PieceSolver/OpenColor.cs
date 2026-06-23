@@ -10,8 +10,7 @@ namespace PieceSolver
         static Vector3 Hex(int rgb) => new Vector3(((rgb >> 16) & 0xFF) / 255f, ((rgb >> 8) & 0xFF) / 255f, (rgb & 0xFF) / 255f);
 
         // Reds — the remove / carve previews.
-        public static readonly Vector3 Red1 = Hex(0xffe3e3);   // carve no-op affordance (non-active face under the brush)
-        public static readonly Vector3 Red3 = Hex(0xffa8a8);   // no-selection remove: marked, piece not yet fully covered
+        public static readonly Vector3 Red2 = Hex(0xffc9c9);   // marked but NOT deleting: no-sel pre-highlight + carve no-op (one colour, context-independent)
         public static readonly Vector3 Red5 = Hex(0xff6b6b);   // a piece/face that WILL be deleted (remove + carve)
 
         // Indigo 3 — the active-piece selection highlight.
