@@ -26,7 +26,10 @@ namespace PieceSolver
         bool _removing;             // Ctrl+drag destructive gesture in progress (remove pieces, OR carve when a piece is selected)
         bool _carve;                // this Ctrl gesture is a CARVE (a piece was selected at gesture start) rather than a remove
         HashSet<int> _touched;      // faces marked during the current Ctrl gesture
-        bool _painting;             // Shift+drag (or a single Shift dab) is GROWING the active piece (add territory)
+        bool _painting;             // Shift+no-selection MINT gesture: painting a fresh region directly
+        bool _growActive;           // Shift+selection GROW gesture: provisional (nothing applied until release)
+        HashSet<int> _growTouched;  // grow candidates the brush has passed over (faces not already in the active piece)
+        HashSet<int> _growConnected;// of _growTouched, the subset connected to the active piece (Green 5; the rest are Green 2)
         double _dabAccum;           // screen-px travelled since the last bump (path-spacing accumulator)
         Point _lastPointer;         // previous pointer position, the start of the current stroke segment
 
@@ -46,15 +49,26 @@ namespace PieceSolver
             }
             else if ((mods & ModifierKeys.Shift) != 0)
             {
-                // SHIFT is moded by selection (mirrors Ctrl): with NO piece selected it MINTS a new region (which
-                // becomes active, so the drag grows it); with a piece selected it GROWS the active piece (add
-                // territory). Either way it paints under the brush — immediately on the dab (no min-drag) and
-                // along the drag. (To mint another new region, deselect first via ESC / empty-canvas click.)
-                if (!_selection.HasValue) _selection = _host.Pattern.NewRegionId();
-                _painting = true;
-                if (_host.PickSurface(screen, out var hit) && _host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection.Value))
+                if (!_selection.HasValue)
                 {
-                    _host.RefreshCreaseOverlay(); _host.Pattern.SplitDisconnected();
+                    // SHIFT + no selection: MINT a new region and paint it directly (a fresh piece is self-
+                    // defined -- no connectivity preview). It becomes active; the drag grows it. Dab paints now.
+                    _selection = _host.Pattern.NewRegionId();
+                    _painting = true;
+                    if (_host.PickSurface(screen, out var hit) && _host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection.Value))
+                    {
+                        _host.RefreshCreaseOverlay(); _host.Pattern.SplitDisconnected();
+                        if (_host.ShowPieces) _host.RefreshPieces();
+                    }
+                }
+                else
+                {
+                    // SHIFT + a selection: provisional GROW. Accumulate faces under the brush and preview them --
+                    // connected to the active piece in Green 5 (will be added), disconnected in Green 2 (a no-op
+                    // affordance). NOTHING is applied to the mesh until release (then only the connected faces).
+                    _growActive = true; _growTouched = new HashSet<int>(); _growConnected = new HashSet<int>();
+                    if (_host.PickSurface(screen, out var hit)) AccumulateGrow(hit);
+                    _growConnected = _host.Pattern.GrowConnected(_growTouched, _selection.Value);
                     if (_host.ShowPieces) _host.RefreshPieces();
                 }
             }
@@ -70,7 +84,8 @@ namespace PieceSolver
 
         public override void OnPointerMove(Point screen)
         {
-            if (_removing || _painting) BrushStrokeTo(screen);   // Ctrl -> mark faces; Shift -> grow the active piece. Plain drag does nothing.
+            if (_removing || _painting) BrushStrokeTo(screen);   // Ctrl -> mark faces; Shift+no-sel mint -> paint
+            else if (_growActive) GrowStrokeTo(screen);          // Shift+sel grow -> accumulate + connectivity preview (provisional)
             _lastPointer = screen;
         }
 
@@ -90,7 +105,18 @@ namespace PieceSolver
                 _removing = false; _carve = false; _touched = null;
                 if (_host.ShowPieces) _host.RefreshPieces();        // drop the red preview, show the result
             }
-            else if (_painting && _host.ShowPieces) _host.RefreshPieces();   // final settle of the grow
+            else if (_growActive)
+            {
+                // Commit the grow: apply ONLY the connected (Green 5) faces; the disconnected (Green 2) ones were
+                // never written -> a no-op. Then re-split any neighbour the growth carved, and refresh.
+                var connected = _host.Pattern.GrowConnected(_growTouched, _selection ?? new PieceId(-1));
+                _host.Pattern.ApplyGrow(connected, _selection ?? new PieceId(-1));
+                _host.Pattern.SplitDisconnected();
+                _host.RefreshCreaseOverlay();
+                _growActive = false; _growTouched = null; _growConnected = null;
+                if (_host.ShowPieces) _host.RefreshPieces();
+            }
+            else if (_painting && _host.ShowPieces) _host.RefreshPieces();   // mint final settle
             _painting = false;
         }
 
@@ -128,6 +154,43 @@ namespace PieceSolver
             }
         }
 
+        // A Shift+grow stroke segment: accumulate the faces under the brush as grow candidates, then recompute
+        // which are connected to the active piece (Green 5) vs not (Green 2). Provisional — nothing is applied
+        // to the mesh; the commit happens on mouse-up.
+        void GrowStrokeTo(Point b)
+        {
+            double dx = b.X - _lastPointer.X, dy = b.Y - _lastPointer.Y;
+            double seg = Math.Sqrt(dx * dx + dy * dy);
+            if (seg < 1e-6) return;
+            double spacing = _host.BrushSpacingPx(b);
+            double pos = spacing - _dabAccum;
+            bool added = false;
+            while (pos <= seg)
+            {
+                double t = pos / seg;
+                if (_host.PickSurface(new Point(_lastPointer.X + dx * t, _lastPointer.Y + dy * t), out var hit) && AccumulateGrow(hit)) added = true;
+                pos += spacing;
+            }
+            _dabAccum = seg - (pos - spacing);
+            if (added)
+            {
+                _growConnected = _host.Pattern.GrowConnected(_growTouched, _selection ?? new PieceId(-1));
+                if (_host.ShowPieces) _host.RefreshPieces();
+            }
+        }
+
+        // Add the faces under the brush (that aren't already in the active piece) to the grow-candidate set.
+        bool AccumulateGrow(Vector3 center)
+        {
+            if (_growTouched == null || !_selection.HasValue) return false;
+            int act = _selection.Value.Value;
+            var map = _host.Pattern.PieceMap;
+            bool added = false;
+            foreach (int f in _host.Pattern.FacesUnderBrush(center, _host.BrushWorldRadius))
+                if (map != null && f >= 0 && f < map.Length && map[f] != act && _growTouched.Add(f)) added = true;
+            return added;
+        }
+
         // One Ctrl-gesture dab: add every face under the brush to the marked set (_touched). Marks ALL faces;
         // Carve filters to the active piece's faces in Pattern.Carve, so the rest are a no-op affordance (shown
         // in the pre-select colour, never removed). Pure marking — the actual remove/carve happens on mouse-up.
@@ -156,6 +219,14 @@ namespace PieceSolver
 
         public override Vector3? FaceFill(int face, int region)
         {
+            // Shift+grow preview: a candidate connected to the active piece reads Green 5 (will be added on
+            // release); a disconnected candidate reads Green 2 (a no-op affordance — never applied unless it
+            // connects). Provisional — the mesh is unchanged until release.
+            if (_growActive)
+            {
+                if (_growConnected != null && _growConnected.Contains(face)) return GrowAdd;
+                if (_growTouched != null && _growTouched.Contains(face)) return GrowPreview;
+            }
             // Ctrl-gesture preview on marked faces:
             //   CARVE  -> the active piece's faces read the DELETE colour (dark red); other faces under the
             //             brush can't be carved, shown in the lighter PRE-SELECT colour as a no-op affordance.
@@ -186,5 +257,8 @@ namespace PieceSolver
         //   ToDelete    (Red 5) = a piece/face that WILL be deleted (a wholly-marked piece, or a carved face).
         static readonly Vector3 PreHighlight = OpenColor.Red2;
         static readonly Vector3 ToDelete = OpenColor.Red5;
+        // Shift+grow preview: Green 5 = connected (will be added), Green 2 = disconnected (no-op affordance).
+        static readonly Vector3 GrowAdd = OpenColor.Green5;
+        static readonly Vector3 GrowPreview = OpenColor.Green2;
     }
 }

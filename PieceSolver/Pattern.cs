@@ -266,6 +266,52 @@ namespace PieceSolver
             return changed;
         }
 
+        // Of the candidate `touched` faces, return the subset CONNECTED to the active piece — i.e. reachable
+        // from an active face by a flood that only steps through active faces or other touched candidates. Used
+        // by the provisional Shift+grow: connected candidates preview Green 5 (will be added on release), the
+        // rest preview Green 2 (a disconnected affordance — never applied). Read-only; mutates nothing.
+        public HashSet<int> GrowConnected(HashSet<int> touched, PieceId active)
+        {
+            var connected = new HashSet<int>();
+            if (PieceMap == null || _mesh == null || active.Value < 0 || touched == null || touched.Count == 0) return connected;
+            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count, act = active.Value;
+            var adj = new List<int>[nF];
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                (adj[f1] ??= new List<int>()).Add(f2);
+                (adj[f2] ??= new List<int>()).Add(f1);
+            }
+            var seen = new bool[nF];
+            var q = new Queue<int>();
+            for (int f = 0; f < nF; f++)
+                if (!P.Faces[f].IsUnused && PieceMap[f] == act) { seen[f] = true; q.Enqueue(f); }   // seed: the active piece
+            while (q.Count > 0)
+            {
+                var nbrs = adj[q.Dequeue()]; if (nbrs == null) continue;
+                foreach (int nf in nbrs)
+                    if (!seen[nf] && (PieceMap[nf] == act || touched.Contains(nf)))
+                    {
+                        seen[nf] = true; q.Enqueue(nf);
+                        if (touched.Contains(nf)) connected.Add(nf);
+                    }
+            }
+            return connected;
+        }
+
+        // Commit a grow: assign the given (connected) faces to the active region. Re-derives creases.
+        public void ApplyGrow(HashSet<int> faces, PieceId active)
+        {
+            if (PieceMap == null || faces == null || active.Value < 0) return;
+            bool changed = false;
+            foreach (int f in faces)
+                if (f >= 0 && f < PieceMap.Length && PieceMap[f] != active.Value) { PieceMap[f] = active.Value; changed = true; }
+            if (changed) RegenCrease();
+        }
+
         // ===================== regen (re-derive the cached crease view) =====================
 
         // Derive the crease set from the region map: an interior edge is a crease iff its two faces are in

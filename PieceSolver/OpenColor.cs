@@ -13,6 +13,10 @@ namespace PieceSolver
         public static readonly Vector3 Red2 = Hex(0xffc9c9);   // marked but NOT deleting: no-sel pre-highlight + carve no-op (one colour, context-independent)
         public static readonly Vector3 Red5 = Hex(0xff6b6b);   // a piece/face that WILL be deleted (remove + carve)
 
+        // Greens — the Shift+grow preview: Green 5 = connected (will be added), Green 2 = a disconnected
+        // affordance (not applied unless it connects to the active piece by release).
+        public static readonly Vector3 Green2 = Hex(0xb2f2bb);
+        public static readonly Vector3 Green5 = Hex(0x51cf66);
         // Indigo 3 — the active-piece selection highlight.
         public static readonly Vector3 Indigo3 = Hex(0x91a7ff);
         // Gray 4 — the mesh edge overlay; Gray 7 — the crease lines.
