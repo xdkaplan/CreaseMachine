@@ -297,7 +297,7 @@ void main() {
     // grad(d) points uphill (away from the crease); negate it for the deboss. ---
     vec2 g = vec2(dFdx(d), dFdy(d));
     vec2 dir = (length(g) > 1e-9) ? -normalize(g) : vec2(0.0, -1.0);
-    float slope = 0.6 * w;
+    float slope = 0.45 * w;   // bevel tilt strength (reduced 25% from 0.6)
     vec3 bn = normalize(n + vec3(dir * slope, 0.0));
     if (bn.z < 0.0) bn = -bn;
 
