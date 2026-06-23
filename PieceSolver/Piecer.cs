@@ -7,10 +7,12 @@ using OpenTK.Mathematics;
 namespace PieceSolver
 {
     // The Editor active during Piecing (after Propose -> Accept). The "Crease brush" — a contextual tool
-    // (no on/off toggle) that paints PIECE MEMBERSHIP: left-click selects a piece, drag grows the active
-    // selection into its neighbours (the crease, a region boundary, follows the brush), Shift+click mints a
-    // new region, Ctrl+drag marks faces for removal (healed into the dominant neighbour on release). Edits
-    // the Pattern only; no geometry moves. Pure relocation from MainWindow's mouse handlers. See PIECER-REFACTOR.md.
+    // (no on/off toggle) that paints PIECE MEMBERSHIP: left-click selects a piece (click empty space to
+    // deselect), drag grows the active selection into its neighbours (the crease follows the brush),
+    // Shift+click mints a new region. Ctrl+drag is moded by selection: with NO piece selected it REMOVES whole
+    // pieces (healed into the dominant neighbour); with a piece selected it CARVES that piece (its faces leave
+    // it — donated to a foreign neighbour, or split off as a new island). Edits the Pattern only; no geometry
+    // moves. See docs/PIECER-REFACTOR.md.
     sealed class Piecer : Editor
     {
         readonly IEditorHost _host;
@@ -20,8 +22,9 @@ namespace PieceSolver
 
         // ---- interaction state (was MainWindow fields) ----
         PieceId? _selection;        // active region being painted with (was _brushRegion; -1 -> null)
-        bool _removing;             // Ctrl+drag "remove pieces" gesture in progress
-        HashSet<int> _touched;      // faces marked during the current remove gesture
+        bool _removing;             // Ctrl+drag destructive gesture in progress (remove pieces, OR carve when a piece is selected)
+        bool _carve;                // this Ctrl gesture is a CARVE (a piece was selected at gesture start) rather than a remove
+        HashSet<int> _touched;      // faces marked during the current Ctrl gesture
         bool _stroking;             // a paint drag passed the click-vs-drag threshold -> painting (a bare click only SELECTS)
         Point _strokeStart;         // mouse-down position, to measure the drag threshold
         double _dabAccum;           // screen-px travelled since the last bump (path-spacing accumulator)
@@ -37,10 +40,11 @@ namespace PieceSolver
             _dabAccum = 0;
             if ((mods & ModifierKeys.Control) != 0)
             {
-                // CTRL+drag = remove pieces: mark faces under the brush (light red); a wholly-marked piece
-                // reads dark red and is removed on mouse-up (its faces heal into the dominant neighbour). No
-                // region painting happens during a remove gesture.
-                _removing = true; _touched = new HashSet<int>();
+                // CTRL+drag is moded by selection: with NO piece selected it REMOVES whole pieces (kill &
+                // donate); with a piece selected it CARVES that piece (marks only ITS faces, in the delete
+                // colour, healed into a foreign neighbour or split off as a new island on release). Either way
+                // it just marks faces under the brush — no region painting.
+                _removing = true; _carve = _selection.HasValue; _touched = new HashSet<int>();
                 if (_host.PickSurface(screen, out var hit)) MarkFacesUnderBrush(hit);
                 _host.RefreshPieces();
             }
@@ -65,6 +69,11 @@ namespace PieceSolver
                     if (_host.ShowPieces) _host.RefreshPieces();   // show the active-selection highlight
                 }
             }
+            else
+            {
+                // Plain click on empty canvas -> DESELECT, so the next Ctrl gesture is the no-selection remove mode.
+                if (_selection.HasValue) { _selection = null; if (_host.ShowPieces) _host.RefreshPieces(); }
+            }
         }
 
         public override void OnPointerMove(Point screen)
@@ -86,10 +95,17 @@ namespace PieceSolver
         {
             if (_removing)
             {
-                string log = _host.Pattern.Remove(_touched, _selection ?? new PieceId(-1));   // remove the wholly-marked pieces, heal into dominant neighbours
-                if (log != null) { _host.Log(log); _host.RefreshCreaseOverlay(); }   // Remove re-derives creases (when it removed something) -> refresh the overlay
-                _removing = false; _touched = null;
-                if (_host.ShowPieces) _host.RefreshPieces();        // drop the red preview, show the healed regions
+                // carve the active piece, or (no selection) remove wholly-marked pieces — both heal + re-derive creases.
+                string log = _carve ? _host.Pattern.Carve(_touched, _selection ?? new PieceId(-1))
+                                    : _host.Pattern.Remove(_touched);
+                if (log != null)
+                {
+                    _host.Log(log);
+                    if (_carve) _host.Pattern.SplitDisconnected();   // carving a strip can split the active piece into islands
+                    _host.RefreshCreaseOverlay();
+                }
+                _removing = false; _carve = false; _touched = null;
+                if (_host.ShowPieces) _host.RefreshPieces();        // drop the red preview, show the result
             }
             else if (_stroking && _host.ShowPieces) _host.RefreshPieces();   // final settle ONLY if a paint stroke actually ran (a bare click already re-highlighted on down)
             _stroking = false;
@@ -134,9 +150,14 @@ namespace PieceSolver
         bool MarkFacesUnderBrush(Vector3 center)
         {
             if (_touched == null) return false;
+            int act = _selection?.Value ?? -1;
+            var map = _host.Pattern.PieceMap;
             bool changed = false;
             foreach (int f in _host.Pattern.FacesUnderBrush(center, _host.BrushWorldRadius))
+            {
+                if (_carve && (map == null || map[f] != act)) continue;   // carve marks ONLY the active piece's faces
                 if (_touched.Add(f)) changed = true;
+            }
             return changed;
         }
 
@@ -149,15 +170,18 @@ namespace PieceSolver
         public override void FaceFillBegin()
         {
             _marked = (_removing && _touched != null && _touched.Count > 0) ? _touched : null;
-            _fullyMarked = _marked != null ? _host.Pattern.FullyMarked(_touched, _selection ?? new PieceId(-1)) : null;
+            // "fully-marked piece -> dark red" only applies to the no-selection REMOVE preview; a carve marks
+            // faces (not whole pieces), so every marked face is the delete colour.
+            _fullyMarked = (_marked != null && !_carve) ? _host.Pattern.FullyMarked(_touched) : null;
         }
 
         public override Vector3? FaceFill(int face, int region)
         {
-            // Remove-gesture preview: marked faces tint red; a wholly-marked piece tints darker (it will be
-            // removed). The active selection is protected -> never tinted red.
-            if (_marked != null && _marked.Contains(face) && (!_selection.HasValue || region != _selection.Value.Value))
-                return _fullyMarked.Contains(region) ? RemoveDark : RemoveLight;
+            // Ctrl-gesture preview on marked faces: CARVE -> every marked (active) face reads the DELETE colour;
+            // REMOVE -> marked faces light red, a wholly-marked piece dark red.
+            if (_marked != null && _marked.Contains(face))
+                return _carve ? RemoveDark
+                              : ((_fullyMarked != null && _fullyMarked.Contains(region)) ? RemoveDark : RemoveLight);
             // Active paint region -> light blue.
             if (_selection.HasValue && region == _selection.Value.Value)
                 return ActiveRegionColor;

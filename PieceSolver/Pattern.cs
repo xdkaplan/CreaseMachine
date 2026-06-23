@@ -74,17 +74,16 @@ namespace PieceSolver
             return changed;
         }
 
-        // Remove the wholly-marked pieces (the ACTIVE SELECTION is never removed) and HEAL the gap by merging
-        // their faces into a surviving neighbour — the dominant one (most shared border), but preferring the
-        // active selection when it borders the blob unless the dominant's border is >= 3x the selection's.
-        // Connected removed pieces heal together as one blob; a blob with no surviving neighbour is left as-is.
-        // Returns a human-readable summary of what was removed (for the caller's Console), or null if nothing.
-        public string Remove(HashSet<int> touched, PieceId active)
+        // Remove the wholly-marked pieces and HEAL the gap by merging their faces into the dominant surviving
+        // neighbour (most shared border). Connected removed pieces heal together as one blob; a blob with no
+        // surviving neighbour is left as-is. This is the "kill & donate" Ctrl gesture, used when NO piece is
+        // selected. Returns a human-readable summary of what was removed (for the Console), or null if nothing.
+        public string Remove(HashSet<int> touched)
         {
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null) return null;
             int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var remove = FullyMarked(touched, active);
+            var remove = FullyMarked(touched);
             if (remove.Count == 0) return null;
             bool IsRemoved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && remove.Contains(PieceMap[f]);
 
@@ -116,19 +115,13 @@ namespace PieceSolver
                 d[sreg] = DictGet(d, sreg) + 1;
             }
 
-            // Heal target per blob = dominant surviving neighbour, BUT prefer the ACTIVE SELECTION when it
-            // borders the blob — unless the dominant neighbour's shared border is >= 3x the selection's (then
-            // the dominant wins, e.g. 10 vs 2 -> dominant). Keeps work merging into the piece you're holding.
+            // Heal target per blob = dominant surviving neighbour (most shared border).
             var target = new Dictionary<int, int>();
             foreach (var kv in tally)
             {
                 int dom = -1, domC = -1;
                 foreach (var nb in kv.Value) if (nb.Value > domC) { domC = nb.Value; dom = nb.Key; }
-                if (dom < 0) continue;
-                int chosen = dom;
-                if (active.Value >= 0 && kv.Value.TryGetValue(active.Value, out int selC) && selC > 0 && domC < 3 * selC)
-                    chosen = active.Value;
-                target[kv.Key] = chosen;
+                if (dom >= 0) target[kv.Key] = dom;
             }
 
             int healed = 0, stuck = 0;
@@ -138,10 +131,89 @@ namespace PieceSolver
                 if (target.TryGetValue(Find(f), out int tgt)) PieceMap[f] = tgt; else stuck++;
             }
             foreach (var r in remove) healed++;
-            // (the active selection is never in `remove`, so it is always preserved as the heal target)
             RegenCrease();
             return stuck > 0 ? $"removed {healed} piece(s); {stuck} face(s) had no surviving neighbour (left as-is)"
                              : $"removed {healed} piece(s)";
+        }
+
+        // Carve faces OUT of the active piece (the Ctrl gesture when a piece IS selected). Only faces of the
+        // active piece are carved. Each connected blob of carved faces is re-homed: donated to its dominant
+        // FOREIGN neighbour (the active piece is EXCLUDED so it can't reclaim the carve — that is what makes
+        // carving against a small neighbour actually work), or — if the blob is an island with no foreign
+        // neighbour — split off as a brand-new piece. The active piece is shrunk, never deleted: carving away
+        // ALL of it is refused (deselect + Remove to delete a whole piece). Returns a summary, or null if nothing.
+        public string Carve(HashSet<int> touched, PieceId active)
+        {
+            var P = _mesh;
+            if (P == null || PieceMap == null || touched == null || active.Value < 0) return null;
+            int nF = P.Faces.Count, nH = P.Halfedges.Count, act = active.Value;
+            bool IsCarved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && touched.Contains(f) && PieceMap[f] == act;
+
+            // Honour "the active piece is never removed": refuse to carve away ALL of it.
+            int activeTotal = 0, carvedCount = 0;
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused || PieceMap[f] != act) continue;
+                activeTotal++; if (touched.Contains(f)) carvedCount++;
+            }
+            if (carvedCount == 0) return null;
+            if (carvedCount >= activeTotal) return "can't carve the whole active piece — deselect (click empty space) to remove it";
+
+            // Blobs of connected carved faces.
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                if (IsCarved(f1) && IsCarved(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
+            }
+            var blobRoots = new HashSet<int>();
+            for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(Find(f));
+
+            // Tally each blob's shared border with each FOREIGN region (anything that isn't the active piece —
+            // unmarked active faces are NOT candidates, so the carve cannot heal back into the piece it left).
+            var tally = new Dictionary<int, Dictionary<int, int>>();
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                bool c1 = IsCarved(f1), c2 = IsCarved(f2);
+                if (c1 == c2) continue;
+                int cf = c1 ? f1 : f2, sf = c1 ? f2 : f1, sreg = PieceMap[sf];
+                if (sreg == act) continue;                       // the active piece itself -> excluded
+                int blob = Find(cf);
+                if (!tally.TryGetValue(blob, out var d)) { d = new Dictionary<int, int>(); tally[blob] = d; }
+                d[sreg] = DictGet(d, sreg) + 1;
+            }
+
+            // Target per blob: dominant foreign neighbour, else a fresh piece id (island).
+            int nextId = NewRegionId().Value, islands = 0;
+            var target = new Dictionary<int, int>();
+            foreach (int blob in blobRoots)
+            {
+                if (tally.TryGetValue(blob, out var d) && d.Count > 0)
+                {
+                    int dom = -1, domC = -1;
+                    foreach (var nb in d) if (nb.Value > domC) { domC = nb.Value; dom = nb.Key; }
+                    target[blob] = dom;
+                }
+                else { target[blob] = nextId++; islands++; }
+            }
+
+            int carved = 0;
+            for (int f = 0; f < nF; f++)
+            {
+                if (!IsCarved(f)) continue;
+                PieceMap[f] = target[Find(f)]; carved++;
+            }
+            RegenCrease();
+            return islands > 0 ? $"carved {carved} face(s) ({islands} new island piece(s))"
+                               : $"carved {carved} face(s)";
         }
 
         // A brush stroke can carve one region into several edge-disconnected islands that still share its id
@@ -228,9 +300,8 @@ namespace PieceSolver
         }
 
         // The set of regions whose faces are ALL marked (so they read dark red and will be removed). O(F).
-        // The ACTIVE SELECTION is deliberately excluded — it is never removed (even if fully covered), so it
-        // stays protected in both the preview and the removal.
-        public HashSet<int> FullyMarked(HashSet<int> touched, PieceId active)
+        // Used only by the no-selection "kill & donate" remove path (carving never removes whole pieces).
+        public HashSet<int> FullyMarked(HashSet<int> touched)
         {
             var result = new HashSet<int>();
             if (touched == null || touched.Count == 0 || PieceMap == null || _mesh == null) return result;
@@ -244,7 +315,7 @@ namespace PieceSolver
                 total[r] = DictGet(total, r) + 1;
                 if (touched.Contains(f)) hit[r] = DictGet(hit, r) + 1;
             }
-            foreach (var kv in total) if (kv.Key != active.Value && DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
+            foreach (var kv in total) if (DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
             return result;
         }
 
