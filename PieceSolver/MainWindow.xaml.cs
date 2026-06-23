@@ -992,7 +992,7 @@ namespace PieceSolver
                 //                                      pieces are, but no colour churns while you slide the angle
                 //   - brush mode                    -> neutral white, except the active paint region (light blue)
                 Vector3 cc;
-                if (marked != null && marked.Contains(f))
+                if (marked != null && marked.Contains(f) && pieceId[f] != _brushRegion)   // active selection is protected -> never tinted red
                     cc = fullyMarked.Contains(pieceId[f]) ? RemoveDark : RemoveLight;
                 else
                     cc = (_camModal && !_angleDragging) ? PieceColor(pieceId[f])
@@ -1754,6 +1754,8 @@ namespace PieceSolver
         }
 
         // The set of regions whose faces are ALL marked (so they read dark red and will be removed). O(F).
+        // The ACTIVE SELECTION is deliberately excluded -- it is never removed (even if fully covered), so it
+        // stays protected in both the preview and the removal.
         System.Collections.Generic.HashSet<int> FullyMarkedRegions()
         {
             var result = new System.Collections.Generic.HashSet<int>();
@@ -1768,14 +1770,15 @@ namespace PieceSolver
                 total[r] = DictGet(total, r) + 1;
                 if (_touched.Contains(f)) hit[r] = DictGet(hit, r) + 1;
             }
-            foreach (var kv in total) if (DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
+            foreach (var kv in total) if (kv.Key != _brushRegion && DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
             return result;
         }
 
-        // Mouse-up of a Ctrl remove gesture: delete every wholly-marked piece and HEAL the gap by merging its
-        // faces into the DOMINANT neighbour (the surviving region it shares the most boundary edges with).
-        // Connected removed pieces are healed together as one blob into their shared dominant neighbour. A blob
-        // with no surviving neighbour (e.g. a whole disconnected component) is left as-is.
+        // Mouse-up of a Ctrl remove gesture: delete every wholly-marked piece (the ACTIVE SELECTION is never
+        // removed) and HEAL the gap by merging its faces into a surviving neighbour -- the dominant one (most
+        // shared border), but preferring the active selection when it borders the blob unless the dominant's
+        // border is >= 3x the selection's. Connected removed pieces heal together as one blob; a blob with no
+        // surviving neighbour (e.g. a whole disconnected component) is left as-is.
         void FinalizeRemoval()
         {
             var P = _session?.Mesh;
@@ -1813,13 +1816,19 @@ namespace PieceSolver
                 d[sreg] = DictGet(d, sreg) + 1;
             }
 
-            // Dominant surviving neighbour per blob.
+            // Heal target per blob = dominant surviving neighbour, BUT prefer the ACTIVE SELECTION when it
+            // borders the blob -- unless the dominant neighbour's shared border is >= 3x the selection's (then
+            // the dominant wins, e.g. 10 vs 2 -> dominant). Keeps work merging into the piece you're holding.
             var target = new System.Collections.Generic.Dictionary<int, int>();
             foreach (var kv in tally)
             {
-                int best = -1, bestC = -1;
-                foreach (var nb in kv.Value) if (nb.Value > bestC) { bestC = nb.Value; best = nb.Key; }
-                if (best >= 0) target[kv.Key] = best;
+                int dom = -1, domC = -1;
+                foreach (var nb in kv.Value) if (nb.Value > domC) { domC = nb.Value; dom = nb.Key; }
+                if (dom < 0) continue;
+                int chosen = dom;
+                if (_brushRegion >= 0 && kv.Value.TryGetValue(_brushRegion, out int selC) && selC > 0 && domC < 3 * selC)
+                    chosen = _brushRegion;
+                target[kv.Key] = chosen;
             }
 
             int healed = 0, stuck = 0;
@@ -1829,7 +1838,7 @@ namespace PieceSolver
                 if (target.TryGetValue(Find(f), out int tgt)) _faceRegion[f] = tgt; else stuck++;
             }
             foreach (var r in remove) healed++;
-            if (_brushRegion >= 0 && remove.Contains(_brushRegion)) _brushRegion = -1;   // active selection was removed
+            // (the active selection is never in `remove`, so it is always preserved as the heal target)
             DeriveCreaseEdges();
             RebuildCreaseOverlay();
             Log(stuck > 0 ? $"removed {healed} piece(s); {stuck} face(s) had no surviving neighbour (left as-is)"
