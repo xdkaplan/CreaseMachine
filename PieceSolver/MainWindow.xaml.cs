@@ -90,8 +90,9 @@ namespace PieceSolver
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
         double[] _proposedPos;   // settled (developed) geometry from the last Propose, per original vertex (nV*3); for the DISPLAY preview
-        System.Collections.Generic.HashSet<long> _creaseEdges;          // editable crease selection (sorted edge keys); seeded by Propose, edited by the Crease brush
-        System.Collections.Generic.Dictionary<long, (int, int)> _edgeApex;   // edge key -> its two opposite apex vertices (topology cache for the brush)
+        System.Collections.Generic.HashSet<long> _creaseEdges;   // DERIVED crease set = edges between faces of different region; feeds the overlay + piece viz
+        int[] _faceRegion;       // PRIMARY segmentation: per-face region id (-1 = unused). Seeded by Propose (flood-fill), painted by the Crease brush
+        int _brushRegion = -1;   // active region being painted with = the region of the face clicked on mouse-down (shown light blue)
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -669,9 +670,13 @@ namespace PieceSolver
         // Re-seed the editable crease selection from the cached fold angles at the current Crease angle
         // threshold (DISCARDS brush edits), then rebuild the overlay. Called on Propose + the Crease angle
         // slider. No cached angles -> clears.
-        void RelabelCreases() { SeedCreaseEdges(); RebuildCreaseOverlay(); }
+        // Re-seed the per-FACE region map from the threshold creases (DISCARDS brush paint), then derive the
+        // crease set from those region boundaries and rebuild the overlay. The region map is primary; creases
+        // are whatever separates two regions. A dangling threshold crease (doesn't split a region) is dropped.
+        void RelabelCreases() { SeedCreaseEdges(); SeedRegions(); DeriveCreaseEdges(); RebuildCreaseOverlay(); }
 
-        // Seed the editable selection from the threshold-labeled proposed edges.
+        // Seed a provisional crease set from the threshold-labeled proposed edges (only used to flood-fill the
+        // initial regions in SeedRegions; DeriveCreaseEdges then overwrites _creaseEdges with the real boundaries).
         void SeedCreaseEdges()
         {
             _creaseEdges = new System.Collections.Generic.HashSet<long>();
@@ -679,6 +684,59 @@ namespace PieceSolver
             double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
             for (int i = 0; i < _creaseFold.Length; i++)
                 if (_creaseFold[i] >= thr) _creaseEdges.Add(EdgeKey(_creaseA[i], _creaseB[i]));
+        }
+
+        // Flood-fill face regions across non-crease interior edges (a crease blocks the merge), producing the
+        // per-face _faceRegion map (compacted ids 0..N-1; -1 for unused faces). This is the primary segmentation
+        // the Crease brush paints. Resets the active paint region (ids are renumbered).
+        void SeedRegions()
+        {
+            _faceRegion = null; _brushRegion = -1;
+            if (_session == null) return;
+            var P = _session.Mesh;
+            int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
+                if (_creaseEdges != null && _creaseEdges.Contains(EdgeKey(a, b))) continue;
+                int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
+            }
+            var region = new int[nF];
+            var rootId = new System.Collections.Generic.Dictionary<int, int>();
+            int count = 0;
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused) { region[f] = -1; continue; }
+                int r = Find(f); if (!rootId.TryGetValue(r, out int id)) { id = count++; rootId[r] = id; }
+                region[f] = id;
+            }
+            _faceRegion = region;
+        }
+
+        // Derive the crease set from the region map: an interior edge is a crease iff its two faces are in
+        // different regions. Called after every paint (and after SeedRegions) so the overlay + piece grooves
+        // always trace the current region boundaries.
+        void DeriveCreaseEdges()
+        {
+            _creaseEdges = new System.Collections.Generic.HashSet<long>();
+            if (_session == null || _faceRegion == null) return;
+            var P = _session.Mesh;
+            int nH = P.Halfedges.Count;
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0 || _faceRegion[f1] == _faceRegion[f2]) continue;
+                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
+                _creaseEdges.Add(EdgeKey(a, b));
+            }
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the
@@ -731,7 +789,7 @@ namespace PieceSolver
         {
             if (_creaseFold == null && _proposedPos == null && _creaseEdges == null && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos = null;
-            _creaseEdges = null; _edgeApex = null;
+            _creaseEdges = null; _faceRegion = null; _brushRegion = -1;
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
             _showPieces = false; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
@@ -745,34 +803,17 @@ namespace PieceSolver
             if (_session == null || _creaseEdges == null || _creaseEdges.Count == 0)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
-            int nV = P.Vertices.Count, nF = P.Faces.Count, nH = P.Halfedges.Count;
+            int nV = P.Vertices.Count, nF = P.Faces.Count;
             double[] dp = ProposedPreviewPos();
             Vector3 Pos(int v) => dp != null
                 ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
 
-            // Union-find face components across non-crease interior edges (a crease blocks the merge).
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                if (_creaseEdges.Contains(EdgeKey(a, b))) continue;
-                int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
-            }
-            var pieceId = new int[nF];
-            var rootId = new System.Collections.Generic.Dictionary<int, int>();
-            int pieceCount = 0;
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) { pieceId[f] = -1; continue; }
-                int r = Find(f); if (!rootId.TryGetValue(r, out int id)) { id = pieceCount++; rootId[r] = id; }
-                pieceId[f] = id;
-            }
+            // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
+            // missing or stale for this topology.
+            if (_faceRegion == null || _faceRegion.Length != nF) SeedRegions();
+            int[] pieceId = _faceRegion;
+            int pieceCount = 0; for (int f = 0; f < nF; f++) if (pieceId[f] + 1 > pieceCount) pieceCount = pieceId[f] + 1;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
             float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
@@ -827,7 +868,7 @@ namespace PieceSolver
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                Vector3 cc = PieceColor(pieceId[f]);
+                Vector3 cc = (pieceId[f] == _brushRegion) ? ActiveRegionColor : PieceColor(pieceId[f]);   // active paint region reads light blue
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
@@ -856,6 +897,10 @@ namespace PieceSolver
             Log($"pieces: {pieceCount} region(s)");
             _gl?.InvalidateVisual();
         }
+
+        // The active paint region (the one the Crease brush is currently painting with) is shown in this light
+        // blue, picked from the rainbow palette's hue/sat/val so it sits naturally among the piece colours.
+        static readonly Vector3 ActiveRegionColor = HsvToRgb(0.56f, 0.5f, 0.97f);
 
         // Distinct per-piece colour via a golden-ratio hue rotation, so adjacent pieces always differ.
         static Vector3 PieceColor(int id)
@@ -1377,10 +1422,17 @@ namespace PieceSolver
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (_sim.CreaseBrush && _session != null && !_baking)
+                if (_sim.CreaseBrush && _session != null && !_baking && _faceRegion != null)
                 {
                     _dabAccum = 0;
-                    if (PickSurface(_lastMouse, out var hit) && BumpCreasesUnderBrush(hit) && _showPieces) RebuildPieces();   // initial bump at the down point (live patches)
+                    // Pick the face under the click -> its region becomes the ACTIVE paint region. Dragging then
+                    // grows that region into whatever you brush over (the boundary follows the brush).
+                    if (PickFace(_lastMouse, out int f0, out var hit))
+                    {
+                        _brushRegion = (f0 >= 0 && f0 < _faceRegion.Length) ? _faceRegion[f0] : -1;
+                        PaintRegionUnderBrush(hit);
+                        if (_showPieces) RebuildPieces();   // recolour the active region light blue + show the first paint
+                    }
                 }
             }
             else return;
@@ -1461,7 +1513,7 @@ namespace PieceSolver
             while (pos <= seg)
             {
                 double t = pos / seg;
-                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit) && BumpCreasesUnderBrush(hit)) changed = true;
+                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit) && PaintRegionUnderBrush(hit)) changed = true;
                 pos += spacing;
             }
             _dabAccum = seg - (pos - spacing);
@@ -1475,89 +1527,39 @@ namespace PieceSolver
             return 8.0;
         }
 
-        // One Crease-brush bump ("opposing magnet"): every selected crease edge whose midpoint is within the
-        // brush radius is slid outward (away from `center`) across its triangle, repeatedly, until no crease
-        // edge remains under the footprint — so the magnet pushes the line out of the brush. Edits the
-        // _creaseEdges selection only (no geometry moves). Topology is fixed -> the edge->apex map is cached.
-        bool BumpCreasesUnderBrush(Vector3 center)
+        // One Crease-brush dab: paint REGION MEMBERSHIP. Every face whose centroid falls within the brush
+        // radius of `center` is reassigned to the active region (_brushRegion = the region clicked on
+        // mouse-down). Brushing across a boundary therefore GROWS the active region into its neighbour — the
+        // crease (a region boundary) follows the brush. Re-derives the crease set + overlay; the caller
+        // re-pieces. No geometry moves.
+        bool PaintRegionUnderBrush(Vector3 center)
         {
-            if (_creaseEdges == null || _creaseEdges.Count == 0 || _session == null) return false;
-            if (_edgeApex == null) BuildEdgeApexMap();
+            if (_faceRegion == null || _brushRegion < 0 || _session == null) return false;
+            var P = _session.Mesh;
             float R2 = (float)(_sim.BrushSize * _sim.BrushSize);
-            var stuck = new System.Collections.Generic.HashSet<long>();   // edges that can't slide further (at the patch edge)
+            int nF = P.Faces.Count;
             bool changed = false;
-            for (int guard = 0; guard < 8192; guard++)
+            for (int f = 0; f < nF; f++)
             {
-                long key = 0; bool found = false;
-                foreach (long k in _creaseEdges)
-                {
-                    if (stuck.Contains(k)) continue;
-                    if ((EdgeMid(k) - center).LengthSquared <= R2) { key = k; found = true; break; }
-                }
-                if (!found) break;
-                if (SlideCreaseOutward(key, center, R2)) changed = true;
-                else stuck.Add(key);
+                if (P.Faces[f].IsUnused || _faceRegion[f] == _brushRegion) continue;
+                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
+                Vector3 c = (BV(P, fv[0]) + BV(P, fv[1]) + BV(P, fv[2])) * (1f / 3f);
+                if ((c - center).LengthSquared <= R2) { _faceRegion[f] = _brushRegion; changed = true; }
             }
-            if (changed) RebuildCreaseOverlay();
+            if (changed) { DeriveCreaseEdges(); RebuildCreaseOverlay(); }
             return changed;
         }
 
-        // Slide one crease edge outward across its triangle: a-b -> a-x + x-b, where x is the apex (of the
-        // edge's two triangles) furthest in the outward (away-from-center) direction. While the slid edge is
-        // still under the brush it yields ONE edge (the more-outward half) so a straight push stays a clean
-        // single line; once it fully escapes the footprint it yields the two-edge bulge. Returns false (stuck)
-        // when there is no strictly-outward apex (e.g. the edge is already at the patch boundary).
-        bool SlideCreaseOutward(long key, Vector3 center, float R2)
-        {
-            if (_edgeApex == null || !_edgeApex.TryGetValue(key, out var ap)) return false;
-            var P = _session.Mesh;
-            int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
-            Vector3 m = (BV(P, a) + BV(P, b)) * 0.5f;
-            Vector3 outward = m - center;
-            float oc = ap.Item1 >= 0 ? Vector3.Dot(BV(P, ap.Item1) - m, outward) : float.NegativeInfinity;
-            float od = ap.Item2 >= 0 ? Vector3.Dot(BV(P, ap.Item2) - m, outward) : float.NegativeInfinity;
-            int x = oc >= od ? ap.Item1 : ap.Item2;
-            if (x < 0 || Math.Max(oc, od) <= 1e-7f) return false;   // no outward apex -> at the patch edge
-            _creaseEdges.Remove(key);
-            long e1 = EdgeKey(a, x), e2 = EdgeKey(x, b);
-            bool out1 = (EdgeMid(e1) - center).LengthSquared > R2;
-            bool out2 = (EdgeMid(e2) - center).LengthSquared > R2;
-            if (out1 && out2) { _creaseEdges.Add(e1); _creaseEdges.Add(e2); }   // fully escaped -> two-edge bulge
-            else _creaseEdges.Add((EdgeMid(e1) - center).LengthSquared >= (EdgeMid(e2) - center).LengthSquared ? e1 : e2);   // still under -> yield the more-outward one
-            return true;
-        }
-
-        Vector3 EdgeMid(long key) { var P = _session.Mesh; return (BV(P, (int)(key >> 32)) + BV(P, (int)(key & 0xFFFFFFFFL))) * 0.5f; }
         static long EdgeKey(int a, int b) { int lo = Math.Min(a, b), hi = Math.Max(a, b); return ((long)lo << 32) | (uint)hi; }
 
-        // Cache the topology lookup the bump needs: edge (sorted key) -> its two opposite apex vertices
-        // (-1 on a boundary side). Rebuilt lazily; cleared whenever the mesh changes (ClearProposedCreases).
-        void BuildEdgeApexMap()
+        // Build a pick ray (eye + direction) from the camera params, convention-independent. Z-up, 45deg FOV.
+        bool PickRay(System.Windows.Point screen, out Vector3 eye, out Vector3 rd)
         {
-            _edgeApex = new System.Collections.Generic.Dictionary<long, (int, int)>();
-            var P = _session.Mesh;
-            int nH = P.Halfedges.Count;
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                int c = f1 >= 0 ? FaceApex(P, f1, a, b) : -1;
-                int d = f2 >= 0 ? FaceApex(P, f2, a, b) : -1;
-                _edgeApex[EdgeKey(a, b)] = (c, d);
-            }
-        }
-        static int FaceApex(PlanktonMesh P, int face, int a, int b) { foreach (int v in P.Faces.GetFaceVertices(face)) if (v != a && v != b) return v; return -1; }
-
-        // Build a pick ray from the camera params (convention-independent) and intersect the mesh.
-        bool PickSurface(System.Windows.Point screen, out Vector3 hit)
-        {
-            hit = default;
+            eye = default; rd = default;
             if (_session == null) return false;
             double w = Math.Max(1, _gl.ActualWidth), h = Math.Max(1, _gl.ActualHeight);
             Vector3 dir = CamDir();
-            Vector3 eye = _target + dir * _distance;
+            eye = _target + dir * _distance;
             Vector3 forward = -dir;
             Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitZ));
             Vector3 up = Vector3.Cross(right, forward);
@@ -1565,8 +1567,33 @@ namespace PieceSolver
             float aspect = (float)(w / h);
             float ndcX = (float)(2.0 * screen.X / w - 1.0);
             float ndcY = (float)(1.0 - 2.0 * screen.Y / h);
-            Vector3 rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
-            return RayMeshHit(eye, rd, out hit);
+            rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
+            return true;
+        }
+
+        // Build a pick ray and intersect the mesh (nearest hit point).
+        bool PickSurface(System.Windows.Point screen, out Vector3 hit)
+        {
+            hit = default;
+            return PickRay(screen, out var eye, out var rd) && RayMeshHit(eye, rd, out hit);
+        }
+
+        // Like PickSurface but also returns the nearest hit FACE index (for seeding the brush's active region).
+        bool PickFace(System.Windows.Point screen, out int face, out Vector3 hit)
+        {
+            face = -1; hit = default;
+            if (!PickRay(screen, out var eye, out var rd)) return false;
+            var P = _session.Mesh;
+            double best = double.MaxValue;
+            int nf = P.Faces.Count;
+            for (int f = 0; f < nf; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
+                if (RayTri(eye, rd, BV(P, fv[0]), BV(P, fv[1]), BV(P, fv[2]), out double t) && t < best)
+                { best = t; face = f; hit = eye + rd * (float)t; }
+            }
+            return face >= 0;
         }
 
         // Nearest ray-triangle hit over the live mesh (linear scan; double-sided since winding is mixed).
