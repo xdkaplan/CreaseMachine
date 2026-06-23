@@ -153,6 +153,18 @@ namespace PieceSolver
         double _creaseAngleDeg = 30.0;
         public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
 
+        // Freeze / Consolidate brush (stage 3). FreezeBrush = tool active (left-drag paints; right still
+        // orbits). The brush writes the per-vertex BrushWeights deCraze boost the covariance flow honours.
+        // Size = footprint radius (world units); Strength = freeze ceiling (0..1 of the saturation max);
+        // Softness = gaussian falloff; Flow = build rate per dab. Size also via [ / ], Softness via Ctrl+Shift+[ / ].
+        bool _freezeBrush;
+        public bool FreezeBrush { get => _freezeBrush; set => Set(ref _freezeBrush, value); }
+        double _brushSize = 10.0, _brushStrength = 1.0, _brushSoftness = 0.4, _brushFlow = 0.5;
+        public double BrushSize { get => _brushSize; set => Set(ref _brushSize, value); }
+        public double BrushStrength { get => _brushStrength; set => Set(ref _brushStrength, value); }
+        public double BrushSoftness { get => _brushSoftness; set => Set(ref _brushSoftness, value); }
+        public double BrushFlow { get => _brushFlow; set => Set(ref _brushFlow, value); }
+
         // Ruling-line overlay: a curvature-driven LIC grain painted on M (the developable "grain"),
         // modulating the matcap. Off by default.
         bool _showRuling;

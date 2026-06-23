@@ -67,8 +67,16 @@ namespace PieceSolver
         float _azimuth = 0.6f, _elevation = 0.4f, _distance = 3f;
         Vector3 _target = Vector3.Zero;
         System.Windows.Point _lastMouse;
-        enum DragMode { None, Orbit, Pan }
-        DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = (unused)
+        enum DragMode { None, Orbit, Pan, Edit }
+        DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = paint (Freeze brush)
+        // Freeze / Consolidate brush: paints the per-vertex BrushWeights (deCraze boost) the covariance flow
+        // honours, so painted regions consolidate / lock creases when you Propose. One brush; the chassis
+        // (pick / preview / stroke / falloff / hotkeys) is ported from studio, decoupled from its 14-brush zoo.
+        double[] _strokeCov;              // per-vertex coverage this stroke (Flow builds it toward Strength)
+        double _dabAccum;                 // screen-px travelled since the last dab (path-spacing accumulator)
+        System.Windows.Point _lastHover;  // last hover position, for the footprint preview
+        System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
+        const double MaxFreeze = 2.0;     // BrushWeights saturation ceiling (matches the documented brush max)
 
         // async Solve bake: runs on a worker with a modal progress+cancel overlay (replaces the old
         // hold-Space live-step path). The worker does pure compute on the managed mesh; all GL/UI stays
@@ -113,6 +121,17 @@ namespace PieceSolver
             _gl.MouseUp += OnMouseUp;
             _gl.MouseMove += OnMouseMove;
             _gl.MouseWheel += (s, e) => { _distance *= MathF.Pow(0.999f, e.Delta); InvalidateView(); };
+
+            // Brush-footprint preview: a circle over the viewport on hover (Freeze brush only), hidden on
+            // drag / when the cursor leaves. IsHitTestVisible=false so it passes clicks through to the GL view.
+            _previewDot = new System.Windows.Shapes.Ellipse
+            {
+                Stroke = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(210, 235, 235, 240)),
+                StrokeThickness = 1.5, IsHitTestVisible = false, Visibility = Visibility.Collapsed,
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            };
+            CenterHost.Children.Add(_previewDot);
+            _gl.MouseLeave += (s, e) => _previewDot.Visibility = Visibility.Collapsed;
 
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
@@ -218,6 +237,20 @@ namespace PieceSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
+                else if (e.Key == Key.OemCloseBrackets && _sim.FreezeBrush)   // ]  = grow brush  /  Ctrl+Shift = harden
+                {
+                    if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) HardenBrush();
+                    else if (Keyboard.Modifiers == ModifierKeys.None) ResizeBrush(1.2);
+                    else return;
+                    UpdatePreview(_lastHover); e.Handled = true;
+                }
+                else if (e.Key == Key.OemOpenBrackets && _sim.FreezeBrush)    // [  = shrink brush  /  Ctrl+Shift = soften
+                {
+                    if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) SoftenBrush();
+                    else if (Keyboard.Modifiers == ModifierKeys.None) ResizeBrush(1.0 / 1.2);
+                    else return;
+                    UpdatePreview(_lastHover); e.Handled = true;
+                }
             };
             // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
             // a progress+cancel modal. ApplyRun/PatchStep remain only for journal replay of legacy Run(N).)
@@ -1154,8 +1187,19 @@ namespace PieceSolver
         void OnMouseDown(object sender, MouseButtonEventArgs e)
         {
             _lastMouse = e.GetPosition(_gl);
+            _previewDot.Visibility = Visibility.Collapsed;   // hide the footprint preview while dragging
             if (e.ChangedButton == MouseButton.Right)
                 _drag = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
+            else if (e.ChangedButton == MouseButton.Left)
+            {
+                _drag = DragMode.Edit;
+                if (_sim.FreezeBrush && _session != null && !_baking)
+                {
+                    _strokeCov = new double[_session.Mesh.Vertices.Count];   // fresh coverage for this stroke
+                    _dabAccum = 0;
+                    if (PickSurface(_lastMouse, out var hit)) ApplyDab(hit);   // initial dab at the down point
+                }
+            }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
         }
@@ -1169,7 +1213,18 @@ namespace PieceSolver
         void OnMouseMove(object sender, MouseEventArgs e)
         {
             var p = e.GetPosition(_gl);
-            if (_drag == DragMode.None) return;
+            if (_drag == DragMode.None)
+            {
+                _lastHover = p;
+                if (_sim.FreezeBrush) UpdatePreview(p);   // footprint preview on hover
+                return;
+            }
+            if (_drag == DragMode.Edit)
+            {
+                if (_sim.FreezeBrush && _session != null && !_baking) BrushStrokeTo(p);   // a dab every `spacing` px along the path
+                _lastMouse = p;
+                return;
+            }
             float dx = (float)(p.X - _lastMouse.X), dy = (float)(p.Y - _lastMouse.Y);
             _lastMouse = p;
             switch (_drag)
@@ -1201,6 +1256,153 @@ namespace PieceSolver
             float scale = _distance * 0.0015f;
             _target += (-dx * right + dy * up) * scale;
             InvalidateView();
+        }
+
+        // ===================== Freeze / Consolidate brush (the one brush) =====================
+
+        // [ / ] and Ctrl+Shift+[ / ] drive the same VM params the BRUSH sliders bind to (so they stay in sync).
+        void ResizeBrush(double factor) => _sim.BrushSize = Math.Clamp(_sim.BrushSize * factor, 1.0, 100.0);
+        void HardenBrush() => _sim.BrushSoftness = Math.Clamp(_sim.BrushSoftness - 0.05, 0.0, 1.0);   // less soft
+        void SoftenBrush() => _sim.BrushSoftness = Math.Clamp(_sim.BrushSoftness + 0.05, 0.0, 1.0);   // more soft
+
+        void EnsureBrushWeights()
+        {
+            int n = _session.Mesh.Vertices.Count;
+            if (_session.BrushWeights == null || _session.BrushWeights.Length != n) _session.BrushWeights = new double[n];
+        }
+
+        // Place a dab every `spacing` screen-pixels along the stroke path (a -> b), so dab count tracks path
+        // LENGTH, not time. _dabAccum carries the leftover distance across moves.
+        void BrushStrokeTo(System.Windows.Point b)
+        {
+            double dx = b.X - _lastMouse.X, dy = b.Y - _lastMouse.Y;
+            double seg = Math.Sqrt(dx * dx + dy * dy);
+            if (seg < 1e-6) return;
+            double spacing = BrushSpacingPx(b);
+            double pos = spacing - _dabAccum;
+            while (pos <= seg)
+            {
+                double t = pos / seg;
+                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit)) ApplyDab(hit);
+                pos += spacing;
+            }
+            _dabAccum = seg - (pos - spacing);
+        }
+
+        // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
+        double BrushSpacingPx(System.Windows.Point screen)
+        {
+            if (_session != null && PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
+            return 8.0;
+        }
+
+        // One Freeze dab: deposit per-vertex BrushWeights (the deCraze boost the covariance flow honours)
+        // with a gaussian footprint. Flow builds per-stroke coverage toward 1; the deposited freeze tends to
+        // Strength*MaxFreeze. No geometry moves — this only writes the freeze field. Cheap (no CHA).
+        void ApplyDab(Vector3 hit)
+        {
+            var P = _session.Mesh; int nv = P.Vertices.Count;
+            if (_strokeCov == null || _strokeCov.Length != nv) return;
+            EnsureBrushWeights();
+            var bw = _session.BrushWeights;
+            double R = _sim.BrushSize, R2 = R * R;
+            double sigma = Math.Max(0.05, _sim.BrushSoftness) * R;
+            double twoSig2 = 2.0 * sigma * sigma;
+            double flow = Math.Max(1e-3, _sim.BrushFlow);
+            double ceil = Math.Clamp(_sim.BrushStrength, 0.0, 1.0) * MaxFreeze;
+            for (int i = 0; i < nv; i++)
+            {
+                var pv = P.Vertices[i];
+                if (pv.IsUnused || P.Vertices.IsBoundary(i)) continue;
+                double dx = pv.X - hit.X, dy = pv.Y - hit.Y, dz = pv.Z - hit.Z;
+                double d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 > R2) continue;
+                double gw = Math.Exp(-d2 / twoSig2);
+                double dcov = Math.Min(1.0 - _strokeCov[i], flow * gw);
+                if (dcov <= 1e-9) continue;
+                _strokeCov[i] += dcov;
+                if (bw[i] < ceil) bw[i] = Math.Min(ceil, bw[i] + dcov * ceil);
+            }
+            _gl?.InvalidateVisual();
+        }
+
+        // Build a pick ray from the camera params (convention-independent) and intersect the mesh.
+        bool PickSurface(System.Windows.Point screen, out Vector3 hit)
+        {
+            hit = default;
+            if (_session == null) return false;
+            double w = Math.Max(1, _gl.ActualWidth), h = Math.Max(1, _gl.ActualHeight);
+            Vector3 dir = CamDir();
+            Vector3 eye = _target + dir * _distance;
+            Vector3 forward = -dir;
+            Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitZ));
+            Vector3 up = Vector3.Cross(right, forward);
+            float tanH = MathF.Tan(MathHelper.DegreesToRadians(45f) * 0.5f);   // matches the 45 deg proj FOV
+            float aspect = (float)(w / h);
+            float ndcX = (float)(2.0 * screen.X / w - 1.0);
+            float ndcY = (float)(1.0 - 2.0 * screen.Y / h);
+            Vector3 rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
+            return RayMeshHit(eye, rd, out hit);
+        }
+
+        // Nearest ray-triangle hit over the live mesh (linear scan; double-sided since winding is mixed).
+        bool RayMeshHit(Vector3 ro, Vector3 rd, out Vector3 hit)
+        {
+            hit = default;
+            var P = _session.Mesh;
+            double best = double.MaxValue;
+            bool found = false;
+            int nf = P.Faces.Count;
+            for (int f = 0; f < nf; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f);
+                if (fv.Length != 3) continue;
+                if (RayTri(ro, rd, BV(P, fv[0]), BV(P, fv[1]), BV(P, fv[2]), out double t) && t < best)
+                { best = t; hit = ro + rd * (float)t; found = true; }
+            }
+            return found;
+        }
+
+        static bool RayTri(Vector3 ro, Vector3 rd, Vector3 a, Vector3 b, Vector3 c, out double t)
+        {
+            t = 0;
+            Vector3 e1 = b - a, e2 = c - a;
+            Vector3 pv = Vector3.Cross(rd, e2);
+            float det = Vector3.Dot(e1, pv);
+            if (MathF.Abs(det) < 1e-12f) return false;
+            float inv = 1f / det;
+            Vector3 tv = ro - a;
+            float u = Vector3.Dot(tv, pv) * inv;
+            if (u < 0f || u > 1f) return false;
+            Vector3 qv = Vector3.Cross(tv, e1);
+            float v = Vector3.Dot(rd, qv) * inv;
+            if (v < 0f || u + v > 1f) return false;
+            t = Vector3.Dot(e2, qv) * inv;
+            return t > 1e-6;
+        }
+
+        static Vector3 BV(PlanktonMesh P, int i) { var v = P.Vertices[i]; return new Vector3((float)v.X, (float)v.Y, (float)v.Z); }
+
+        void UpdatePreview(System.Windows.Point cursor)
+        {
+            if (!_sim.FreezeBrush || _session == null || !PickSurface(cursor, out var hit))
+            { _previewDot.Visibility = Visibility.Collapsed; return; }
+            double rpx = ScreenRadiusPx(hit);
+            _previewDot.Width = _previewDot.Height = 2.0 * rpx;
+            _previewDot.Margin = new Thickness(cursor.X - rpx, cursor.Y - rpx, 0, 0);
+            _previewDot.Visibility = Visibility.Visible;
+        }
+
+        // The brush's world radius projected to screen pixels at the given surface point's depth.
+        double ScreenRadiusPx(Vector3 hit)
+        {
+            Vector3 dir = CamDir();
+            Vector3 eye = _target + dir * _distance;
+            double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
+            double h = Math.Max(1, _gl.ActualHeight);
+            double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
+            return _sim.BrushSize * h / (2.0 * dist * tanH);
         }
 
         void InvalidateView() { _gl?.InvalidateVisual(); }
