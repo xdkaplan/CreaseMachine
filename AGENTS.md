@@ -181,8 +181,9 @@ via the IsometricLM patch-solver, a separate path from this shared `NesterovStep
 
 `PieceSolver/` (`PieceSolver` → `PieceSolver.exe`) is the active in-process interactive app: load a
 mesh, flatten it, and develop it into a piecewise-developable sheet, all in one net8 process. (It was
-renamed from `patchsolver/CreasePatchSolver`; the older `studio/` directory is a **stale earlier fork**,
-retained untouched for reference.) **Direction:** PieceSolver will become a *module* within the eventual
+renamed from `patchsolver/CreasePatchSolver`. `studio/` is a fork of the same WPF + OpenTK + engine
+scaffolding — the **CreaseStudio** app, the Nesterov covariance-flow front-end where the crease-proposer
+Solve lives — developed in parallel, not a dead copy.) **Direction:** PieceSolver will become a *module* within the eventual
 **CreaseStudio** — its standalone window goes away and its GUI is fully consumed into CreaseStudio, with
 PieceSolver providing the per-piece flatten/develop solver + workflow. Build:
 

@@ -279,6 +279,49 @@ namespace CreaseMachine
             return roots.Count;
         }
 
+        /// <summary>
+        /// Per-interior-edge fold angle in radians (0 = flat, pi = folded back), measured
+        /// winding-independently from the two adjacent triangles' opposite vertices. Boundary edges and
+        /// edges whose adjacent triangle is degenerate (near-zero area / sliver) are skipped. Returns one
+        /// entry per interior edge, with the endpoint vertex indices in edgeA/edgeB (parallel). The crease
+        /// proposer flows toward developable then labels edges whose fold exceeds a threshold as candidate
+        /// piece boundaries.
+        /// </summary>
+        public static double[] EdgeDihedrals(PlanktonMesh M, out int[] edgeA, out int[] edgeB)
+        {
+            int nH = M.Halfedges.Count;
+            var fold = new List<double>(nH / 2);
+            var ea = new List<int>(nH / 2);
+            var eb = new List<int>(nH / 2);
+            for (int h = 0; h < nH; h++)
+            {
+                if (M.Halfedges[h].IsUnused) continue;
+                int pr = M.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = M.Halfedges[h].AdjacentFace, f2 = M.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;                          // boundary edge -> not an interior crease
+                int a = M.Halfedges[h].StartVertex, b = M.Halfedges[pr].StartVertex;
+                int c = OppositeVertex(M, f1, a, b), d = OppositeVertex(M, f2, a, b);
+                if (c < 0 || d < 0) continue;
+                Vec3 pa = Pos(M, a), axis = Pos(M, b) - pa; double al = axis.Length;
+                if (al < 1e-20) continue; axis = axis * (1.0 / al);
+                Vec3 ca = Pos(M, c) - pa, da = Pos(M, d) - pa;
+                Vec3 u = ca - axis * (ca * axis), w = da - axis * (da * axis);   // components perpendicular to the edge
+                double ul = u.Length, wl = w.Length;
+                if (ul < 1e-12 || wl < 1e-12) continue;                  // sliver-adjacent -> no reliable fold
+                double interior = Math.Acos(Math.Max(-1.0, Math.Min(1.0, (u * w) / (ul * wl))));
+                fold.Add(Math.PI - interior); ea.Add(a); eb.Add(b);
+            }
+            edgeA = ea.ToArray(); edgeB = eb.ToArray();
+            return fold.ToArray();
+        }
+
+        private static int OppositeVertex(PlanktonMesh M, int face, int a, int b)
+        {
+            foreach (int v in M.Faces.GetFaceVertices(face)) if (v != a && v != b) return v;
+            return -1;
+        }
+        private static Vec3 Pos(PlanktonMesh M, int v) { var p = M.Vertices[v]; return new Vec3(p.X, p.Y, p.Z); }
+
         /// <summary>Split a mesh into one sub-mesh per connected component (faces joined through shared
         /// interior edges). vertexMaps[c][localVertex] = the source mesh's vertex index, so a solved piece
         /// can be written back in place. Each sub-mesh keeps its own boundary loop(s).</summary>

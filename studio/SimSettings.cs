@@ -52,6 +52,23 @@ namespace CreaseStudio
         double _facetExp = 4.0;
         public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
 
+        // Shine (display): blends the default shading between the neutral-lighting matcap (0 = matte,
+        // even grey) and the environment matcap (1 = full reflective sky/landscape). The two together
+        // give neutral shading + an environmental highlight. Ignored when UseMatcap is on.
+        double _shine = 0.4;
+        public double Shine { get => _shine; set => Set(ref _shine, value); }
+
+        // Advanced: when on, the hand-picked matcap (the switcher below) overrides the neutral+Shine
+        // shading. Off by default — the default look is the neutral+environment Shine blend.
+        bool _useMatcap = false;
+        public bool UseMatcap { get => _useMatcap; set => Set(ref _useMatcap, value); }
+
+        // Crease proposer threshold (degrees). After a Solve, an interior edge whose settled fold
+        // angle is at least this is proposed as a piece boundary and drawn in the crease overlay.
+        // Live: changing it re-labels the overlay from the cached fold angles WITHOUT re-solving.
+        double _creaseAngleDeg = 30.0;
+        public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
+
         // convenience for the run button caption
         public string IterLabel => "+" + _iterPerRun + " iter";
 
