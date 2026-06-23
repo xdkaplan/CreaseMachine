@@ -388,9 +388,9 @@
                             <StackPanel Margin="10,12,10,0">
                                 <TextBlock Text="CREASE BRUSH" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
                                 <DockPanel Margin="0,6,0,0">
-                                    <TextBlock DockPanel.Dock="Left" Text="Size" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Footprint radius (world units) — also [ / ]." />
-                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                    <Slider Minimum="1" Maximum="100" Value="{Binding BrushSize}" VerticalAlignment="Center" Margin="6,0" />
+                                    <TextBlock DockPanel.Dock="Left" Text="Size" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Brush size in 10 notches (geometric): 5 = the old smallest, 10 = the old largest, 1–4 are finer. Also [ / ]." />
+                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                    <Slider Minimum="1" Maximum="10" Value="{Binding BrushSize}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
                                 <TextBlock Text="After Accept the brush is live on the model (no toggle): left-click a patch to select it (light blue), drag across a seam to grow it. Shift+click starts a NEW region (e.g. a bullseye inside a patch). Right-drag orbits. Re-Propose to redo the angle." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
                             </StackPanel>

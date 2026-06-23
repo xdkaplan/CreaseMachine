@@ -267,11 +267,11 @@ namespace PieceSolver
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { _activeEditor.Deselect(); e.Handled = true; }   // ESC = deselect (same as clicking empty canvas)
                 else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
-                    ResizeBrush(1.2); UpdatePreview(_lastHover); e.Handled = true;
+                    ResizeBrush(1); UpdatePreview(_lastHover); e.Handled = true;
                 }
                 else if (e.Key == Key.OemOpenBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
                 {
-                    ResizeBrush(1.0 / 1.2); UpdatePreview(_lastHover); e.Handled = true;
+                    ResizeBrush(-1); UpdatePreview(_lastHover); e.Handled = true;
                 }
             };
             // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
@@ -1570,7 +1570,7 @@ namespace PieceSolver
         // ===================== Crease brush — host-side helpers (the interaction lives in Piecer) =====================
 
         // [ / ] grow / shrink the brush (the same VM param the BRUSH Size slider binds to).
-        void ResizeBrush(double factor) => _sim.BrushSize = Math.Clamp(_sim.BrushSize * factor, 1.0, 100.0);
+        void ResizeBrush(int delta) => _sim.BrushSize = Math.Clamp(_sim.BrushSize + delta, 1.0, 10.0);   // [ / ] step one notch
 
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
         public double BrushSpacingPx(System.Windows.Point screen)
@@ -1686,7 +1686,9 @@ namespace PieceSolver
 
         // World-space brush radius. The slider value (1..100) maps at half scale so its low end is fine enough.
         // Used by BOTH the paint footprint and the screen preview, so they always agree.
-        public double BrushWorldRadius => _sim.BrushSize * 0.5;
+        // Brush Size is a 1..10 notch; world radius is geometric so notch 5 = 0.5 (the old smallest) and
+        // notch 10 = 5.0 (the old largest), with notches 1..4 finer below. radius = 0.5 * 10^((notch-5)/5).
+        public double BrushWorldRadius => 0.5 * Math.Pow(10.0, (_sim.BrushSize - 5.0) / 5.0);
 
         // The brush's world radius projected to screen pixels at the given surface point's depth.
         public double ScreenRadiusPx(Vector3 hit)
