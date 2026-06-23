@@ -157,7 +157,7 @@ namespace CreaseStudio
             // Default shading is a fixed neutral-lighting matcap + an environment matcap, blended live
             // by the Shine slider (the picker above is only consulted when Use Matcap is on). Decode
             // both here and stage them for upload on the GL thread.
-            StageShadingMatcap("5D5E5A_A1A29B_2A2927", isEnv: false);   // neutral grey matte
+            StageShadingMatcap("CCC5C9_3B2B2B_67585B", isEnv: false);   // neutral lighting (soft near-white)
             StageShadingMatcap("54584E_B1BAC5_818B91", isEnv: true);    // sky / landscape environment map
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
