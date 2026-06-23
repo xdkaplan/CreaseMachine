@@ -51,7 +51,28 @@ Disjoint features:
    Freeze brush. The engine hook (`FlowSession.BrushWeights`) is already shared.
 4. **Unify the command bus** — keep PieceSolver's `Journal`, fold in the (single)
    brush command. This pre-consolidates the command layer the engine plan wants.
-5. Rename `PieceSolver/` → CreaseStudio; delete `studio/`.
+5. **Rename to the final scheme** (do `studio/` deletion first so the
+   CreaseStudio name is free), then delete the stale fork — see *Naming
+   end-state* below.
+
+## Naming end-state
+
+The "PieceSolver" name migrates **from the app down to the solver module**, and
+the app inherits the "CreaseStudio" name. After the merge completes:
+
+| Now | After | What it is |
+|---|---|---|
+| `studio/` (`CreaseStudio` assembly) | **deleted** | stale earlier fork |
+| `PieceSolver/` app (`PieceSolver.exe`) | **CreaseStudio** | the one consolidated app — dir / project / assembly / namespace / window title / `x:Class` all → CreaseStudio |
+| `PieceSolver/IsometricLM.cs` (`IsometricLM`) | **PieceSolver** | the per-piece flatten/develop solver module *inside* CreaseStudio |
+
+Order of operations to avoid a name clash: (a) delete the old `studio/`
+CreaseStudio fork first so the name is unused; (b) rename the
+`IsometricLM` solver → `PieceSolver`; (c) rename the app
+(dir/project/assembly/namespace/titles) `PieceSolver` → `CreaseStudio`. This
+realises the `AGENTS.md` direction — *"PieceSolver will become a module within
+the eventual CreaseStudio"* — with PieceSolver now naming the solver module, not
+the app.
 
 ## Then: engine boundary (after the merge)
 
