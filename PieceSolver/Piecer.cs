@@ -7,11 +7,13 @@ using OpenTK.Mathematics;
 namespace PieceSolver
 {
     // The Editor active during Piecing (after Propose -> Accept). The "Crease brush" — a contextual tool
-    // (no on/off toggle): PLAIN-click SELECTS a piece (click empty space to deselect); SHIFT+drag, or a single
-    // Shift dab, GROWS the active piece into the faces under the brush (add territory; the crease follows the
-    // brush); CTRL+drag is moded by selection — no selection REMOVES whole pieces (healed into the dominant
-    // neighbour), a selection CARVES the active piece (faces donated to a foreign neighbour, or split off as a
-    // new island). Edits the Pattern only; no geometry moves. See docs/PIECER-REFACTOR.md.
+    // (no on/off toggle): PLAIN-click SELECTS a piece (click empty space / ESC to deselect). SHIFT and CTRL are
+    // both moded by selection, and a single dab paints immediately (no min-drag):
+    //   SHIFT — no selection: mint a NEW region and paint it (it becomes active); selection: GROW the active
+    //           piece (add territory; the crease follows the brush).
+    //   CTRL  — no selection: REMOVE whole pieces (healed into the dominant neighbour); selection: CARVE the
+    //           active piece (faces donated to a foreign neighbour, or split off as a new island).
+    // Edits the Pattern only; no geometry moves. See docs/PIECER-REFACTOR.md.
     sealed class Piecer : Editor
     {
         readonly IEditorHost _host;
@@ -44,10 +46,13 @@ namespace PieceSolver
             }
             else if ((mods & ModifierKeys.Shift) != 0)
             {
-                // SHIFT = GROW the active piece (add territory). Paints immediately on the dab (no min-drag);
-                // dragging keeps painting. No-op with nothing selected -- plain-click a piece to select first.
-                _painting = _selection.HasValue;
-                if (_painting && _host.PickSurface(screen, out var hit) && _host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection.Value))
+                // SHIFT is moded by selection (mirrors Ctrl): with NO piece selected it MINTS a new region (which
+                // becomes active, so the drag grows it); with a piece selected it GROWS the active piece (add
+                // territory). Either way it paints under the brush — immediately on the dab (no min-drag) and
+                // along the drag. (To mint another new region, deselect first via ESC / empty-canvas click.)
+                if (!_selection.HasValue) _selection = _host.Pattern.NewRegionId();
+                _painting = true;
+                if (_host.PickSurface(screen, out var hit) && _host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection.Value))
                 {
                     _host.RefreshCreaseOverlay(); _host.Pattern.SplitDisconnected();
                     if (_host.ShowPieces) _host.RefreshPieces();
