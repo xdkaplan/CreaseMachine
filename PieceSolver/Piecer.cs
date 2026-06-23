@@ -7,12 +7,11 @@ using OpenTK.Mathematics;
 namespace PieceSolver
 {
     // The Editor active during Piecing (after Propose -> Accept). The "Crease brush" — a contextual tool
-    // (no on/off toggle) that paints PIECE MEMBERSHIP: left-click selects a piece (click empty space to
-    // deselect), drag grows the active selection into its neighbours (the crease follows the brush),
-    // Shift+click mints a new region. Ctrl+drag is moded by selection: with NO piece selected it REMOVES whole
-    // pieces (healed into the dominant neighbour); with a piece selected it CARVES that piece (its faces leave
-    // it — donated to a foreign neighbour, or split off as a new island). Edits the Pattern only; no geometry
-    // moves. See docs/PIECER-REFACTOR.md.
+    // (no on/off toggle): PLAIN-click SELECTS a piece (click empty space to deselect); SHIFT+drag, or a single
+    // Shift dab, GROWS the active piece into the faces under the brush (add territory; the crease follows the
+    // brush); CTRL+drag is moded by selection — no selection REMOVES whole pieces (healed into the dominant
+    // neighbour), a selection CARVES the active piece (faces donated to a foreign neighbour, or split off as a
+    // new island). Edits the Pattern only; no geometry moves. See docs/PIECER-REFACTOR.md.
     sealed class Piecer : Editor
     {
         readonly IEditorHost _host;
@@ -25,12 +24,9 @@ namespace PieceSolver
         bool _removing;             // Ctrl+drag destructive gesture in progress (remove pieces, OR carve when a piece is selected)
         bool _carve;                // this Ctrl gesture is a CARVE (a piece was selected at gesture start) rather than a remove
         HashSet<int> _touched;      // faces marked during the current Ctrl gesture
-        bool _stroking;             // a paint drag passed the click-vs-drag threshold -> painting (a bare click only SELECTS)
-        Point _strokeStart;         // mouse-down position, to measure the drag threshold
+        bool _painting;             // Shift+drag (or a single Shift dab) is GROWING the active piece (add territory)
         double _dabAccum;           // screen-px travelled since the last bump (path-spacing accumulator)
         Point _lastPointer;         // previous pointer position, the start of the current stroke segment
-
-        const double StrokeThresholdPx = 6.0;   // drag distance (px) before a paint stroke begins (a click within this just selects)
 
         // ===================== pointer hooks (the left-button brush branches) =====================
 
@@ -40,50 +36,36 @@ namespace PieceSolver
             _dabAccum = 0;
             if ((mods & ModifierKeys.Control) != 0)
             {
-                // CTRL+drag is moded by selection: with NO piece selected it REMOVES whole pieces (kill &
-                // donate); with a piece selected it CARVES that piece (marks only ITS faces, in the delete
-                // colour, healed into a foreign neighbour or split off as a new island on release). Either way
-                // it just marks faces under the brush — no region painting.
+                // CTRL is moded by selection: NO piece selected -> REMOVE whole pieces (kill & donate); a piece
+                // selected -> CARVE that piece. Either way it just marks faces under the brush.
                 _removing = true; _carve = _selection.HasValue; _touched = new HashSet<int>();
                 if (_host.PickSurface(screen, out var hit)) MarkFacesUnderBrush(hit);
                 _host.RefreshPieces();
             }
-            else if (_host.PickFace(screen, out int f0, out var hit))
+            else if ((mods & ModifierKeys.Shift) != 0)
             {
-                if ((mods & ModifierKeys.Shift) != 0)
+                // SHIFT = GROW the active piece (add territory). Paints immediately on the dab (no min-drag);
+                // dragging keeps painting. No-op with nothing selected -- plain-click a piece to select first.
+                _painting = _selection.HasValue;
+                if (_painting && _host.PickSurface(screen, out var hit) && _host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection.Value))
                 {
-                    // SHIFT: mint a brand-NEW region and seed it on the click itself (the bullseye needs the dab
-                    // now). Dragging then grows it; each Shift+click mints another new region.
-                    _selection = _host.Pattern.NewRegionId(); _stroking = true;
-                    if (_host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection.Value)) { _host.RefreshCreaseOverlay(); _host.Pattern.SplitDisconnected(); }   // Paint re-derives creases -> refresh the overlay; seeding can also pinch a region in two
+                    _host.RefreshCreaseOverlay(); _host.Pattern.SplitDisconnected();
                     if (_host.ShowPieces) _host.RefreshPieces();
                 }
-                else
-                {
-                    // Plain click: SELECT this piece only -- NO paint dab. Painting begins only once the drag
-                    // passes StrokeThresholdPx, so a bare click (or A/B/A/B clicking) just re-highlights the
-                    // active selection and never nudges a boundary.
-                    var map = _host.Pattern.PieceMap;
-                    _selection = (f0 >= 0 && map != null && f0 < map.Length) ? new PieceId(map[f0]) : (PieceId?)null;
-                    _strokeStart = screen; _stroking = false;
-                    if (_host.ShowPieces) _host.RefreshPieces();   // show the active-selection highlight
-                }
             }
-            else if (_selection.HasValue) Deselect();   // plain click on empty canvas -> deselect (next Ctrl is the no-selection remove mode)
+            else if (_host.PickFace(screen, out int f0, out _))
+            {
+                // Plain click = SELECT only (never paints). Click empty canvas (below) to deselect.
+                var map = _host.Pattern.PieceMap;
+                _selection = (f0 >= 0 && map != null && f0 < map.Length) ? new PieceId(map[f0]) : (PieceId?)null;
+                if (_host.ShowPieces) _host.RefreshPieces();   // show the active-selection highlight
+            }
+            else if (_selection.HasValue) Deselect();   // plain click on empty canvas -> deselect
         }
 
         public override void OnPointerMove(Point screen)
         {
-            if (_removing) BrushStrokeTo(screen);   // remove: mark faces along the path
-            else
-            {
-                if (!_stroking)
-                {
-                    double mx = screen.X - _strokeStart.X, my = screen.Y - _strokeStart.Y;
-                    if (mx * mx + my * my >= StrokeThresholdPx * StrokeThresholdPx) _stroking = true;   // click -> drag
-                }
-                if (_stroking) BrushStrokeTo(screen);   // paint only once past the click-vs-drag threshold
-            }
+            if (_removing || _painting) BrushStrokeTo(screen);   // Ctrl -> mark faces; Shift -> grow the active piece. Plain drag does nothing.
             _lastPointer = screen;
         }
 
@@ -103,8 +85,8 @@ namespace PieceSolver
                 _removing = false; _carve = false; _touched = null;
                 if (_host.ShowPieces) _host.RefreshPieces();        // drop the red preview, show the result
             }
-            else if (_stroking && _host.ShowPieces) _host.RefreshPieces();   // final settle ONLY if a paint stroke actually ran (a bare click already re-highlighted on down)
-            _stroking = false;
+            else if (_painting && _host.ShowPieces) _host.RefreshPieces();   // final settle of the grow
+            _painting = false;
         }
 
         public override void OnHover(Point screen) => _host.ShowBrushPreview(screen);
@@ -126,26 +108,24 @@ namespace PieceSolver
                 double t = pos / seg;
                 if (_host.PickSurface(new Point(_lastPointer.X + dx * t, _lastPointer.Y + dy * t), out var hit))
                 {
-                    if (_removing) { if (MarkFacesUnderBrush(hit)) changed = true; }                       // remove gesture: mark faces
-                    // paint gesture: grow active region. Paint re-derives creases (RegenCrease); the overlay is a
-                    // view, so refresh it here per dab (matches the old PaintRegionUnderBrush rebuilding it inline).
-                    else if (_host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection ?? new PieceId(-1))) { changed = true; _host.RefreshCreaseOverlay(); }
+                    if (_removing) { if (MarkFacesUnderBrush(hit)) changed = true; }                       // Ctrl gesture: mark faces
+                    // Shift gesture: grow the active region. Paint re-derives creases (RegenCrease); the overlay
+                    // is a view, so refresh it here per dab.
+                    else if (_painting && _host.Pattern.Paint(hit, _host.BrushWorldRadius, _selection ?? new PieceId(-1))) { changed = true; _host.RefreshCreaseOverlay(); }
                 }
                 pos += spacing;
             }
             _dabAccum = seg - (pos - spacing);
             if (changed)
             {
-                if (!_removing) _host.Pattern.SplitDisconnected();   // a stroke can carve a region into islands -> give the smaller ones new ids
+                if (_painting) _host.Pattern.SplitDisconnected();   // a grow stroke can carve a region into islands -> give the smaller ones new ids
                 if (_host.ShowPieces) _host.RefreshPieces();         // live: recompute once per mouse-move (throttle), not per dab
             }
         }
 
-        // One remove-brush dab: add every face whose centroid is within the brush radius to the marked set
-        // (_touched). Pure marking -- no region change; the actual removal happens on mouse-up.
-        // Mark ALL faces under the brush (both modes). Carve filters to the active piece's faces in
-        // Pattern.Carve; the other marked faces are a no-op affordance (shown in the pre-select colour, never
-        // carved). Pure marking — the actual remove/carve happens on mouse-up.
+        // One Ctrl-gesture dab: add every face under the brush to the marked set (_touched). Marks ALL faces;
+        // Carve filters to the active piece's faces in Pattern.Carve, so the rest are a no-op affordance (shown
+        // in the pre-select colour, never removed). Pure marking — the actual remove/carve happens on mouse-up.
         bool MarkFacesUnderBrush(Vector3 center)
         {
             if (_touched == null) return false;
