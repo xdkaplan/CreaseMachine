@@ -169,7 +169,7 @@
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Mesh" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Index within the selected Source set (1-30). Switching resets the solver to that mesh. (Meshes has one entry for now — the bunny — so the index is ignored there.)" />
+                                                   ToolTip="Index within the selected Source set (1-30). Switching resets the solver to that mesh. (Meshes: 1 = Bunny, 2 = Unwelded; out-of-range clamps to the last.)" />
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MeshIndex}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>

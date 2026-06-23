@@ -390,9 +390,10 @@ namespace PieceSolver
         // currently live where they were dropped (C:\Temp); relocate alongside the NURBS set when permanent.
         static string SolidMeshPath(int meshIndex) => System.IO.Path.Combine(@"C:\Temp", "Solid" + (meshIndex - 1) + ".fbx");
 
-        // "Meshes" set — arbitrary triangle meshes; currently a single entry (the bunny). The Mesh
-        // index is ignored until more meshes are added to the set.
-        static string MeshSetPath(int meshIndex) => @"C:\Temp\Bunny 5k.stl";
+        // "Meshes" set — arbitrary triangle meshes, indexed 1-based by the Mesh slider (out-of-range
+        // clamps to the last). Add entries here to grow the set.
+        static readonly string[] MeshSetPaths = { @"C:\Temp\Bunny 5k.stl", @"C:\Temp\Unwelded.fbx" };
+        static string MeshSetPath(int meshIndex) => MeshSetPaths[System.Math.Clamp(meshIndex - 1, 0, MeshSetPaths.Length - 1)];
 
         // The active test-mesh path for a picker index, per the Source dropdown (Solids/Surfaces/Meshes).
         string MeshPath(int meshIndex) => _sim.AssetSet switch
