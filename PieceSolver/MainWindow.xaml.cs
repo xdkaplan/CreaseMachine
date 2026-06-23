@@ -77,6 +77,12 @@ namespace PieceSolver
         CancellationTokenSource _bakeCts;
         CancellationToken _bakeToken;
         IProgress<(double frac, string text)> _bakeProgress;
+
+        // Crease proposer: cached per-edge settled fold angles + endpoint vertex indices from the last
+        // Propose, so the Crease angle slider re-labels the overlay without re-proposing. The Propose
+        // bake reuses the same modal machinery (_baking / _bakeCts / BakeOverlay).
+        double[] _creaseFold; int[] _creaseA, _creaseB;
+        float[] _creasePts; bool _creaseDirty; int _creaseCount;
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
         readonly System.Collections.Generic.List<string> _bakeLog = new System.Collections.Generic.List<string>();   // worker log lines, flushed on the UI thread
@@ -155,6 +161,7 @@ namespace PieceSolver
             // Solve is the studio's main develop; it records a full BakeParams snapshot so a recorded
             // session reproduces the bake on replay (and via the headless CLI value-check).
             SolveButton.Click += (s, e) => Execute(StudioCommand.Solve(_sim.ToBakeParams()), record: true);   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal
+            ProposeButton.Click += (s, e) => { _ = OnProposeAsync(); };   // stage 2: propose piece-boundary creases (no-collapse flow, reuses the modal)
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
@@ -193,6 +200,7 @@ namespace PieceSolver
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
                     || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual();
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
+                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) RelabelCreases();   // re-label proposed creases live (no re-propose)
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
 
@@ -331,6 +339,7 @@ namespace PieceSolver
             _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
+            ClearProposedCreases();   // labels reference the prior mesh's vertices
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // new mesh -> re-freeze iso scale + LM damping on next flatten
@@ -390,6 +399,7 @@ namespace PieceSolver
             _lastRunMs = sw.Elapsed.TotalMilliseconds;
             _totalIters += n;
             _meshDirty = true; _rulingsDirty = true;                    // OnRender re-uploads M (_view) once (+ recompute rulings)
+            ClearProposedCreases();                                     // geometry moved -> proposal is stale
             if (_hasFlat && _flatView != null) _flatView.Upload(_flat); // re-upload M' once per batch, not per step
             if (_hasFlat && _flat != null) _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;   // live developability readout (Accuracy gate)
             Title = "PieceSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
@@ -540,6 +550,115 @@ namespace PieceSolver
                 UpdateStatus(); _gl?.InvalidateVisual();
                 _bakeCts?.Dispose(); _bakeCts = null; _bakeProgress = null;
             }
+        }
+
+        // ===================== crease proposer (stage 2: "Propose creases") =====================
+
+        // Develop a copy of the geometry to a settled (developable) state behind the bake modal —
+        // WITHOUT collapse/heal/subdivide, so topology is preserved and the settled mesh's edges map
+        // 1:1 back to the original vertices. We flow IN PLACE (snapshot positions + Nesterov velocity,
+        // flow, measure per-edge fold angles, restore), so there is no clone. The fold angles are cached;
+        // the Crease angle slider then labels edges >= threshold as proposed piece boundaries. NOT the
+        // IsometricLM develop bake (that is "Solve") — this is the covariance flow used only to sniff creases.
+        async Task OnProposeAsync()
+        {
+            if (_baking || _session == null) return;
+            FlowParams p = _sim.ToFlowParams();
+            PlanktonMesh P = _session.Mesh;
+            int nV = P.Vertices.Count;
+            var sx = new double[nV]; var sy = new double[nV]; var sz = new double[nV];
+            for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; sx[v] = pv.X; sy[v] = pv.Y; sz[v] = pv.Z; }
+            Vec3[] savedVel = (Vec3[])_session.Vel.Clone();
+
+            _baking = true;
+            _bakeCts = new CancellationTokenSource();
+            _bakeToken = _bakeCts.Token;
+            BakeBar.Value = 0; BakeStatus.Text = "Proposing creases…"; BakeOverlay.Visibility = Visibility.Visible;
+            _bakeProgress = new Progress<(double frac, string text)>(pp =>
+            {
+                if (pp.frac >= 0) BakeBar.Value = Math.Max(0, Math.Min(100, pp.frac * 100.0));
+                if (pp.text != null) BakeStatus.Text = pp.text;
+            });
+            var token = _bakeToken; var prog = _bakeProgress;
+
+            double[] fold = null; int[] ea = null, eb = null;
+            try
+            {
+                await Task.Run(() =>
+                {
+                    const int maxIter = 1200;
+                    double g0 = -1.0;
+                    for (int i = 0; i < maxIter; i++)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        double g = _session.NesterovStep(p, out _);   // NO collapse/heal -> topology fixed
+                        if (g0 < 0) { g0 = g; if (g0 <= 1e-12) break; }   // already developable
+                        if ((i & 15) == 0) prog?.Report(((double)i / maxIter, $"flowing… iter {i}   |grad| {g:0.###e0}"));
+                        if (g0 > 0 && g < 1e-3 * g0) break;   // settled
+                    }
+                    fold = CreaseMachine.MeshOps.EdgeDihedrals(_session.Mesh, out ea, out eb);
+                });
+            }
+            catch (OperationCanceledException) { fold = null; }
+            catch (Exception ex) { Log("propose failed: " + ex.Message); }
+            finally
+            {
+                // Restore the original geometry + momentum: the viewport returns to the input mesh, and
+                // the cached fold labels reference exactly these (unrenumbered) vertices.
+                for (int v = 0; v < nV; v++) P.Vertices.SetVertex(v, sx[v], sy[v], sz[v]);
+                _session.Vel = savedVel;
+                _baking = false;
+                BakeOverlay.Visibility = Visibility.Collapsed;
+                if (fold != null)
+                {
+                    _creaseFold = fold; _creaseA = ea; _creaseB = eb;
+                    RelabelCreases();
+                    Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
+                }
+                if (_view != null) _view.Upload(_session.Mesh);   // re-show the restored input mesh
+                _meshDirty = false;
+                Title = "PieceSolver — " + (token.IsCancellationRequested ? "propose cancelled" : _creaseCount + " creases proposed");
+                _gl?.InvalidateVisual();
+                _bakeCts?.Dispose(); _bakeCts = null; _bakeProgress = null;
+            }
+        }
+
+        // Rebuild the crease overlay from the cached fold angles at the current Crease angle threshold.
+        // CPU-only (stages the line vertices; the GL upload happens in OnRender), so it runs live on the
+        // slider. No cached angles -> clears the overlay.
+        void RelabelCreases()
+        {
+            if (_creaseFold == null || _session == null)
+            {
+                _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
+                return;
+            }
+            double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
+            PlanktonMesh P = _session.Mesh;
+            int nV = P.Vertices.Count;
+            var pts = new System.Collections.Generic.List<float>();
+            int n = 0;
+            for (int i = 0; i < _creaseFold.Length; i++)
+            {
+                if (_creaseFold[i] < thr) continue;
+                int a = _creaseA[i], b = _creaseB[i];
+                if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
+                if (P.Vertices[a].IsUnused || P.Vertices[b].IsUnused) continue;
+                var pa = P.Vertices[a]; var pb = P.Vertices[b];
+                pts.Add((float)pa.X); pts.Add((float)pa.Y); pts.Add((float)pa.Z);
+                pts.Add((float)pb.X); pts.Add((float)pb.Y); pts.Add((float)pb.Z);
+                n++;
+            }
+            _creasePts = pts.ToArray(); _creaseCount = n; _creaseDirty = true;
+            _gl?.InvalidateVisual();
+        }
+
+        // Drop the cached crease proposal + overlay (fresh mesh, or topology/geometry changed). Idempotent.
+        void ClearProposedCreases()
+        {
+            if (_creaseFold == null && (_creasePts == null || _creasePts.Length == 0)) return;
+            _creaseFold = null; _creaseA = null; _creaseB = null;
+            _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
         }
 
         // Worker entry (background thread): pure compute, dispatched single vs multi-component.
@@ -753,6 +872,7 @@ namespace PieceSolver
                 _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;    // strain stays ~constant (subdivide is metric-preserving)
             }
             _meshDirty = true;
+            ClearProposedCreases();   // 1->4 renumbers vertices -> labels invalid
             Title = "PieceSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
         }
@@ -769,6 +889,7 @@ namespace PieceSolver
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // reset -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // reset -> BFF must (re)run before the sim can step
+            ClearProposedCreases();   // fresh mesh from disk
             Title = "PieceSolver — " + System.IO.Path.GetFileName(_meshPath);
             _gl?.InvalidateVisual();
         }
@@ -1116,6 +1237,8 @@ namespace PieceSolver
                 _flatView?.SetEnvMatcap(_envPx, _envW, _envH);
                 _envDirty = false;
             }
+            // staged proposed-crease line vertices (GL thread); gate on !_baking like the mesh upload
+            if (_creaseDirty && !_baking && _view != null) { _view.SetCreases(_creasePts ?? System.Array.Empty<float>()); _creaseDirty = false; }
 
             // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
             // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
@@ -1193,6 +1316,7 @@ namespace PieceSolver
             {
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap;            // Shine shading
+                _view.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
                 _view.LicMode = _sim.ShowRuling ? 1 : 0;
                 if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)

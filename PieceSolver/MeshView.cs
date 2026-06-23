@@ -55,6 +55,9 @@ namespace PieceSolver
         public Vector3 SeamCtrlColor = new Vector3(1.0f, 0.65f, 0.20f);   // amber: control polygon + control points
         int _seamVao, _seamVbo, _seamCount;                               // GL_LINES buffer for the seam curve
         int _seamCtrlVao, _seamCtrlVbo, _seamCtrlCount;                   // GL_LINES buffer for the control polygon + crosses
+        public bool ShowCreases = false;                                  // overlay proposed piece-boundary creases
+        public Vector3 CreaseColor = new Vector3(1.0f, 0.42f, 0.12f);     // warm orange
+        int _creaseVao, _creaseVbo, _creaseCount;                         // GL_LINES buffer for proposed creases
 
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
@@ -372,6 +375,21 @@ void main() {
             GL.BindVertexArray(0);
         }
 
+        // Upload proposed-crease line segments (GL_LINES position pairs), flat-coloured like the seams.
+        public void SetCreases(float[] posF)
+        {
+            EnsureProgram();
+            _creaseCount = posF == null ? 0 : posF.Length / 3;
+            if (_creaseCount == 0) return;
+            if (_creaseVao == 0) { _creaseVao = GL.GenVertexArray(); _creaseVbo = GL.GenBuffer(); }
+            GL.BindVertexArray(_creaseVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _creaseVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, posF.Length * sizeof(float), posF, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(0);
+            GL.BindVertexArray(0);
+        }
+
         public void Draw(Matrix4 view, Matrix4 proj)
         {
             if (!_ready) return;
@@ -457,6 +475,19 @@ void main() {
                 GL.DrawArrays(PrimitiveType.Lines, 0, _seamCtrlCount);
                 GL.LineWidth(1f);
             }
+            // Proposed creases (orange): overlaid on the surface with depth test OFF so on-surface
+            // segments never z-fight the faces they lie on.
+            if (ShowCreases && _creaseCount > 0)
+            {
+                GL.Disable(EnableCap.DepthTest);
+                GL.BindVertexArray(_creaseVao);
+                GL.Uniform1(_uEdge, 1);
+                GL.Uniform3(_uEdgeColor, CreaseColor.X, CreaseColor.Y, CreaseColor.Z);
+                GL.LineWidth(2f);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _creaseCount);
+                GL.LineWidth(1f);
+                GL.Enable(EnableCap.DepthTest);
+            }
             GL.BindVertexArray(0);
         }
 
@@ -500,6 +531,7 @@ void main() {
             if (_rulVao != 0) { GL.DeleteVertexArray(_rulVao); GL.DeleteBuffer(_rulVbo); }
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
             if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }
+            if (_creaseVao != 0) { GL.DeleteVertexArray(_creaseVao); GL.DeleteBuffer(_creaseVbo); }
             if (_tex != 0) GL.DeleteTexture(_tex);
             if (_texNeutral != 0) GL.DeleteTexture(_texNeutral);
             if (_texEnv != 0) GL.DeleteTexture(_texEnv);

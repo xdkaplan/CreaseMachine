@@ -148,6 +148,11 @@ namespace PieceSolver
         bool _useMatcap;
         public bool UseMatcap { get => _useMatcap; set => Set(ref _useMatcap, value); }
 
+        // Crease proposer threshold (degrees): after Propose, an interior edge whose settled fold angle
+        // is at least this is drawn as a proposed piece boundary. Live — re-labels without re-proposing.
+        double _creaseAngleDeg = 30.0;
+        public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
+
         // Ruling-line overlay: a curvature-driven LIC grain painted on M (the developable "grain"),
         // modulating the matcap. Off by default.
         bool _showRuling;
