@@ -255,11 +255,11 @@ namespace PieceSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
-                else if (e.Key == Key.OemCloseBrackets && _sim.CreaseBrush && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
+                else if (e.Key == Key.OemCloseBrackets && BrushAvailable && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1.2); UpdatePreview(_lastHover); e.Handled = true;
                 }
-                else if (e.Key == Key.OemOpenBrackets && _sim.CreaseBrush && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
+                else if (e.Key == Key.OemOpenBrackets && BrushAvailable && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
                 {
                     ResizeBrush(1.0 / 1.2); UpdatePreview(_lastHover); e.Handled = true;
                 }
@@ -1538,7 +1538,7 @@ namespace PieceSolver
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (_sim.CreaseBrush && _session != null && !_baking && !_camModal && _faceRegion != null)
+                if (BrushAvailable)
                 {
                     _dabAccum = 0;
                     // Pick the face under the click. Normally its region becomes the ACTIVE paint region (sample);
@@ -1561,7 +1561,7 @@ namespace PieceSolver
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
-            bool wasCreaseStroke = _drag == DragMode.Edit && _sim.CreaseBrush;
+            bool wasCreaseStroke = _drag == DragMode.Edit && BrushAvailable;
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
             if (wasCreaseStroke && _showPieces) RebuildPieces();   // final settle at stroke end (also updated live per mouse-move)
@@ -1573,12 +1573,12 @@ namespace PieceSolver
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
-                if (_sim.CreaseBrush && !_camModal) UpdatePreview(p);   // footprint preview on hover
+                if (BrushAvailable) UpdatePreview(p);   // footprint preview on hover
                 return;
             }
             if (_drag == DragMode.Edit)
             {
-                if (_sim.CreaseBrush && _session != null && !_baking && !_camModal) BrushStrokeTo(p);   // a bump every `spacing` px along the path
+                if (BrushAvailable) BrushStrokeTo(p);   // a bump every `spacing` px along the path
                 _lastMouse = p;
                 return;
             }
@@ -1616,6 +1616,10 @@ namespace PieceSolver
         }
 
         // ===================== Crease brush (the one brush) =====================
+
+        // The Crease brush is CONTEXTUAL (no on/off toggle): live whenever the model has pieces (after
+        // Propose -> Accept), nothing is baking, and no modal is up.
+        bool BrushAvailable => _session != null && !_baking && !_camModal && _faceRegion != null;
 
         // [ / ] grow / shrink the brush (the same VM param the BRUSH Size slider binds to).
         void ResizeBrush(double factor) => _sim.BrushSize = Math.Clamp(_sim.BrushSize * factor, 1.0, 100.0);
@@ -1766,7 +1770,7 @@ namespace PieceSolver
 
         void UpdatePreview(System.Windows.Point cursor)
         {
-            if (!_sim.CreaseBrush || _session == null || !PickSurface(cursor, out var hit))
+            if (!BrushAvailable || !PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
             double rpx = ScreenRadiusPx(hit);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;

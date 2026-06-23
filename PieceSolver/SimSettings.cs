@@ -163,12 +163,10 @@ namespace PieceSolver
         double _creaseAngleDeg = 30.0;
         public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
 
-        // Crease brush (stage 3). CreaseBrush = tool active (left-drag bumps proposed creases outward; right
-        // still orbits). It edits the crease selection only — an "opposing magnet" that slides candidate
-        // crease edges under the footprint onto adjacent edges, away from the brush center. Size = footprint
-        // radius (world units), also via [ / ]. (No Strength/Softness/Flow — the bump is a hard radius cutoff.)
-        bool _creaseBrush;
-        public bool CreaseBrush { get => _creaseBrush; set => Set(ref _creaseBrush, value); }
+        // Crease brush (stage 3) is CONTEXTUAL, not a toggle: it is live whenever the model has pieces (after
+        // Propose -> Accept). Left-click a piece to make it the active selection (highlighted); click/drag to
+        // paint region membership (grow the active selection); Shift+click starts a new region; right still
+        // orbits. Size = footprint radius (world units), also via [ / ].
         double _brushSize = 10.0;
         public double BrushSize { get => _brushSize; set => Set(ref _brushSize, value); }
 
