@@ -832,9 +832,11 @@ namespace PieceSolver
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
                 bool c2 = _creaseEdges.Contains(EdgeKey(fv[2], fv[0]));   // edge 2 = (v2,v0)
-                // "Bridge" triangle: all 3 corners are crease vertices (dist==0 seed) yet NO edge is a crease.
-                // It spans across the crease chain with no groove through it -> flat-tint (flag = 1).
-                float flat = (!c0 && !c1 && !c2 && dist[fv[0]] == 0f && dist[fv[1]] == 0f && dist[fv[2]] == 0f) ? 1f : 0f;
+                // A groove belongs only to a triangle that actually CONTAINS a crease edge. Any triangle
+                // with no crease edge gets flat-tinted (flag = 1): this kills every spurious groove that the
+                // per-vertex field draws along a non-crease edge whose two endpoints are crease vertices
+                // (e.g. edge 1-3 between crease-chain vertices, or an all-corners "bridge" triangle).
+                float flat = (!c0 && !c1 && !c2) ? 1f : 0f;
                 for (int k = 0; k < 3; k++)
                 {
                     int v = fv[k]; Vector3 pp = Pos(v);

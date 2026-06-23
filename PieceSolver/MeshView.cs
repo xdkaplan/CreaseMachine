@@ -318,9 +318,9 @@ void main() {
     float seam = 1.0 - smoothstep(0.0, aa, d);       // 1 exactly on the crease
     face = mix(face, face * 0.28, seam * 0.9);
 
-    // Effect strength: bridge triangles (all corners on creases, no own crease edge -> vEdgeDist.w=1) get
-    // NO deboss (flat tint), since there is genuinely no groove through them; everywhere else the deboss is
-    // applied at 50% strength (a lerp from the flat baseline).
+    // Effect strength: triangles with NO crease edge (vEdgeDist.w == 1) get no deboss (flat tint) -- a groove
+    // belongs only to a triangle that actually contains a crease edge, so this kills spurious grooves the
+    // per-vertex field draws along non-crease edges between crease vertices. Crease-edge tris: 50% strength.
     float fx = (vEdgeDist.w > 0.5) ? 0.0 : 0.5;
     FragColor = vec4(mix(faceFlat, face, fx), 1.0);
 }";
