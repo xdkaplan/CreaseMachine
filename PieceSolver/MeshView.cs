@@ -224,7 +224,7 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec3 aPieceCol;
 layout(location=3) in float aDist;
-layout(location=4) in vec3 aEdgeDist;   // per-corner perpendicular dist to this tri's 3 edges (BIG if not a crease)
+layout(location=4) in vec4 aEdgeDist;   // xyz = per-corner perp dist to this tri's 3 edges (BIG if not a crease); w = bridge-tri flat flag
 uniform mat4 uMvp;
 uniform mat4 uView;
 uniform mat3 uNormalMat;
@@ -232,14 +232,14 @@ out vec3 vN;
 out vec3 vViewPos;
 out vec3 vPieceCol;
 out float vDist;
-out vec3 vEdgeDist;
+out vec4 vEdgeDist;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
     vN = uNormalMat * aNormal;
     vViewPos = (uView * vec4(aPos, 1.0)).xyz;
     vPieceCol = aPieceCol;
     vDist = aDist;            // per-vertex geodesic dist to nearest crease (good in piece interiors)
-    vEdgeDist = aEdgeDist;    // interpolates to exact perpendicular dist to this tri's crease edges
+    vEdgeDist = aEdgeDist;    // xyz interpolates to exact perp dist to this tri's crease edges; w = flat flag
 }";
 
         // AESTHETIC 'letterpress': each piece reads as a thick matte card debossed at its crease edges.
@@ -253,7 +253,7 @@ in vec3 vN;
 in vec3 vViewPos;
 in vec3 vPieceCol;
 in float vDist;
-in vec3 vEdgeDist;
+in vec4 vEdgeDist;
 out vec4 FragColor;
 uniform sampler2D uNeutral;
 uniform int uHasNeutral;
@@ -269,6 +269,12 @@ void main() {
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
     vec3 n = normalize(mix(sn, fn, s));
     if (n.z < 0.0) n = -n;
+
+    // --- flat (no-deboss) baseline: the piece tint lit on the plain normal. The final colour mixes from
+    // this toward the full deboss, so 'effect strength' (and the bridge-triangle flat case) is a simple lerp.
+    vec3 tint = mix(vPieceCol, vPieceCol * 1.06, 0.5);
+    vec3 litFlat = (uHasNeutral == 1) ? texture(uNeutral, n.xy * 0.5 + 0.5).rgb : vec3(clamp(n.z, 0.0, 1.0));
+    vec3 faceFlat = litFlat * tint;
 
     // --- corrected distance-to-crease: the per-vertex field (vDist) collapses to ~0 across a triangle
     // whose corners all sit on creases (e.g. a two-crease 'V' triangle). vEdgeDist interpolates to the
@@ -295,8 +301,8 @@ void main() {
     vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, bn.xy * 0.5 + 0.5).rgb
                                   : vec3(clamp(bn.z, 0.0, 1.0));
 
-    // --- matte card base: lit tint with a touch of paper flatten so the field reads soft ---
-    vec3 face = lit * mix(vPieceCol, vPieceCol * 1.06, 0.5);
+    // --- matte card base: lit (on the beveled normal) tint ---
+    vec3 face = lit * tint;
 
     // --- directional sheen on the groove wall that faces the matcap 'up' ---
     float facing = clamp(dir.y * 0.7 + 0.3, 0.0, 1.0);
@@ -312,7 +318,11 @@ void main() {
     float seam = 1.0 - smoothstep(0.0, aa, d);       // 1 exactly on the crease
     face = mix(face, face * 0.28, seam * 0.9);
 
-    FragColor = vec4(face, 1.0);
+    // Effect strength: bridge triangles (all corners on creases, no own crease edge -> vEdgeDist.w=1) get
+    // NO deboss (flat tint), since there is genuinely no groove through them; everywhere else the deboss is
+    // applied at 50% strength (a lerp from the flat baseline).
+    float fx = (vEdgeDist.w > 0.5) ? 0.0 : 0.5;
+    FragColor = vec4(mix(faceFlat, face, fx), 1.0);
 }";
 
         void EnsurePieceProgram()
@@ -353,7 +363,7 @@ void main() {
             GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 1 * sizeof(float), 0); GL.EnableVertexAttribArray(3);
             GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboEdge);
             GL.BufferData(BufferTarget.ArrayBuffer, edge.Length * sizeof(float), edge, BufferUsageHint.DynamicDraw);
-            GL.VertexAttribPointer(4, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0); GL.EnableVertexAttribArray(4);
+            GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, 4 * sizeof(float), 0); GL.EnableVertexAttribArray(4);
             GL.BindVertexArray(0);
         }
 

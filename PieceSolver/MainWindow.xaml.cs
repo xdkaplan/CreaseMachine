@@ -822,7 +822,7 @@ namespace PieceSolver
             var nrm = new System.Collections.Generic.List<float>(nF * 9);
             var col = new System.Collections.Generic.List<float>(nF * 9);
             var dst = new System.Collections.Generic.List<float>(nF * 3);
-            var edg = new System.Collections.Generic.List<float>(nF * 9);
+            var edg = new System.Collections.Generic.List<float>(nF * 12);
             for (int f = 0; f < nF; f++)
             {
                 if (pieceId[f] < 0) continue;
@@ -832,6 +832,9 @@ namespace PieceSolver
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
                 bool c2 = _creaseEdges.Contains(EdgeKey(fv[2], fv[0]));   // edge 2 = (v2,v0)
+                // "Bridge" triangle: all 3 corners are crease vertices (dist==0 seed) yet NO edge is a crease.
+                // It spans across the crease chain with no groove through it -> flat-tint (flag = 1).
+                float flat = (!c0 && !c1 && !c2 && dist[fv[0]] == 0f && dist[fv[1]] == 0f && dist[fv[2]] == 0f) ? 1f : 0f;
                 for (int k = 0; k < 3; k++)
                 {
                     int v = fv[k]; Vector3 pp = Pos(v);
@@ -843,6 +846,7 @@ namespace PieceSolver
                     edg.Add(c0 ? PerpDist(pp, p0, p1) : BIG);
                     edg.Add(c1 ? PerpDist(pp, p1, p2) : BIG);
                     edg.Add(c2 ? PerpDist(pp, p2, p0) : BIG);
+                    edg.Add(flat);
                 }
             }
             _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
