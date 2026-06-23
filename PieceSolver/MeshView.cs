@@ -239,9 +239,12 @@ void main() {
     vDist = aDist;            // world-space distance to this piece's nearest crease boundary
 }";
 
-        // BASELINE aesthetic: flat per-piece tint (lit by the neutral matcap). vDist (world distance to the
-        // piece boundary) and uInset (the band width) are passed in but UNUSED here on purpose — the
-        // overnight subagent aesthetics restyle THIS shader (inset band, bevel/AO, exploded gap, ...).
+        // AESTHETIC 'letterpress': each piece reads as a thick matte card debossed at its crease edges.
+        // The boundary band (vDist < uInset) is sculpted into a directional bevel using the SCREEN-SPACE
+        // gradient of vDist as a virtual edge normal: bright sheen on the light-facing slope of the crease,
+        // a soft occlusion roll on the shaded slope, and a thin dark seam line right at vDist==0. The result
+        // is a tactile quilted / pressed-card panel look. World-stable (vDist is world space; nothing
+        // animates) and distinct from contour-line / ceramic-tile / blueprint treatments. ASCII only.
         const string PIECE_FRAG = @"#version 330 core
 in vec3 vN;
 in vec3 vViewPos;
@@ -252,16 +255,54 @@ uniform sampler2D uNeutral;
 uniform int uHasNeutral;
 uniform float uSharpness;
 uniform float uFacetExp;
-uniform float uInset;        // world-relative inset band width (subagents: use vDist < uInset)
+uniform float uInset;        // world-relative inset band width
+
 void main() {
+    // --- base surface normal (smooth<->faceted blend, same controls as baseline) ---
     vec3 sn = normalize(vN);
     vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
     if (dot(fn, sn) < 0.0) fn = -fn;
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
     vec3 n = normalize(mix(sn, fn, s));
     if (n.z < 0.0) n = -n;
-    vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, n.xy * 0.5 + 0.5).rgb : vec3(clamp(n.z, 0.0, 1.0));
-    FragColor = vec4(lit * vPieceCol, 1.0);   // baseline: flat per-piece tint
+
+    // --- normalized distance into the bevel band: t==0 at crease, t==1 at the band rim ---
+    float band = max(uInset, 1e-6);
+    float t = clamp(vDist / band, 0.0, 1.0);
+
+    // --- pressed-in bevel: tilt the shading normal toward/away from the crease.
+    // grad(vDist) in screen space points 'uphill', away from the boundary; use it as the
+    // in-screen direction of the bevel slope so the highlight tracks where the light is. ---
+    vec2 g = vec2(dFdx(vDist), dFdy(vDist));
+    vec2 dir = (length(g) > 1e-9) ? normalize(g) : vec2(0.0, 1.0);
+    // bevel weight: strongest mid-band, zero at crease and at rim (a rounded debossed lip).
+    float bev = sin(t * 3.14159265);          // 0 -> 1 -> 0 across the band
+    float slope = 0.55 * bev;                  // how hard the lip tilts
+    vec3 bn = normalize(n + vec3(dir * slope, 0.0));
+    if (bn.z < 0.0) bn = -bn;
+
+    // --- matcap lighting on the beveled normal (cards catch a real highlight on the lip) ---
+    vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, bn.xy * 0.5 + 0.5).rgb
+                                  : vec3(clamp(bn.z, 0.0, 1.0));
+
+    // --- matte card base: lit tint with a touch of paper flatten so the field reads soft ---
+    vec3 face = lit * mix(vPieceCol, vPieceCol * 1.06, 0.5);
+
+    // --- directional sheen: the side of the bevel that faces the matcap 'up' gets a soft gleam ---
+    float facing = clamp(dir.y * 0.7 + 0.3, 0.0, 1.0);   // up-facing slope brighter
+    float sheen = bev * facing * 0.35;
+    face += sheen * vec3(1.0);
+
+    // --- soft inner occlusion: a gentle darkening as the surface dips toward the crease ---
+    float ao = mix(0.72, 1.0, smoothstep(0.0, 0.85, t));
+    face *= ao;
+
+    // --- crisp seam line: a thin dark deboss right at the crease (world-stable, AA'd by fwidth) ---
+    float aa = fwidth(vDist) * 1.5 + 1e-6;
+    float seam = 1.0 - smoothstep(0.0, aa, vDist);       // 1 exactly on the crease
+    face = mix(face, face * 0.28, seam * 0.9);
+
+    FragColor = vec4(face, 1.0);
 }";
 
         void EnsurePieceProgram()
