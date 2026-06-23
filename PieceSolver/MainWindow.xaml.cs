@@ -98,6 +98,9 @@ namespace PieceSolver
         bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
         bool _removing;          // Ctrl+drag "remove pieces" gesture is in progress (faces marked, fully-covered pieces removed on mouse-up)
         System.Collections.Generic.HashSet<int> _touched;   // faces marked during the current remove gesture (light red; a wholly-marked piece -> dark red -> removed)
+        bool _stroking;          // a paint drag has passed the click-vs-drag threshold -> painting; a bare click only SELECTS (never paints)
+        System.Windows.Point _strokeStart;        // mouse-down position, to measure the drag threshold
+        const double StrokeThresholdPx = 6.0;     // drag distance (px) before a paint stroke begins (a click within this just selects)
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -1564,17 +1567,25 @@ namespace PieceSolver
                         if (PickSurface(_lastMouse, out var hit)) MarkFacesUnderBrush(hit);
                         RebuildPieces();
                     }
-                    // Pick the face under the click. Normally its region becomes the ACTIVE paint region (sample);
-                    // holding SHIFT instead starts a brand-NEW region, so painting carves it out of whatever was
-                    // there (e.g. Shift+click inside a disc -> a bullseye: new region A inside region B). Dragging
-                    // then grows the active region; each Shift+click mints another new region.
                     else if (PickFace(_lastMouse, out int f0, out var hit))
                     {
-                        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-                        _brushRegion = shift ? NewRegionId()
-                                             : (f0 >= 0 && f0 < _faceRegion.Length ? _faceRegion[f0] : -1);
-                        PaintRegionUnderBrush(hit);
-                        if (_showPieces) RebuildPieces();   // recolour the active region + show the first paint
+                        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+                        {
+                            // SHIFT: mint a brand-NEW region and seed it on the click itself (the bullseye needs
+                            // the dab now). Dragging then grows it; each Shift+click mints another new region.
+                            _brushRegion = NewRegionId(); _stroking = true;
+                            PaintRegionUnderBrush(hit);
+                            if (_showPieces) RebuildPieces();
+                        }
+                        else
+                        {
+                            // Plain click: SELECT this piece only -- NO paint dab. Painting begins only once the
+                            // drag passes StrokeThresholdPx, so a bare click (or A/B/A/B clicking) just
+                            // re-highlights the active selection and never nudges a boundary.
+                            _brushRegion = (f0 >= 0 && f0 < _faceRegion.Length) ? _faceRegion[f0] : -1;
+                            _strokeStart = _lastMouse; _stroking = false;
+                            if (_showPieces) RebuildPieces();   // show the active-selection highlight
+                        }
                     }
                 }
             }
@@ -1584,7 +1595,6 @@ namespace PieceSolver
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
-            bool wasCreaseStroke = _drag == DragMode.Edit && BrushAvailable;
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
             if (_removing)
@@ -1593,7 +1603,8 @@ namespace PieceSolver
                 _removing = false; _touched = null;
                 if (_showPieces) RebuildPieces();        // drop the red preview, show the healed regions
             }
-            else if (wasCreaseStroke && _showPieces) RebuildPieces();   // final settle at stroke end (also updated live per mouse-move)
+            else if (_stroking && _showPieces) RebuildPieces();   // final settle ONLY if a paint stroke actually ran (a bare click already re-highlighted on down)
+            _stroking = false;
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
@@ -1607,7 +1618,19 @@ namespace PieceSolver
             }
             if (_drag == DragMode.Edit)
             {
-                if (BrushAvailable) BrushStrokeTo(p);   // a bump every `spacing` px along the path
+                if (BrushAvailable)
+                {
+                    if (_removing) BrushStrokeTo(p);   // remove: mark faces along the path
+                    else
+                    {
+                        if (!_stroking)
+                        {
+                            double mx = p.X - _strokeStart.X, my = p.Y - _strokeStart.Y;
+                            if (mx * mx + my * my >= StrokeThresholdPx * StrokeThresholdPx) _stroking = true;   // click -> drag
+                        }
+                        if (_stroking) BrushStrokeTo(p);   // paint only once past the click-vs-drag threshold
+                    }
+                }
                 _lastMouse = p;
                 return;
             }
