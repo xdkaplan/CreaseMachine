@@ -1574,7 +1574,7 @@ namespace PieceSolver
                             // SHIFT: mint a brand-NEW region and seed it on the click itself (the bullseye needs
                             // the dab now). Dragging then grows it; each Shift+click mints another new region.
                             _brushRegion = NewRegionId(); _stroking = true;
-                            PaintRegionUnderBrush(hit);
+                            if (PaintRegionUnderBrush(hit)) SplitDisconnectedRegions();   // seeding can also pinch a region in two
                             if (_showPieces) RebuildPieces();
                         }
                         else
@@ -1697,7 +1697,11 @@ namespace PieceSolver
                 pos += spacing;
             }
             _dabAccum = seg - (pos - spacing);
-            if (changed && _showPieces) RebuildPieces();   // live: recompute once per mouse-move (throttle), not per dab
+            if (changed)
+            {
+                if (!_removing) SplitDisconnectedRegions();   // a stroke can carve a region into islands -> give the smaller ones new ids
+                if (_showPieces) RebuildPieces();             // live: recompute once per mouse-move (throttle), not per dab
+            }
         }
 
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
@@ -1843,6 +1847,56 @@ namespace PieceSolver
 
         static long EdgeKey(int a, int b) { int lo = Math.Min(a, b), hi = Math.Max(a, b); return ((long)lo << 32) | (uint)hi; }
         static int DictGet(System.Collections.Generic.Dictionary<int, int> d, int k) => d.TryGetValue(k, out var v) ? v : 0;
+
+        // A brush stroke can carve one region into several edge-disconnected islands that still share its id
+        // (e.g. painting B straight through A leaves two A-halves). Re-split every such region: the LARGEST
+        // island keeps the original id, each other island gets a fresh id. (Creases are unaffected -- the
+        // islands are separated by OTHER regions, so no A|A' edge exists.) Returns true if it renumbered.
+        bool SplitDisconnectedRegions()
+        {
+            if (_faceRegion == null || _session == null) return false;
+            var P = _session.Mesh;
+            int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            // within-region connectivity: union faces sharing an edge that have the SAME region id.
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                if (_faceRegion[f1] == _faceRegion[f2]) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
+            }
+            var blobSize = new System.Collections.Generic.Dictionary<int, int>();
+            var regionBlobs = new System.Collections.Generic.Dictionary<int, System.Collections.Generic.List<int>>();
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int r = _faceRegion[f]; if (r < 0) continue;
+                int root = Find(f);
+                blobSize[root] = DictGet(blobSize, root) + 1;
+                if (!regionBlobs.TryGetValue(r, out var lst)) { lst = new System.Collections.Generic.List<int>(); regionBlobs[r] = lst; }
+                if (!lst.Contains(root)) lst.Add(root);
+            }
+            int nextId = NewRegionId();
+            bool changed = false;
+            foreach (var kv in regionBlobs)
+            {
+                var blobs = kv.Value;
+                if (blobs.Count <= 1) continue;                  // region is still connected
+                int keep = blobs[0], keepSize = DictGet(blobSize, blobs[0]);
+                foreach (int b in blobs) { int s = DictGet(blobSize, b); if (s > keepSize) { keepSize = s; keep = b; } }
+                var newIdFor = new System.Collections.Generic.Dictionary<int, int>();
+                foreach (int b in blobs) if (b != keep) newIdFor[b] = nextId++;   // largest keeps the id; others get fresh ids
+                for (int f = 0; f < nF; f++)
+                {
+                    if (P.Faces[f].IsUnused || _faceRegion[f] != kv.Key) continue;
+                    if (newIdFor.TryGetValue(Find(f), out int nid)) { _faceRegion[f] = nid; changed = true; }
+                }
+            }
+            return changed;
+        }
 
         // Build a pick ray (eye + direction) from the camera params, convention-independent. Z-up, 45deg FOV.
         bool PickRay(System.Windows.Point screen, out Vector3 eye, out Vector3 rd)
