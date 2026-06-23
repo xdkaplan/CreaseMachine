@@ -725,7 +725,7 @@ namespace PieceSolver
         void RunBake()
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            const long budgetMs = 10000;
+            const long budgetMs = 100000;   // Solve bake time budget (100s; was 10s) — caps the develop+subdivide loop
             double target = _sim.AccuracyStrainPct;
             if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) RunBakeMulti(sw, budgetMs, target);
             else RunBakeSingle(sw, budgetMs, target);
