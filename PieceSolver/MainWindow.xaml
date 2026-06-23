@@ -306,6 +306,8 @@
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Shine, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="0" Maximum="1" Value="{Binding Shine}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
+                                <CheckBox Content="Preview proposed mesh" IsChecked="{Binding ShowProposedMesh, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,8,0,0"
+                                          ToolTip="After Propose, show the settled (developable, 'crease-proposed') mesh the creases were measured on, instead of the input mesh. Display-only — the live mesh stays the input." />
 
                                 <TextBlock Text="RULING LINES" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <CheckBox Content="Show ruling lines (curvature grain)" IsChecked="{Binding ShowRuling, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,0"

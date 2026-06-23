@@ -211,10 +211,13 @@ void main() {
         // Always uploads the welded/smooth mesh (shared verts + area-averaged normals). The faceted
         // look is produced in the shader from screen-space derivatives, blended by uSharpness — so
         // there's no separate unwelded upload, and "facet amount" is a live shader knob.
-        public void Upload(PlanktonMesh P)
+        // posOverride (optional): per-ORIGINAL-vertex positions (length nV*3) to display instead of P's
+        // own coordinates — used to preview the proposed/developed geometry while the live mesh stays M0.
+        public void Upload(PlanktonMesh P, double[] posOverride = null)
         {
             EnsureProgram();
             int nV = P.Vertices.Count;
+            bool useOv = posOverride != null && posOverride.Length == nV * 3;
             int[] map = new int[nV];
             int used = 0;
             for (int v = 0; v < nV; v++) map[v] = P.Vertices[v].IsUnused ? -1 : used++;
@@ -226,7 +229,8 @@ void main() {
             {
                 if (map[v] < 0) continue;
                 var pv = P.Vertices[v];
-                var p = new Vector3(pv.X, pv.Y, pv.Z);
+                var p = useOv ? new Vector3((float)posOverride[v * 3], (float)posOverride[v * 3 + 1], (float)posOverride[v * 3 + 2])
+                              : new Vector3(pv.X, pv.Y, pv.Z);
                 pos[map[v]] = p;
                 bb0 = Vector3.ComponentMin(bb0, p); bb1 = Vector3.ComponentMax(bb1, p);
             }

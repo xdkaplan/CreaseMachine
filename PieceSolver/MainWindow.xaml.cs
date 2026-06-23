@@ -91,6 +91,7 @@ namespace PieceSolver
         // bake reuses the same modal machinery (_baking / _bakeCts / BakeOverlay).
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
+        double[] _proposedPos;   // settled (developed) geometry from the last Propose, per original vertex (nV*3); for the DISPLAY preview
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
         readonly System.Collections.Generic.List<string> _bakeLog = new System.Collections.Generic.List<string>();   // worker log lines, flushed on the UI thread
@@ -218,6 +219,7 @@ namespace PieceSolver
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
                     || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual();
+                else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RelabelCreases(); _gl?.InvalidateVisual(); }   // re-upload M (proposed vs input) + re-place creases
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) RelabelCreases();   // re-label proposed creases live (no re-propose)
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
@@ -637,8 +639,15 @@ namespace PieceSolver
             catch (Exception ex) { Log("propose failed: " + ex.Message); }
             finally
             {
-                // Restore the original geometry + momentum: the viewport returns to the input mesh, and
-                // the cached fold labels reference exactly these (unrenumbered) vertices.
+                // Capture the settled (developable, "crease-proposed") geometry for the DISPLAY preview
+                // BEFORE restoring M0 (only on a completed propose — a cancel leaves the flow mid-way).
+                if (fold != null)
+                {
+                    _proposedPos = new double[nV * 3];
+                    for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; _proposedPos[v * 3] = pv.X; _proposedPos[v * 3 + 1] = pv.Y; _proposedPos[v * 3 + 2] = pv.Z; }
+                }
+                // Restore the original geometry + momentum: the live mesh returns to the input, and the
+                // cached fold labels reference exactly these (unrenumbered) vertices.
                 for (int v = 0; v < nV; v++) P.Vertices.SetVertex(v, sx[v], sy[v], sz[v]);
                 _session.Vel = savedVel;
                 _baking = false;
@@ -649,7 +658,7 @@ namespace PieceSolver
                     RelabelCreases();
                     Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
-                if (_view != null) _view.Upload(_session.Mesh);   // re-show the restored input mesh
+                if (_view != null) _view.Upload(_session.Mesh, ProposedPreviewPos());   // input mesh, or the proposed preview if toggled
                 _meshDirty = false;
                 Title = "PieceSolver — " + (token.IsCancellationRequested ? "propose cancelled" : _creaseCount + " creases proposed");
                 _gl?.InvalidateVisual();
@@ -670,6 +679,7 @@ namespace PieceSolver
             double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
             PlanktonMesh P = _session.Mesh;
             int nV = P.Vertices.Count;
+            double[] src = ProposedPreviewPos();   // when previewing the proposed mesh, place creases on it; else on M0
             var pts = new System.Collections.Generic.List<float>();
             int n = 0;
             for (int i = 0; i < _creaseFold.Length; i++)
@@ -678,20 +688,36 @@ namespace PieceSolver
                 int a = _creaseA[i], b = _creaseB[i];
                 if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
                 if (P.Vertices[a].IsUnused || P.Vertices[b].IsUnused) continue;
-                var pa = P.Vertices[a]; var pb = P.Vertices[b];
-                pts.Add((float)pa.X); pts.Add((float)pa.Y); pts.Add((float)pa.Z);
-                pts.Add((float)pb.X); pts.Add((float)pb.Y); pts.Add((float)pb.Z);
+                if (src != null)
+                {
+                    pts.Add((float)src[a * 3]); pts.Add((float)src[a * 3 + 1]); pts.Add((float)src[a * 3 + 2]);
+                    pts.Add((float)src[b * 3]); pts.Add((float)src[b * 3 + 1]); pts.Add((float)src[b * 3 + 2]);
+                }
+                else
+                {
+                    var pa = P.Vertices[a]; var pb = P.Vertices[b];
+                    pts.Add((float)pa.X); pts.Add((float)pa.Y); pts.Add((float)pa.Z);
+                    pts.Add((float)pb.X); pts.Add((float)pb.Y); pts.Add((float)pb.Z);
+                }
                 n++;
             }
             _creasePts = pts.ToArray(); _creaseCount = n; _creaseDirty = true;
             _gl?.InvalidateVisual();
         }
 
-        // Drop the cached crease proposal + overlay (fresh mesh, or topology/geometry changed). Idempotent.
+        // The positions to display for the main mesh: the cached proposed/developed geometry when the
+        // DISPLAY "preview proposed mesh" toggle is on (and valid for the current topology), else null
+        // (= use the live mesh's own coordinates).
+        double[] ProposedPreviewPos()
+            => (_sim.ShowProposedMesh && _proposedPos != null && _session != null
+                && _proposedPos.Length == _session.Mesh.Vertices.Count * 3) ? _proposedPos : null;
+
+        // Drop the cached crease proposal + overlay + preview geometry (fresh mesh, or topology/geometry
+        // changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && (_creasePts == null || _creasePts.Length == 0)) return;
-            _creaseFold = null; _creaseA = null; _creaseB = null;
+            if (_creaseFold == null && _proposedPos == null && (_creasePts == null || _creasePts.Length == 0)) return;
+            _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos = null;
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
         }
 
@@ -1448,7 +1474,7 @@ namespace PieceSolver
             if (_meshDirty && !_baking && _session != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                _view.Upload(_session.Mesh);
+                _view.Upload(_session.Mesh, ProposedPreviewPos());
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;

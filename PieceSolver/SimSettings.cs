@@ -148,6 +148,11 @@ namespace PieceSolver
         bool _useMatcap;
         public bool UseMatcap { get => _useMatcap; set => Set(ref _useMatcap, value); }
 
+        // DISPLAY: after Propose, preview the settled (developable, "crease-proposed") mesh the creases
+        // were measured on, instead of the input mesh. Display-only — the live mesh stays the input.
+        bool _showProposedMesh;
+        public bool ShowProposedMesh { get => _showProposedMesh; set => Set(ref _showProposedMesh, value); }
+
         // Crease proposer threshold (degrees): after Propose, an interior edge whose settled fold angle
         // is at least this is drawn as a proposed piece boundary. Live — re-labels without re-proposing.
         double _creaseAngleDeg = 30.0;
