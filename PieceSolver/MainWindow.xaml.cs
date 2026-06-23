@@ -11,7 +11,7 @@ using CreaseMachine;
 
 namespace PieceSolver
 {
-    public partial class MainWindow : Window
+    public partial class MainWindow : Window, IEditorHost
     {
         GLWpfControl _gl;
         MeshView _view;
@@ -69,10 +69,8 @@ namespace PieceSolver
         System.Windows.Point _lastMouse;
         enum DragMode { None, Orbit, Pan, Edit }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = Crease brush
-        // Crease brush: an "opposing magnet" that repels proposed crease edges under the footprint, sliding
-        // each outward across its triangle onto adjacent edges — refines the proposed seam. Edits the
-        // _creaseEdges selection only (no geometry moves). Chassis (pick/preview/stroke/hotkeys) from studio.
-        double _dabAccum;                 // screen-px travelled since the last bump (path-spacing accumulator)
+        // Brush-footprint preview overlay (the hover circle). The brush INTERACTION itself lives in the
+        // Piecer editor; MainWindow only owns the preview dot + picking (exposed to the editor via IEditorHost).
         System.Windows.Point _lastHover;  // last hover position, for the footprint preview
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -90,17 +88,22 @@ namespace PieceSolver
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
         double[] _proposedPos;   // settled (developed) geometry from the last Propose, per original vertex (nV*3); for the DISPLAY preview
-        System.Collections.Generic.HashSet<long> _creaseEdges;   // DERIVED crease set = edges between faces of different region; feeds the overlay + piece viz
-        int[] _faceRegion;       // PRIMARY segmentation: per-face region id (-1 = unused). Seeded by Propose (flood-fill), painted by the Crease brush
-        int _brushRegion = -1;   // active region being painted with = the region of the face clicked on mouse-down (shown light blue)
+        // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
+        // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). Recreated when the mesh changes.
+        Pattern _pattern;
+        // EDITOR: the active interaction. Non-null == a proposal has been accepted and the Crease brush owns the
+        // left-button + hover paths. Set in OpenCreaseReview's onAccept, cleared in ClearProposedCreases (mesh
+        // change / review-cancel / load / reset / subdivide / run / solve). The Piecer instance is retained so
+        // its selection persists across activations. The brush is LIVE only when EditorActive (which also gates
+        // out the transient `_baking` / `_camModal` windows) — exactly the old BrushAvailable condition.
+        Editor _activeEditor;
+        Piecer _piecer;
+        // The old BrushAvailable gate, now expressed over the editor: an editor is bound AND we're not in a
+        // transient blocking state (a bake or a camera-modal). Drives the delegation, preview, and [ / ] keys.
+        bool EditorActive => _activeEditor != null && !_baking && !_camModal;
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
         bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
-        bool _removing;          // Ctrl+drag "remove pieces" gesture is in progress (faces marked, fully-covered pieces removed on mouse-up)
-        System.Collections.Generic.HashSet<int> _touched;   // faces marked during the current remove gesture (light red; a wholly-marked piece -> dark red -> removed)
-        bool _stroking;          // a paint drag has passed the click-vs-drag threshold -> painting; a bare click only SELECTS (never paints)
-        System.Windows.Point _strokeStart;        // mouse-down position, to measure the drag threshold
-        const double StrokeThresholdPx = 6.0;     // drag distance (px) before a paint stroke begins (a click within this just selects)
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -113,6 +116,7 @@ namespace PieceSolver
         {
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
+            _piecer = new Piecer(this);   // the Piecing editor; activated after Propose -> Accept (see OpenCreaseReview)
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
             // hidden by default. Created now so Log() works from startup; its Owner is set lazily on
@@ -260,11 +264,11 @@ namespace PieceSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
-                else if (e.Key == Key.OemCloseBrackets && BrushAvailable && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
+                else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1.2); UpdatePreview(_lastHover); e.Handled = true;
                 }
-                else if (e.Key == Key.OemOpenBrackets && BrushAvailable && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
+                else if (e.Key == Key.OemOpenBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
                 {
                     ResizeBrush(1.0 / 1.2); UpdatePreview(_lastHover); e.Handled = true;
                 }
@@ -386,6 +390,7 @@ namespace PieceSolver
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { Title = "PieceSolver — missing: " + path; return; }
             try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
             catch (Exception ex) { Title = "PieceSolver — load failed: " + ex.Message; return; }
+            RebindPattern();          // the partition companion now wraps the new mesh
             _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
@@ -727,7 +732,8 @@ namespace PieceSolver
             ShowCamModal("Review creases — drag Crease ∠, then Accept", BuildCreaseReviewBody(),
                 onAccept: () =>
                 {
-                    RebuildPieces();   // _camModal now false -> recolour to neutral; creases stay committed
+                    _activeEditor = _piecer;   // proposal accepted -> the Crease brush goes live (was: _faceRegion != null)
+                    RebuildPieces();   // _camModal now false -> recolour to neutral (via the editor's FaceFill); creases stay committed
                     Log($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
                     Title = "PieceSolver — " + _creaseCount + " creases committed";
                 },
@@ -787,70 +793,29 @@ namespace PieceSolver
         // Re-seed the per-FACE region map from the threshold creases (DISCARDS brush paint), then derive the
         // crease set from those region boundaries and rebuild the overlay. The region map is primary; creases
         // are whatever separates two regions. A dangling threshold crease (doesn't split a region) is dropped.
-        void RelabelCreases() { SeedCreaseEdges(); SeedRegions(); DeriveCreaseEdges(); RebuildCreaseOverlay(); }
+        // Seed a provisional crease set (into the Pattern's CreaseMap) to flood-fill the initial regions, then
+        // re-seed the per-FACE region map from it (DISCARDS brush paint) and re-derive the real region-boundary
+        // creases, then rebuild the overlay. The region map is primary; creases are whatever separates two
+        // regions. A dangling threshold crease (doesn't split a region) is dropped. Piecer inactive (modal).
+        void RelabelCreases()
+        {
+            SeedCreaseEdges();          // provisional crease set into _pattern.CreaseMap
+            _piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
+            _pattern?.Seed();           // flood-fill the regions across non-crease edges
+            _pattern?.RegenCrease();    // overwrite CreaseMap with the real region-boundary creases
+            RebuildCreaseOverlay();
+        }
 
         // Seed a provisional crease set from the threshold-labeled proposed edges (only used to flood-fill the
-        // initial regions in SeedRegions; DeriveCreaseEdges then overwrites _creaseEdges with the real boundaries).
+        // initial regions in _pattern.Seed; RegenCrease then overwrites CreaseMap with the real boundaries).
         void SeedCreaseEdges()
         {
-            _creaseEdges = new System.Collections.Generic.HashSet<long>();
+            if (_pattern == null) return;
+            _pattern.CreaseMap = new System.Collections.Generic.HashSet<long>();
             if (_creaseFold == null) return;
             double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
             for (int i = 0; i < _creaseFold.Length; i++)
-                if (_creaseFold[i] >= thr) _creaseEdges.Add(EdgeKey(_creaseA[i], _creaseB[i]));
-        }
-
-        // Flood-fill face regions across non-crease interior edges (a crease blocks the merge), producing the
-        // per-face _faceRegion map (compacted ids 0..N-1; -1 for unused faces). This is the primary segmentation
-        // the Crease brush paints. Resets the active paint region (ids are renumbered).
-        void SeedRegions()
-        {
-            _faceRegion = null; _brushRegion = -1;
-            if (_session == null) return;
-            var P = _session.Mesh;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                if (_creaseEdges != null && _creaseEdges.Contains(EdgeKey(a, b))) continue;
-                int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
-            }
-            var region = new int[nF];
-            var rootId = new System.Collections.Generic.Dictionary<int, int>();
-            int count = 0;
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) { region[f] = -1; continue; }
-                int r = Find(f); if (!rootId.TryGetValue(r, out int id)) { id = count++; rootId[r] = id; }
-                region[f] = id;
-            }
-            _faceRegion = region;
-        }
-
-        // Derive the crease set from the region map: an interior edge is a crease iff its two faces are in
-        // different regions. Called after every paint (and after SeedRegions) so the overlay + piece grooves
-        // always trace the current region boundaries.
-        void DeriveCreaseEdges()
-        {
-            _creaseEdges = new System.Collections.Generic.HashSet<long>();
-            if (_session == null || _faceRegion == null) return;
-            var P = _session.Mesh;
-            int nH = P.Halfedges.Count;
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0 || _faceRegion[f1] == _faceRegion[f2]) continue;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                _creaseEdges.Add(EdgeKey(a, b));
-            }
+                if (_creaseFold[i] >= thr) _pattern.CreaseMap.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the
@@ -858,7 +823,8 @@ namespace PieceSolver
         // happens in OnRender. The Crease brush calls this after each bump; the slider re-seeds first.
         void RebuildCreaseOverlay()
         {
-            if (_creaseEdges == null || _creaseEdges.Count == 0 || _session == null)
+            var creaseMap = _pattern?.CreaseMap;
+            if (creaseMap == null || creaseMap.Count == 0 || _session == null)
             {
                 _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
                 return;
@@ -868,7 +834,7 @@ namespace PieceSolver
             double[] src = ProposedPreviewPos();   // place creases on the previewed mesh when shown, else M0
             var pts = new System.Collections.Generic.List<float>();
             int n = 0;
-            foreach (long key in _creaseEdges)
+            foreach (long key in creaseMap)
             {
                 int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
                 if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
@@ -897,13 +863,20 @@ namespace PieceSolver
             => (_sim.ShowProposedMesh && _proposedPos != null && _session != null
                 && _proposedPos.Length == _session.Mesh.Vertices.Count * 3) ? _proposedPos : null;
 
+        // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
+        // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
+        // exactly what ClearProposedCreases would set them to anyway.
+        void RebindPattern() { _pattern = new Pattern(_session?.Mesh); }
+
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos == null && _creaseEdges == null && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
+            if (_creaseFold == null && _proposedPos == null && (_pattern == null || _pattern.CreaseMap == null) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos = null;
-            _creaseEdges = null; _faceRegion = null; _brushRegion = -1;
+            if (_pattern != null) { _pattern.CreaseMap = null; _pattern.PieceMap = null; }
+            _piecer?.ClearSelection();
+            _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
             _showPieces = false; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
@@ -914,7 +887,8 @@ namespace PieceSolver
         // angle change, on a brush stroke, and on the proposed-mesh preview toggle.
         void RebuildPieces()
         {
-            if (_session == null || _creaseEdges == null || _creaseEdges.Count == 0)
+            var creaseMap = _pattern?.CreaseMap;
+            if (_session == null || creaseMap == null || creaseMap.Count == 0)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
             int nV = P.Vertices.Count, nF = P.Faces.Count;
@@ -925,8 +899,8 @@ namespace PieceSolver
 
             // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
             // missing or stale for this topology.
-            if (_faceRegion == null || _faceRegion.Length != nF) SeedRegions();
-            int[] pieceId = _faceRegion;
+            if (_pattern.PieceMap == null || _pattern.PieceMap.Length != nF) _pattern.Seed();
+            int[] pieceId = _pattern.PieceMap;
             int pieceCount = 0; for (int f = 0; f < nF; f++) if (pieceId[f] + 1 > pieceCount) pieceCount = pieceId[f] + 1;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
@@ -935,7 +909,7 @@ namespace PieceSolver
             _pieceInset = 0.06f * meshR;
             var dist = new float[nV]; for (int v = 0; v < nV; v++) dist[v] = cap;
             var pq = new System.Collections.Generic.PriorityQueue<int, float>();
-            foreach (long key in _creaseEdges)
+            foreach (long key in creaseMap)
             {
                 int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
                 if (a >= 0 && a < nV && dist[a] != 0f) { dist[a] = 0f; pq.Enqueue(a, 0f); }
@@ -978,30 +952,23 @@ namespace PieceSolver
             var col = new System.Collections.Generic.List<float>(nF * 9);
             var dst = new System.Collections.Generic.List<float>(nF * 3);
             var edg = new System.Collections.Generic.List<float>(nF * 12);
-            // Remove-gesture preview: marked faces tint red; a wholly-marked piece tints darker (it will be removed).
-            var marked = (_removing && _touched != null && _touched.Count > 0) ? _touched : null;
-            var fullyMarked = marked != null ? FullyMarkedRegions() : null;
+            // Colour source split (grooves delineate the pieces in every case; this only sets the FILL tint):
+            //   - crease review (cam-modal): settled -> full rainbow patchwork (PieceColor); mid-drag -> neutral
+            //     white (the crease shader still shows the pieces, but no colour churns while you slide the angle)
+            //   - brush mode: the active EDITOR's per-face fill (active region light-blue / remove preview red /
+            //     null -> white). FaceFillBegin precomputes the remove set ONCE so FaceFill stays O(1) per face.
+            _activeEditor?.FaceFillBegin();
             for (int f = 0; f < nF; f++)
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                // Colour rule (grooves delineate the pieces in every case; this only sets the FILL tint):
-                //   - remove gesture, marked face   -> red (dark if its whole piece is marked = will be removed)
-                //   - crease review, settled        -> full rainbow patchwork (PieceColor)
-                //   - crease review, mid-drag       -> neutral white: the crease shader still shows where the
-                //                                      pieces are, but no colour churns while you slide the angle
-                //   - brush mode                    -> neutral white, except the active paint region (light blue)
                 Vector3 cc;
-                if (marked != null && marked.Contains(f) && pieceId[f] != _brushRegion)   // active selection is protected -> never tinted red
-                    cc = fullyMarked.Contains(pieceId[f]) ? RemoveDark : RemoveLight;
-                else
-                    cc = (_camModal && !_angleDragging) ? PieceColor(pieceId[f])
-                       : (!_camModal && pieceId[f] == _brushRegion) ? ActiveRegionColor
-                       : Vector3.One;
+                if (_camModal) cc = _angleDragging ? Vector3.One : PieceColor(pieceId[f]);   // crease-review colouring stays HERE
+                else cc = _activeEditor?.FaceFill(f, pieceId[f]) ?? Vector3.One;              // brush colouring comes from the editor
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
-                bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
-                bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
-                bool c2 = _creaseEdges.Contains(EdgeKey(fv[2], fv[0]));   // edge 2 = (v2,v0)
+                bool c0 = creaseMap.Contains(Pattern.EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
+                bool c1 = creaseMap.Contains(Pattern.EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
+                bool c2 = creaseMap.Contains(Pattern.EdgeKey(fv[2], fv[0]));   // edge 2 = (v2,v0)
                 // A groove belongs only to a triangle that actually CONTAINS a crease edge. Any triangle
                 // with no crease edge gets flat-tinted (flag = 1): this kills every spurious groove that the
                 // per-vertex field draws along a non-crease edge whose two endpoints are crease vertices
@@ -1027,13 +994,7 @@ namespace PieceSolver
             _gl?.InvalidateVisual();
         }
 
-        // The active paint region (the one the Crease brush is currently painting with) is shown in this light
-        // blue, picked from the rainbow palette's hue/sat/val so it sits naturally among the piece colours.
-        static readonly Vector3 ActiveRegionColor = HsvToRgb(0.56f, 0.5f, 0.97f);
-
-        // Remove-gesture preview tints: light red = a marked face, dark red = a wholly-marked piece (to be removed).
-        static readonly Vector3 RemoveLight = new Vector3(0.96f, 0.62f, 0.60f);
-        static readonly Vector3 RemoveDark = new Vector3(0.80f, 0.16f, 0.16f);
+        // (The active-region + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)
 
         // Distinct per-piece colour via a golden-ratio hue rotation, so adjacent pieces always differ.
         static Vector3 PieceColor(int id)
@@ -1240,6 +1201,7 @@ namespace PieceSolver
             }
 
             _session.Subdivide();                            // refine M
+            RebindPattern();                                 // 1->4 renumbers verts/faces -> rewrap the partition on the new mesh
             if (hadFlat)
             {
                 _flat = MeshOps.UniformSubdivide(_flat);     // refine M' identically -> alignment preserved
@@ -1278,6 +1240,7 @@ namespace PieceSolver
             if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
             catch (Exception ex) { Title = "PieceSolver — reset failed: " + ex.Message; return; }
+            RebindPattern();          // the partition companion now wraps the reloaded mesh
             _totalIters = 0;
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
@@ -1544,8 +1507,8 @@ namespace PieceSolver
             return flip;
         }
 
-        // Mouse scheme: right-drag = orbit, Shift+right-drag = pan. Wheel = zoom (wired in ctor).
-        // Left-drag = Crease brush when that tool is on (else does nothing).
+        // Mouse scheme: right-drag = orbit, Shift+right-drag = pan. Wheel = zoom (wired in ctor). Left-button +
+        // hover delegate to the active editor (the Crease brush, when one is active); else they do nothing.
         void OnMouseDown(object sender, MouseButtonEventArgs e)
         {
             _lastMouse = e.GetPosition(_gl);
@@ -1555,39 +1518,7 @@ namespace PieceSolver
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (BrushAvailable)
-                {
-                    _dabAccum = 0;
-                    if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
-                    {
-                        // CTRL+drag = remove pieces: mark faces under the brush (light red); a wholly-marked
-                        // piece reads dark red and is removed on mouse-up (its faces heal into the dominant
-                        // neighbour). No region painting happens during a remove gesture.
-                        _removing = true; _touched = new System.Collections.Generic.HashSet<int>();
-                        if (PickSurface(_lastMouse, out var hit)) MarkFacesUnderBrush(hit);
-                        RebuildPieces();
-                    }
-                    else if (PickFace(_lastMouse, out int f0, out var hit))
-                    {
-                        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
-                        {
-                            // SHIFT: mint a brand-NEW region and seed it on the click itself (the bullseye needs
-                            // the dab now). Dragging then grows it; each Shift+click mints another new region.
-                            _brushRegion = NewRegionId(); _stroking = true;
-                            if (PaintRegionUnderBrush(hit)) SplitDisconnectedRegions();   // seeding can also pinch a region in two
-                            if (_showPieces) RebuildPieces();
-                        }
-                        else
-                        {
-                            // Plain click: SELECT this piece only -- NO paint dab. Painting begins only once the
-                            // drag passes StrokeThresholdPx, so a bare click (or A/B/A/B clicking) just
-                            // re-highlights the active selection and never nudges a boundary.
-                            _brushRegion = (f0 >= 0 && f0 < _faceRegion.Length) ? _faceRegion[f0] : -1;
-                            _strokeStart = _lastMouse; _stroking = false;
-                            if (_showPieces) RebuildPieces();   // show the active-selection highlight
-                        }
-                    }
-                }
+                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, Keyboard.Modifiers);
             }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
@@ -1597,14 +1528,7 @@ namespace PieceSolver
         {
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
-            if (_removing)
-            {
-                FinalizeRemoval();                       // remove the wholly-marked pieces, heal into dominant neighbours
-                _removing = false; _touched = null;
-                if (_showPieces) RebuildPieces();        // drop the red preview, show the healed regions
-            }
-            else if (_stroking && _showPieces) RebuildPieces();   // final settle ONLY if a paint stroke actually ran (a bare click already re-highlighted on down)
-            _stroking = false;
+            if (EditorActive) _activeEditor.OnPointerUp(_lastMouse);
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
@@ -1613,24 +1537,12 @@ namespace PieceSolver
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
-                if (BrushAvailable) UpdatePreview(p);   // footprint preview on hover
+                if (EditorActive) _activeEditor.OnHover(p);   // footprint preview on hover (no-op when no editor is active)
                 return;
             }
             if (_drag == DragMode.Edit)
             {
-                if (BrushAvailable)
-                {
-                    if (_removing) BrushStrokeTo(p);   // remove: mark faces along the path
-                    else
-                    {
-                        if (!_stroking)
-                        {
-                            double mx = p.X - _strokeStart.X, my = p.Y - _strokeStart.Y;
-                            if (mx * mx + my * my >= StrokeThresholdPx * StrokeThresholdPx) _stroking = true;   // click -> drag
-                        }
-                        if (_stroking) BrushStrokeTo(p);   // paint only once past the click-vs-drag threshold
-                    }
-                }
+                if (EditorActive) _activeEditor.OnPointerMove(p);
                 _lastMouse = p;
                 return;
             }
@@ -1667,244 +1579,16 @@ namespace PieceSolver
             InvalidateView();
         }
 
-        // ===================== Crease brush (the one brush) =====================
-
-        // The Crease brush is CONTEXTUAL (no on/off toggle): live whenever the model has pieces (after
-        // Propose -> Accept), nothing is baking, and no modal is up.
-        bool BrushAvailable => _session != null && !_baking && !_camModal && _faceRegion != null;
+        // ===================== Crease brush — host-side helpers (the interaction lives in Piecer) =====================
 
         // [ / ] grow / shrink the brush (the same VM param the BRUSH Size slider binds to).
         void ResizeBrush(double factor) => _sim.BrushSize = Math.Clamp(_sim.BrushSize * factor, 1.0, 100.0);
 
-        // Place a bump every `spacing` screen-pixels along the stroke path (a -> b), so it tracks path
-        // LENGTH, not time. _dabAccum carries the leftover distance across moves.
-        void BrushStrokeTo(System.Windows.Point b)
-        {
-            double dx = b.X - _lastMouse.X, dy = b.Y - _lastMouse.Y;
-            double seg = Math.Sqrt(dx * dx + dy * dy);
-            if (seg < 1e-6) return;
-            double spacing = BrushSpacingPx(b);
-            double pos = spacing - _dabAccum;
-            bool changed = false;
-            while (pos <= seg)
-            {
-                double t = pos / seg;
-                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit))
-                {
-                    if (_removing) { if (MarkFacesUnderBrush(hit)) changed = true; }   // remove gesture: mark faces
-                    else if (PaintRegionUnderBrush(hit)) changed = true;               // paint gesture: grow active region
-                }
-                pos += spacing;
-            }
-            _dabAccum = seg - (pos - spacing);
-            if (changed)
-            {
-                if (!_removing) SplitDisconnectedRegions();   // a stroke can carve a region into islands -> give the smaller ones new ids
-                if (_showPieces) RebuildPieces();             // live: recompute once per mouse-move (throttle), not per dab
-            }
-        }
-
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
-        double BrushSpacingPx(System.Windows.Point screen)
+        public double BrushSpacingPx(System.Windows.Point screen)
         {
             if (_session != null && PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
             return 8.0;
-        }
-
-        // One Crease-brush dab: paint REGION MEMBERSHIP. Every face whose centroid falls within the brush
-        // radius of `center` is reassigned to the active region (_brushRegion = the region clicked on
-        // mouse-down). Brushing across a boundary therefore GROWS the active region into its neighbour — the
-        // crease (a region boundary) follows the brush. Re-derives the crease set + overlay; the caller
-        // re-pieces. No geometry moves.
-        bool PaintRegionUnderBrush(Vector3 center)
-        {
-            if (_faceRegion == null || _brushRegion < 0 || _session == null) return false;
-            var P = _session.Mesh;
-            float R2 = (float)(BrushWorldRadius * BrushWorldRadius);
-            int nF = P.Faces.Count;
-            bool changed = false;
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused || _faceRegion[f] == _brushRegion) continue;
-                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                Vector3 c = (BV(P, fv[0]) + BV(P, fv[1]) + BV(P, fv[2])) * (1f / 3f);
-                if ((c - center).LengthSquared <= R2) { _faceRegion[f] = _brushRegion; changed = true; }
-            }
-            if (changed) { DeriveCreaseEdges(); RebuildCreaseOverlay(); }
-            return changed;
-        }
-
-        // One remove-brush dab: add every face whose centroid is within the brush radius to the marked set
-        // (_touched). Pure marking -- no region change; the actual removal happens on mouse-up.
-        bool MarkFacesUnderBrush(Vector3 center)
-        {
-            if (_touched == null || _session == null) return false;
-            var P = _session.Mesh;
-            float R2 = (float)(BrushWorldRadius * BrushWorldRadius);
-            int nF = P.Faces.Count;
-            bool changed = false;
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused || _touched.Contains(f)) continue;
-                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                Vector3 c = (BV(P, fv[0]) + BV(P, fv[1]) + BV(P, fv[2])) * (1f / 3f);
-                if ((c - center).LengthSquared <= R2) { _touched.Add(f); changed = true; }
-            }
-            return changed;
-        }
-
-        // The set of regions whose faces are ALL marked (so they read dark red and will be removed). O(F).
-        // The ACTIVE SELECTION is deliberately excluded -- it is never removed (even if fully covered), so it
-        // stays protected in both the preview and the removal.
-        System.Collections.Generic.HashSet<int> FullyMarkedRegions()
-        {
-            var result = new System.Collections.Generic.HashSet<int>();
-            if (_touched == null || _touched.Count == 0 || _faceRegion == null || _session == null) return result;
-            var P = _session.Mesh; int nF = P.Faces.Count;
-            var total = new System.Collections.Generic.Dictionary<int, int>();
-            var hit = new System.Collections.Generic.Dictionary<int, int>();
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int r = _faceRegion[f]; if (r < 0) continue;
-                total[r] = DictGet(total, r) + 1;
-                if (_touched.Contains(f)) hit[r] = DictGet(hit, r) + 1;
-            }
-            foreach (var kv in total) if (kv.Key != _brushRegion && DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
-            return result;
-        }
-
-        // Mouse-up of a Ctrl remove gesture: delete every wholly-marked piece (the ACTIVE SELECTION is never
-        // removed) and HEAL the gap by merging its faces into a surviving neighbour -- the dominant one (most
-        // shared border), but preferring the active selection when it borders the blob unless the dominant's
-        // border is >= 3x the selection's. Connected removed pieces heal together as one blob; a blob with no
-        // surviving neighbour (e.g. a whole disconnected component) is left as-is.
-        void FinalizeRemoval()
-        {
-            var P = _session?.Mesh;
-            if (P == null || _faceRegion == null || _touched == null) return;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var remove = FullyMarkedRegions();
-            if (remove.Count == 0) return;
-            bool IsRemoved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && remove.Contains(_faceRegion[f]);
-
-            // Union connected removed faces into blobs (across any edge where BOTH faces are being removed).
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (IsRemoved(f1) && IsRemoved(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
-
-            // Tally each blob's shared boundary (edge count) with each SURVIVING region.
-            var tally = new System.Collections.Generic.Dictionary<int, System.Collections.Generic.Dictionary<int, int>>();
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                bool r1 = IsRemoved(f1), r2 = IsRemoved(f2);
-                if (r1 == r2) continue;                          // both removed (internal) or both surviving
-                int rf = r1 ? f1 : f2, sf = r1 ? f2 : f1;        // removed face / surviving face
-                int blob = Find(rf), sreg = _faceRegion[sf];
-                if (!tally.TryGetValue(blob, out var d)) { d = new System.Collections.Generic.Dictionary<int, int>(); tally[blob] = d; }
-                d[sreg] = DictGet(d, sreg) + 1;
-            }
-
-            // Heal target per blob = dominant surviving neighbour, BUT prefer the ACTIVE SELECTION when it
-            // borders the blob -- unless the dominant neighbour's shared border is >= 3x the selection's (then
-            // the dominant wins, e.g. 10 vs 2 -> dominant). Keeps work merging into the piece you're holding.
-            var target = new System.Collections.Generic.Dictionary<int, int>();
-            foreach (var kv in tally)
-            {
-                int dom = -1, domC = -1;
-                foreach (var nb in kv.Value) if (nb.Value > domC) { domC = nb.Value; dom = nb.Key; }
-                if (dom < 0) continue;
-                int chosen = dom;
-                if (_brushRegion >= 0 && kv.Value.TryGetValue(_brushRegion, out int selC) && selC > 0 && domC < 3 * selC)
-                    chosen = _brushRegion;
-                target[kv.Key] = chosen;
-            }
-
-            int healed = 0, stuck = 0;
-            for (int f = 0; f < nF; f++)
-            {
-                if (!IsRemoved(f)) continue;
-                if (target.TryGetValue(Find(f), out int tgt)) _faceRegion[f] = tgt; else stuck++;
-            }
-            foreach (var r in remove) healed++;
-            // (the active selection is never in `remove`, so it is always preserved as the heal target)
-            DeriveCreaseEdges();
-            RebuildCreaseOverlay();
-            Log(stuck > 0 ? $"removed {healed} piece(s); {stuck} face(s) had no surviving neighbour (left as-is)"
-                          : $"removed {healed} piece(s)");
-        }
-
-        // A fresh, unused region id (one past the current max), so Shift+paint introduces a NEW region rather
-        // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten regions are fine.
-        int NewRegionId()
-        {
-            int mx = -1;
-            if (_faceRegion != null) for (int i = 0; i < _faceRegion.Length; i++) if (_faceRegion[i] > mx) mx = _faceRegion[i];
-            return mx + 1;
-        }
-
-        static long EdgeKey(int a, int b) { int lo = Math.Min(a, b), hi = Math.Max(a, b); return ((long)lo << 32) | (uint)hi; }
-        static int DictGet(System.Collections.Generic.Dictionary<int, int> d, int k) => d.TryGetValue(k, out var v) ? v : 0;
-
-        // A brush stroke can carve one region into several edge-disconnected islands that still share its id
-        // (e.g. painting B straight through A leaves two A-halves). Re-split every such region: the LARGEST
-        // island keeps the original id, each other island gets a fresh id. (Creases are unaffected -- the
-        // islands are separated by OTHER regions, so no A|A' edge exists.) Returns true if it renumbered.
-        bool SplitDisconnectedRegions()
-        {
-            if (_faceRegion == null || _session == null) return false;
-            var P = _session.Mesh;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            // within-region connectivity: union faces sharing an edge that have the SAME region id.
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (_faceRegion[f1] == _faceRegion[f2]) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
-            var blobSize = new System.Collections.Generic.Dictionary<int, int>();
-            var regionBlobs = new System.Collections.Generic.Dictionary<int, System.Collections.Generic.List<int>>();
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int r = _faceRegion[f]; if (r < 0) continue;
-                int root = Find(f);
-                blobSize[root] = DictGet(blobSize, root) + 1;
-                if (!regionBlobs.TryGetValue(r, out var lst)) { lst = new System.Collections.Generic.List<int>(); regionBlobs[r] = lst; }
-                if (!lst.Contains(root)) lst.Add(root);
-            }
-            int nextId = NewRegionId();
-            bool changed = false;
-            foreach (var kv in regionBlobs)
-            {
-                var blobs = kv.Value;
-                if (blobs.Count <= 1) continue;                  // region is still connected
-                int keep = blobs[0], keepSize = DictGet(blobSize, blobs[0]);
-                foreach (int b in blobs) { int s = DictGet(blobSize, b); if (s > keepSize) { keepSize = s; keep = b; } }
-                var newIdFor = new System.Collections.Generic.Dictionary<int, int>();
-                foreach (int b in blobs) if (b != keep) newIdFor[b] = nextId++;   // largest keeps the id; others get fresh ids
-                for (int f = 0; f < nF; f++)
-                {
-                    if (P.Faces[f].IsUnused || _faceRegion[f] != kv.Key) continue;
-                    if (newIdFor.TryGetValue(Find(f), out int nid)) { _faceRegion[f] = nid; changed = true; }
-                }
-            }
-            return changed;
         }
 
         // Build a pick ray (eye + direction) from the camera params, convention-independent. Z-up, 45deg FOV.
@@ -1927,14 +1611,14 @@ namespace PieceSolver
         }
 
         // Build a pick ray and intersect the mesh (nearest hit point).
-        bool PickSurface(System.Windows.Point screen, out Vector3 hit)
+        public bool PickSurface(System.Windows.Point screen, out Vector3 hit)
         {
             hit = default;
             return PickRay(screen, out var eye, out var rd) && RayMeshHit(eye, rd, out hit);
         }
 
         // Like PickSurface but also returns the nearest hit FACE index (for seeding the brush's active region).
-        bool PickFace(System.Windows.Point screen, out int face, out Vector3 hit)
+        public bool PickFace(System.Windows.Point screen, out int face, out Vector3 hit)
         {
             face = -1; hit = default;
             if (!PickRay(screen, out var eye, out var rd)) return false;
@@ -1992,7 +1676,7 @@ namespace PieceSolver
 
         void UpdatePreview(System.Windows.Point cursor)
         {
-            if (!BrushAvailable || !PickSurface(cursor, out var hit))
+            if (!EditorActive || !PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
             double rpx = ScreenRadiusPx(hit);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;
@@ -2000,12 +1684,24 @@ namespace PieceSolver
             _previewDot.Visibility = Visibility.Visible;
         }
 
+        // ===================== IEditorHost (the wall the active editor talks through) =====================
+
+        PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
+        Pattern IEditorHost.Pattern => _pattern;
+        bool IEditorHost.ShowPieces => _showPieces;
+        void IEditorHost.RefreshPieces() => RebuildPieces();
+        void IEditorHost.RefreshCreaseOverlay() => RebuildCreaseOverlay();
+        void IEditorHost.ShowBrushPreview(System.Windows.Point screen) => UpdatePreview(screen);
+        void IEditorHost.HideBrushPreview() => _previewDot.Visibility = Visibility.Collapsed;
+        void IEditorHost.Invalidate() => InvalidateView();
+        void IEditorHost.Log(string msg) => Log(msg);
+
         // World-space brush radius. The slider value (1..100) maps at half scale so its low end is fine enough.
         // Used by BOTH the paint footprint and the screen preview, so they always agree.
-        double BrushWorldRadius => _sim.BrushSize * 0.5;
+        public double BrushWorldRadius => _sim.BrushSize * 0.5;
 
         // The brush's world radius projected to screen pixels at the given surface point's depth.
-        double ScreenRadiusPx(Vector3 hit)
+        public double ScreenRadiusPx(Vector3 hit)
         {
             Vector3 dir = CamDir();
             Vector3 eye = _target + dir * _distance;
