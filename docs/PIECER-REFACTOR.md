@@ -44,7 +44,7 @@ nowhere to live *on* the mesh. They live in `Pattern`, index-coupled to that mes
   Idempotent, **never recorded** (re-runs on undo). e.g. `RegenCrease`.
 - **query** — read-only interrogation (NewRegionId, FullyMarked, FacesUnderBrush). No
   mutation, never in tx.
-- **Chapter** — a reset boundary that starts a fresh piecing epoch (Seed / Propose /
+- **Chapter** — a reset boundary that starts a fresh piecing pass (Seed / Propose /
   Crease-angle change). The undo stack **checkpoints** here; no undo across a Chapter.
 - **undo stack** — ordered committed tx, each reversed via its sparse delta. *(future)*
 - **GUID** — stable entity identity, surviving edits/renumbering. **Not built yet** — the
@@ -75,7 +75,7 @@ Three buckets, behaving differently under tx:
 | Role | Members | Surfaces (now) | Future manip (tx) |
 |---|---|---|---|
 | **mutating op** | Paint, Remove, Split | `bool changed` / counts | sparse `{face -> old,new}` + entity births/deaths |
-| **mutating op (reset)** | Seed | whole `PieceMap` | whole partition — an **epoch reset** (a Chapter), not a delta |
+| **mutating op (reset)** | Seed | whole `PieceMap` | whole partition — a **Chapter reset**, not a delta |
 | **regen** | RegenCrease | new `CreaseMap` | — never recorded; re-runs on undo |
 | **query** | NewRegionId, FullyMarked, FacesUnderBrush | a value | — never in tx |
 
@@ -99,7 +99,8 @@ touched faces) is **not** a Pattern op — it mutates the Piecer's transient; it
 - **One gesture = one tx; sparse deltas via copy-on-first-write.** The undo record stores
   authoritative deltas only (`{face -> old,new}` + entity births/deaths), never the derived
   `CreaseMap` (re-derive on undo). Redo must reinstate the *same* ids. Records are
-  topology-epoch-scoped (a Chapter checkpoints them). *(future)*
+  scoped to a Chapter (a Chapter checkpoints them, since a topology change invalidates the
+  face-index keys). *(future)*
 - **PieceId handle.** A `readonly struct` over the int — ints stay in the dense `PieceMap`
   array (hot path); the typed handle appears only at the API/selection boundary. The
   "selection is a Piece" guarantee is free via the type. The polymorphic `Selection`
