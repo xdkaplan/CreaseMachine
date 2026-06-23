@@ -394,7 +394,7 @@
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="1" Maximum="100" Value="{Binding BrushSize}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
-                                <TextBlock Text="Propose creases, set Crease ∠ in the review and Accept. Then paint here: click a patch to select it (light blue) and drag across a seam to grow it. Re-Propose to redo the angle." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
+                                <TextBlock Text="Propose creases, set Crease ∠ in the review and Accept. Then paint here: click a patch to select it (light blue) and drag across a seam to grow it. Shift+click starts a NEW region (e.g. a bullseye inside a patch). Re-Propose to redo the angle." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
                             </StackPanel>
                         </TabItem>
                     </TabControl>

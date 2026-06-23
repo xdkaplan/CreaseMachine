@@ -1541,13 +1541,17 @@ namespace PieceSolver
                 if (_sim.CreaseBrush && _session != null && !_baking && !_camModal && _faceRegion != null)
                 {
                     _dabAccum = 0;
-                    // Pick the face under the click -> its region becomes the ACTIVE paint region. Dragging then
-                    // grows that region into whatever you brush over (the boundary follows the brush).
+                    // Pick the face under the click. Normally its region becomes the ACTIVE paint region (sample);
+                    // holding SHIFT instead starts a brand-NEW region, so painting carves it out of whatever was
+                    // there (e.g. Shift+click inside a disc -> a bullseye: new region A inside region B). Dragging
+                    // then grows the active region; each Shift+click mints another new region.
                     if (PickFace(_lastMouse, out int f0, out var hit))
                     {
-                        _brushRegion = (f0 >= 0 && f0 < _faceRegion.Length) ? _faceRegion[f0] : -1;
+                        bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+                        _brushRegion = shift ? NewRegionId()
+                                             : (f0 >= 0 && f0 < _faceRegion.Length ? _faceRegion[f0] : -1);
                         PaintRegionUnderBrush(hit);
-                        if (_showPieces) RebuildPieces();   // recolour the active region light blue + show the first paint
+                        if (_showPieces) RebuildPieces();   // recolour the active region + show the first paint
                     }
                 }
             }
@@ -1664,6 +1668,15 @@ namespace PieceSolver
             }
             if (changed) { DeriveCreaseEdges(); RebuildCreaseOverlay(); }
             return changed;
+        }
+
+        // A fresh, unused region id (one past the current max), so Shift+paint introduces a NEW region rather
+        // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten regions are fine.
+        int NewRegionId()
+        {
+            int mx = -1;
+            if (_faceRegion != null) for (int i = 0; i < _faceRegion.Length; i++) if (_faceRegion[i] > mx) mx = _faceRegion[i];
+            return mx + 1;
         }
 
         static long EdgeKey(int a, int b) { int lo = Math.Min(a, b), hi = Math.Max(a, b); return ((long)lo << 32) | (uint)hi; }
