@@ -147,17 +147,15 @@ namespace PieceSolver
 
         // One remove-brush dab: add every face whose centroid is within the brush radius to the marked set
         // (_touched). Pure marking -- no region change; the actual removal happens on mouse-up.
+        // Mark ALL faces under the brush (both modes). Carve filters to the active piece's faces in
+        // Pattern.Carve; the other marked faces are a no-op affordance (shown in the pre-select colour, never
+        // carved). Pure marking — the actual remove/carve happens on mouse-up.
         bool MarkFacesUnderBrush(Vector3 center)
         {
             if (_touched == null) return false;
-            int act = _selection?.Value ?? -1;
-            var map = _host.Pattern.PieceMap;
             bool changed = false;
             foreach (int f in _host.Pattern.FacesUnderBrush(center, _host.BrushWorldRadius))
-            {
-                if (_carve && (map == null || map[f] != act)) continue;   // carve marks ONLY the active piece's faces
                 if (_touched.Add(f)) changed = true;
-            }
             return changed;
         }
 
@@ -177,11 +175,16 @@ namespace PieceSolver
 
         public override Vector3? FaceFill(int face, int region)
         {
-            // Ctrl-gesture preview on marked faces: CARVE -> every marked (active) face reads the DELETE colour;
-            // REMOVE -> marked faces light red, a wholly-marked piece dark red.
+            // Ctrl-gesture preview on marked faces:
+            //   CARVE  -> the active piece's faces read the DELETE colour (dark red); other faces under the
+            //             brush can't be carved, shown in the lighter PRE-SELECT colour as a no-op affordance.
+            //   REMOVE -> marked faces light red, a wholly-marked piece dark red.
             if (_marked != null && _marked.Contains(face))
-                return _carve ? RemoveDark
-                              : ((_fullyMarked != null && _fullyMarked.Contains(region)) ? RemoveDark : RemoveLight);
+            {
+                if (_carve)
+                    return (_selection.HasValue && region == _selection.Value.Value) ? RemoveDark : RemoveLight;
+                return (_fullyMarked != null && _fullyMarked.Contains(region)) ? RemoveDark : RemoveLight;
+            }
             // Active paint region -> light blue.
             if (_selection.HasValue && region == _selection.Value.Value)
                 return ActiveRegionColor;
