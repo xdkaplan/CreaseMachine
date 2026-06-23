@@ -37,6 +37,7 @@ namespace PieceSolver
 
         public virtual void Activate() { }
         public virtual void Deactivate() { }
+        public virtual void Deselect() { }   // clear any active selection (ESC / empty-canvas click); no-op by default
 
         public virtual void OnPointerDown(Point screen, ModifierKeys mods) { }
         public virtual void OnPointerMove(Point screen) { }

@@ -264,6 +264,7 @@ namespace PieceSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
+                else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { _activeEditor.Deselect(); e.Handled = true; }   // ESC = deselect (same as clicking empty canvas)
                 else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1.2); UpdatePreview(_lastHover); e.Handled = true;
@@ -996,25 +997,12 @@ namespace PieceSolver
 
         // (The active-region + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)
 
-        // Distinct per-piece colour via a golden-ratio hue rotation, so adjacent pieces always differ.
+        // Per-piece colour: cycle the open-color hues at shade 3 (standardized / accessible). Pieces a full
+        // palette-cycle apart in id share a colour, but the deboss grooves always separate them.
         static Vector3 PieceColor(int id)
         {
-            float h = (id * 0.61803398875f) % 1f;
-            return HsvToRgb(h < 0 ? h + 1f : h, 0.5f, 0.95f);
-        }
-        static Vector3 HsvToRgb(float h, float s, float v)
-        {
-            float i = (float)Math.Floor(h * 6f), f = h * 6f - i;
-            float p = v * (1f - s), q = v * (1f - f * s), t = v * (1f - (1f - f) * s);
-            switch (((int)i) % 6)
-            {
-                case 0: return new Vector3(v, t, p);
-                case 1: return new Vector3(q, v, p);
-                case 2: return new Vector3(p, v, t);
-                case 3: return new Vector3(p, q, v);
-                case 4: return new Vector3(t, p, v);
-                default: return new Vector3(v, p, q);
-            }
+            int n = OpenColor.Rainbow3.Length;
+            return OpenColor.Rainbow3[((id % n) + n) % n];
         }
 
         // Worker entry (background thread): pure compute, dispatched single vs multi-component.

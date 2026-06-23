@@ -69,11 +69,7 @@ namespace PieceSolver
                     if (_host.ShowPieces) _host.RefreshPieces();   // show the active-selection highlight
                 }
             }
-            else
-            {
-                // Plain click on empty canvas -> DESELECT, so the next Ctrl gesture is the no-selection remove mode.
-                if (_selection.HasValue) { _selection = null; if (_host.ShowPieces) _host.RefreshPieces(); }
-            }
+            else if (_selection.HasValue) Deselect();   // plain click on empty canvas -> deselect (next Ctrl is the no-selection remove mode)
         }
 
         public override void OnPointerMove(Point screen)
@@ -182,8 +178,8 @@ namespace PieceSolver
             if (_marked != null && _marked.Contains(face))
             {
                 if (_carve)
-                    return (_selection.HasValue && region == _selection.Value.Value) ? RemoveDark : RemoveLight;
-                return (_fullyMarked != null && _fullyMarked.Contains(region)) ? RemoveDark : RemoveLight;
+                    return (_selection.HasValue && region == _selection.Value.Value) ? ToDelete : CarveAffordance;
+                return (_fullyMarked != null && _fullyMarked.Contains(region)) ? ToDelete : PreHighlight;
             }
             // Active paint region -> light blue.
             if (_selection.HasValue && region == _selection.Value.Value)
@@ -192,13 +188,18 @@ namespace PieceSolver
         }
 
         // ---- selection lifecycle ----
-        public void ClearSelection() { _selection = null; }
+        public void ClearSelection() { _selection = null; }   // silent (programmatic — a RebuildPieces follows, e.g. Seed/mesh change)
+        public override void Deselect() { _selection = null; if (_host.ShowPieces) _host.RefreshPieces(); }   // user deselect (ESC / empty-canvas click)
 
-        // ---- colours (the active-region highlight + the remove-gesture preview tints) ----
-        // Active paint region: light blue (= HSV 0.56,0.5,0.97, picked from the rainbow piece palette so it
-        // sits naturally among the piece colours). Remove preview: light red = marked, dark red = wholly-marked.
+        // ---- colours ----
+        // Active-piece highlight — light blue (not yet on the open-color palette; see the colour audit).
         static readonly Vector3 ActiveRegionColor = new Vector3(0.485f, 0.7954f, 0.97f);
-        static readonly Vector3 RemoveLight = new Vector3(0.96f, 0.62f, 0.60f);
-        static readonly Vector3 RemoveDark = new Vector3(0.80f, 0.16f, 0.16f);
+        // Ctrl-gesture preview, on open-color reds:
+        //   no-selection REMOVE -> PreHighlight (Red 3) for a marked face, ToDelete (Red 5) for a wholly-marked piece.
+        //   CARVE               -> ToDelete (Red 5) for the active piece's faces, CarveAffordance (Red 1) for the
+        //                          other (non-carvable) faces under the brush — a no-op affordance.
+        static readonly Vector3 PreHighlight = OpenColor.Red3;
+        static readonly Vector3 ToDelete = OpenColor.Red5;
+        static readonly Vector3 CarveAffordance = OpenColor.Red1;
     }
 }

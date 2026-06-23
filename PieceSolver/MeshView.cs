@@ -65,7 +65,7 @@ namespace PieceSolver
         int _seamVao, _seamVbo, _seamCount;                               // GL_LINES buffer for the seam curve
         int _seamCtrlVao, _seamCtrlVbo, _seamCtrlCount;                   // GL_LINES buffer for the control polygon + crosses
         public bool ShowCreases = false;                                  // overlay proposed piece-boundary creases
-        public Vector3 CreaseColor = new Vector3(60f / 255f, 80f / 255f, 100f / 255f);   // deep slate (60,80,100)
+        public Vector3 CreaseColor = OpenColor.Blue9;   // open-color Blue 9 (#1864ab)
         int _creaseVao, _creaseVbo, _creaseCount;                         // GL_LINES buffer for proposed creases
 
         const string VERT = @"#version 330 core
