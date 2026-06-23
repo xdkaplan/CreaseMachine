@@ -1800,7 +1800,7 @@ namespace PieceSolver
                     RenderbufferTarget.Renderbuffer, _depthRbo);
             }
 
-            GL.ClearColor(0.12f, 0.12f, 0.14f, 1.0f);
+            GL.ClearColor(30f / 255f, 40f / 255f, 50f / 255f, 1.0f);   // background magic colour (30,40,50)
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
             double w = _gl.ActualWidth, h = Math.Max(1, _gl.ActualHeight);

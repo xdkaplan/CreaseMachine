@@ -192,8 +192,8 @@ namespace PieceSolver
         public override void Deselect() { _selection = null; if (_host.ShowPieces) _host.RefreshPieces(); }   // user deselect (ESC / empty-canvas click)
 
         // ---- colours ----
-        // Active-piece highlight — light blue (not yet on the open-color palette; see the colour audit).
-        static readonly Vector3 ActiveRegionColor = new Vector3(0.485f, 0.7954f, 0.97f);
+        // Active-piece highlight — open-color Indigo 3.
+        static readonly Vector3 ActiveRegionColor = OpenColor.Indigo3;
         // Ctrl-gesture preview, on open-color reds:
         //   no-selection REMOVE -> PreHighlight (Red 3) for a marked face, ToDelete (Red 5) for a wholly-marked piece.
         //   CARVE               -> ToDelete (Red 5) for the active piece's faces, CarveAffordance (Red 1) for the

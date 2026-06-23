@@ -55,7 +55,7 @@ namespace PieceSolver
         public Vector3 ModelOffset = Vector3.Zero;   // world translation applied before view (draw a mesh beside another)
         public bool HasMesh => _ready;   // true once a mesh has been uploaded
         public bool ShowEdges = false;   // overlay the triangle edges (used for the flat map M', which is otherwise a featureless flat blob)
-        public Vector3 EdgeColor = new Vector3(0.10f, 0.10f, 0.13f);
+        public Vector3 EdgeColor = OpenColor.Gray4;   // open-color Gray 4 (#ced4da)
         public bool ShowRulings = false;                                  // overlay per-vertex ruling segments
         public Vector3 RulingColor = new Vector3(1.0f, 0.82f, 0.18f);     // gold
         int _rulVao, _rulVbo, _rulCount;                                  // GL_LINES buffer for rulings (positions only)

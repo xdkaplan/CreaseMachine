@@ -16,6 +16,10 @@ namespace PieceSolver
 
         // Blue 9 — the crease lines.
         public static readonly Vector3 Blue9 = Hex(0x1864ab);
+        // Indigo 3 — the active-piece selection highlight.
+        public static readonly Vector3 Indigo3 = Hex(0x91a7ff);
+        // Gray 4 — the mesh edge overlay.
+        public static readonly Vector3 Gray4 = Hex(0xced4da);
 
         // The chromatic hues at shade 3, in hue order — the standardized "rainbow" for per-piece tinting.
         public static readonly Vector3[] Rainbow3 =
