@@ -160,7 +160,7 @@ namespace PieceSolver
 
         // Crease proposer threshold (degrees): after Propose, an interior edge whose settled fold angle
         // is at least this is drawn as a proposed piece boundary. Live — re-labels without re-proposing.
-        double _creaseAngleDeg = 30.0;
+        double _creaseAngleDeg = 10.0;
         public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
 
         // Crease brush (stage 3) is CONTEXTUAL, not a toggle: it is live whenever the model has pieces (after
