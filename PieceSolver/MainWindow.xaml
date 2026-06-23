@@ -308,6 +308,12 @@
                                 </DockPanel>
                                 <CheckBox Content="Preview proposed mesh" IsChecked="{Binding ShowProposedMesh, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,8,0,0"
                                           ToolTip="After Propose, show the settled (developable, 'crease-proposed') mesh the creases were measured on, instead of the input mesh. Display-only — the live mesh stays the input." />
+                                <DockPanel Margin="0,6,0,0">
+                                    <TextBlock DockPanel.Dock="Left" Text="Inset" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                               ToolTip="Piece-view seam width (border / bevel-lip / gap) as a fraction of mesh size — world-relative, stable under zoom. Lower = thinner. Live." />
+                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding InsetWidthFrac, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                    <Slider Minimum="0.003" Maximum="0.12" Value="{Binding InsetWidthFrac}" VerticalAlignment="Center" Margin="6,0" />
+                                </DockPanel>
 
                                 <TextBlock Text="RULING LINES" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <CheckBox Content="Show ruling lines (curvature grain)" IsChecked="{Binding ShowRuling, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,0"

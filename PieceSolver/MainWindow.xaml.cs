@@ -222,7 +222,8 @@ namespace PieceSolver
             _sim.PropertyChanged += (s, e) =>
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
-                    || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual();
+                    || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)
+                    || e.PropertyName == nameof(SimSettings.InsetWidthFrac)) _gl?.InvalidateVisual();
                 else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RebuildCreaseOverlay(); RebuildPieces(); _gl?.InvalidateVisual(); }   // re-place creases + pieces on the new positions (keep edits)
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) { RelabelCreases(); RebuildPieces(); }   // re-seed creases (discards nudges) + re-piece
@@ -1723,7 +1724,7 @@ namespace PieceSolver
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap;            // Shine shading
                 _view.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
-                _view.ShowPieces = _showPieces; _view.InsetWidth = _pieceInset;                // per-piece view (auto-on after Propose)
+                _view.ShowPieces = _showPieces; _view.InsetWidth = (float)_sim.InsetWidthFrac * Math.Max(1e-4f, _view.Radius);   // per-piece view; live inset width (world-relative)
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
                 _view.LicMode = _sim.ShowRuling ? 1 : 0;
                 if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
