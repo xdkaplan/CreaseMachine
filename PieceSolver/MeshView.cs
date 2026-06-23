@@ -15,7 +15,20 @@ namespace PieceSolver
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
         int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp, _uEdge, _uEdgeColor;
+        int _uNoise, _uLicMode, _uNoiseFreq, _uLicStep, _uFieldMax, _uLicStrength, _uTint;
         int _tex;
+        int _vboField;        // per-vertex direction field (attribute @2), for the surface LIC
+        int _noiseTex;        // solid (3D) blue-noise volume the LIC convolves along the field
+        int[] _vMap;          // original-vertex -> compacted-vertex index (set by Upload; -1 = unused)
+        int _usedCount;       // compacted vertex count (matches the @0/@1 buffers)
+        float _fieldMax = 1f; // magnitude normaliser for the field tint
+
+        // --- Surface-LIC controls (set per frame by the host) ---
+        public int LicMode = 0;            // 0 = off, 1 = ruling field, 2 = gradient field
+        public float NoiseFreq = 4f;       // model-space position -> noise texcoord scale (tiles across the mesh)
+        public float LicStep = 0.05f;      // march length per convolution tap, model units
+        public float LicStrength = 0.85f;  // 0..1 depth of the grain modulation on the matcap
+        public float TintAmount = 0f;      // 0..1 magnitude colour tint (magma) blended over the matcap
         bool _hasMatcap;
         int _indexCount;
         bool _ready;
@@ -40,27 +53,49 @@ namespace PieceSolver
         const string VERT = @"#version 330 core
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
+layout(location=2) in vec3 aField;    // per-vertex direction field (model space, length = strength)
 uniform mat4 uMvp;
 uniform mat4 uView;
 uniform mat3 uNormalMat;
 out vec3 vN;
 out vec3 vViewPos;
+out vec3 vField;
+out vec3 vModelPos;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
     vN = uNormalMat * aNormal;            // smooth (averaged) normal -> view space
     vViewPos = (uView * vec4(aPos, 1.0)).xyz;   // view-space position, for the faceted normal
+    vField = aField;                      // interpolated across the triangle; re-normalized per fragment
+    vModelPos = aPos;                     // object-space position, for sampling the solid noise (LIC)
 }";
 
         const string FRAG = @"#version 330 core
 in vec3 vN;
 in vec3 vViewPos;
+in vec3 vField;
+in vec3 vModelPos;
 out vec4 FragColor;
 uniform sampler2D uMatcap;
+uniform sampler3D uNoise;     // solid blue-noise volume, GL_REPEAT-wrapped
 uniform int uHasMatcap;
 uniform float uSharpness;     // 0 = smooth (averaged normal), 1 = faceted (per-face normal)
 uniform float uFacetExp;      // response curve: blend = pow(sharpness, exp). 1 = linear
 uniform int uEdge;            // 1 = edge/wireframe pass -> output solid uEdgeColor
 uniform vec3 uEdgeColor;
+uniform int uLicMode;         // 0 = off, 1/2 = on (the field is chosen host-side)
+uniform float uNoiseFreq;     // model position -> noise texcoord scale
+uniform float uLicStep;       // march length per tap, model units
+uniform float uFieldMax;      // magnitude normaliser for the tint
+uniform float uLicStrength;   // 0..1 depth of the grain modulation
+uniform float uTint;          // 0..1 magnitude colour tint
+
+vec3 magma(float t) {
+    t = clamp(t, 0.0, 1.0);
+    return clamp(vec3(1.70 * t - 0.18,
+                      1.10 * t * t - 0.05,
+                      0.55 * sin(3.14159 * t) + 0.35 * t), 0.0, 1.0);
+}
+
 void main() {
     if (uEdge == 1) { FragColor = vec4(uEdgeColor, 1.0); return; }
     vec3 sn = normalize(vN);
@@ -70,15 +105,41 @@ void main() {
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
     vec3 n = normalize(mix(sn, fn, s));
     if (n.z < 0.0) n = -n;       // orient toward camera (view looks down -z) - winding-independent
-    if (uHasMatcap == 1) {
-        vec2 uv = n.xy * 0.5 + 0.5;
-        FragColor = texture(uMatcap, uv);
-    } else {
+
+    vec3 surf;
+    if (uHasMatcap == 1) { vec2 uv = n.xy * 0.5 + 0.5; surf = texture(uMatcap, uv).rgb; }
+    else {
         vec3 L = normalize(vec3(0.35, 0.55, 0.75));
         float wrap = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
-        vec3 col = mix(vec3(0.16, 0.17, 0.21), vec3(0.82, 0.80, 0.77), wrap);
-        FragColor = vec4(col, 1.0);
+        surf = mix(vec3(0.16, 0.17, 0.21), vec3(0.82, 0.80, 0.77), wrap);
     }
+
+    // Surface LIC: convolve the solid noise along the (re-normalized) per-fragment field direction.
+    // Symmetric +/-d taps -> the streak is a line, not an arrow (matches the field's director nature).
+    if (uLicMode != 0) {
+        float fmag = length(vField);
+        if (fmag > 1e-5) {
+            vec3 d = vField / fmag;
+            const int K = 12;
+            float acc = 0.0, wsum = 0.0;
+            for (int i = -K; i <= K; i++) {
+                float t = float(i);
+                float wgt = 1.0 - abs(t) / float(K + 1);                  // triangular window
+                vec3 sp = (vModelPos + d * (t * uLicStep)) * uNoiseFreq;
+                acc += wgt * textureLod(uNoise, sp, 0.0).r;   // explicit LOD: implicit derivs are undefined in this branch
+                wsum += wgt;
+            }
+            float g = acc / max(wsum, 1e-5);
+            g = clamp((g - 0.5) * 2.2 + 0.5, 0.0, 1.0);                   // contrast the streaks
+            surf *= mix(1.0 - uLicStrength, 1.0, g);                      // grain modulates the matcap
+            if (uTint > 0.0) {
+                float m = clamp(fmag / max(uFieldMax, 1e-8), 0.0, 1.0);
+                vec3 c = magma(m);
+                surf = mix(surf, surf * (0.35 + 0.65 * c) + 0.18 * c, uTint);
+            }
+        }
+    }
+    FragColor = vec4(surf, 1.0);
 }";
 
         public void EnsureProgram()
@@ -94,6 +155,13 @@ void main() {
             _uFacetExp = GL.GetUniformLocation(_prog, "uFacetExp");
             _uEdge = GL.GetUniformLocation(_prog, "uEdge");
             _uEdgeColor = GL.GetUniformLocation(_prog, "uEdgeColor");
+            _uNoise = GL.GetUniformLocation(_prog, "uNoise");
+            _uLicMode = GL.GetUniformLocation(_prog, "uLicMode");
+            _uNoiseFreq = GL.GetUniformLocation(_prog, "uNoiseFreq");
+            _uLicStep = GL.GetUniformLocation(_prog, "uLicStep");
+            _uFieldMax = GL.GetUniformLocation(_prog, "uFieldMax");
+            _uLicStrength = GL.GetUniformLocation(_prog, "uLicStrength");
+            _uTint = GL.GetUniformLocation(_prog, "uTint");
         }
 
         public void SetMatcap(byte[] bgra, int w, int h)
@@ -186,8 +254,53 @@ void main() {
             GL.EnableVertexAttribArray(1);
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
             GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint), indices, BufferUsageHint.DynamicDraw);
+            // The field VBO (@2) is sized to the PREVIOUS vertex count; disable it until SetField
+            // re-uploads for the new mesh, so a stale buffer can't be read out of range. A disabled
+            // attribute reads constant 0 -> the LIC sees a zero field -> no grain (just the matcap).
+            GL.DisableVertexAttribArray(2);
             GL.BindVertexArray(0);
+            _vMap = map; _usedCount = used;
             _ready = _indexCount > 0;
+        }
+
+        // Upload the per-vertex direction field for the surface LIC. dir3 is indexed by ORIGINAL vertex
+        // (length nV*3); it is remapped to the compacted vertex order Upload produced. fieldMax is the
+        // magnitude used to normalise the tint. Call after Upload (and after each mesh change).
+        public void SetField(float[] dir3, float fieldMax)
+        {
+            if (_vMap == null || _vao == 0 || dir3 == null) return;
+            var fF = new float[_usedCount * 3];
+            for (int v = 0; v < _vMap.Length; v++)
+            {
+                int u = _vMap[v]; if (u < 0) continue;
+                fF[u * 3] = dir3[v * 3]; fF[u * 3 + 1] = dir3[v * 3 + 1]; fF[u * 3 + 2] = dir3[v * 3 + 2];
+            }
+            if (_vboField == 0) _vboField = GL.GenBuffer();
+            GL.BindVertexArray(_vao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _vboField);
+            GL.BufferData(BufferTarget.ArrayBuffer, fF.Length * sizeof(float), fF, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(2);
+            GL.BindVertexArray(0);
+            _fieldMax = fieldMax;
+        }
+
+        // Upload the solid (3D) blue-noise volume the LIC convolves the field along. n^3 single-channel
+        // bytes; GL_REPEAT-wrapped so it tiles seamlessly across the mesh.
+        public void SetNoiseVolume(byte[] data, int n)
+        {
+            EnsureProgram();
+            if (_noiseTex == 0) _noiseTex = GL.GenTexture();
+            GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+            GL.BindTexture(TextureTarget.Texture3D, _noiseTex);
+            GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R8, n, n, n, 0,
+                PixelFormat.Red, PixelType.UnsignedByte, data);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+            GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.Repeat);
+            GL.BindTexture(TextureTarget.Texture3D, 0);
         }
 
         // Upload ruling line segments (positions only, GL_LINES) computed externally from the live mesh.
@@ -252,6 +365,18 @@ void main() {
                 GL.BindTexture(TextureTarget.Texture2D, _tex);
                 GL.Uniform1(_uMatcap, 0);
             }
+            // Surface-LIC uniforms. The noise sampler is pinned to unit 1 (never unit 0, so it can't
+            // collide with the sampler2D matcap on a strict driver). LicMode is forced 0 unless a noise
+            // volume exists, so an un-fed view just draws the matcap.
+            GL.Uniform1(_uLicMode, _noiseTex != 0 ? LicMode : 0);
+            GL.Uniform1(_uNoiseFreq, NoiseFreq);
+            GL.Uniform1(_uLicStep, LicStep);
+            GL.Uniform1(_uFieldMax, _fieldMax);
+            GL.Uniform1(_uLicStrength, LicStrength);
+            GL.Uniform1(_uTint, TintAmount);
+            GL.Uniform1(_uNoise, 1);
+            GL.ActiveTexture(TextureUnit.Texture1);
+            GL.BindTexture(TextureTarget.Texture3D, _noiseTex);
             GL.BindVertexArray(_vao);
             // Filled pass. When edges are on, push the fill back a touch (polygon offset) so the
             // wireframe overlay drawn at true depth wins the depth test (clean hidden-line look).
@@ -317,6 +442,14 @@ void main() {
 
         static int Compile(ShaderType type, string src)
         {
+            // OpenTK's GL.ShaderSource marshals the source to UTF-8 but passes the .NET char COUNT as the
+            // byte length, so a single non-ASCII char makes the driver read short and report a cryptic
+            // 'pre-mature EOF' (the trailing brace is truncated). Catch it here with a clear message;
+            // shader source MUST stay ASCII.
+            for (int i = 0; i < src.Length; i++)
+                if (src[i] > 127)
+                    throw new Exception(type + " shader has a non-ASCII char '" + src[i] + "' (U+" +
+                        ((int)src[i]).ToString("X4") + ") at index " + i + " — shaders must be ASCII (OpenTK truncates otherwise)");
             int s = GL.CreateShader(type);
             GL.ShaderSource(s, src);
             GL.CompileShader(s);
@@ -328,6 +461,8 @@ void main() {
         public void Dispose()
         {
             if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vboPos); GL.DeleteBuffer(_vboNrm); GL.DeleteBuffer(_ebo); }
+            if (_vboField != 0) GL.DeleteBuffer(_vboField);
+            if (_noiseTex != 0) GL.DeleteTexture(_noiseTex);
             if (_rulVao != 0) { GL.DeleteVertexArray(_rulVao); GL.DeleteBuffer(_rulVbo); }
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
             if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }

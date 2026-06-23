@@ -137,9 +137,10 @@ namespace PieceSolver
         double _facetExp = 4.0;
         public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
 
-        // Overlay per-vertex ruling lines (developable generators = zero-curvature directions) on M.
-        bool _showRulings;
-        public bool ShowRulings { get => _showRulings; set => Set(ref _showRulings, value); }
+        // Surface flow-field visualization (LIC grain painted on M, modulating the matcap):
+        // 0 = Off, 1 = Ruling director (developable grain), 2 = Developability gradient (flow field).
+        int _fieldMode;
+        public int FieldMode { get => _fieldMode; set => Set(ref _fieldMode, value); }
 
         // Pin each patch boundary onto a low-DOF degree-3 B-spline "bent wire" (~1 control point per
         // SeamRatio mesh points) and hold it fixed during the solve, so seams are smooth + shared.

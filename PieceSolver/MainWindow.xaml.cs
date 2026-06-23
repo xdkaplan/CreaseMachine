@@ -150,7 +150,7 @@ namespace PieceSolver
             PresetCButton.Click += (s, e) => _sim.ApplyPreset('C');
             PresetDButton.Click += (s, e) => _sim.ApplyPreset('D');
             // recompute the ruling overlay when its toggle flips (so it appears without needing a solve)
-            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.ShowRulings)) { _rulingsDirty = true; _gl?.InvalidateVisual(); } };
+            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.FieldMode)) { _rulingsDirty = true; _gl?.InvalidateVisual(); } };
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -1035,6 +1035,7 @@ namespace PieceSolver
             if (!_glInit)
             {
                 _view = new MeshView();
+                _view.SetNoiseVolume(NoiseVolume.Blue(64, 1337), 64);    // solid blue-noise volume for the surface LIC
                 _flatView = new MeshView(); _flatView.EnsureProgram();   // BFF flat map, drawn beside M
                 _flatView.ShowEdges = true;   // M' is flat (uniform shading) -> reveal its triangulation with edges
                 _grid = new GroundGrid();
@@ -1124,9 +1125,18 @@ namespace PieceSolver
             if (_view != null)
             {
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
-                _view.ShowRulings = _sim.ShowRulings;
-                if (_sim.ShowRulings && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
-                { _view.SetRulings(RulingField.Compute(_session.Mesh, 0.45, 0.02)); _rulingsDirty = false; }
+                // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
+                _view.LicMode = _sim.FieldMode;
+                if (_sim.FieldMode != 0 && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
+                {
+                    float fmax;
+                    var fld = LicField.Compute(_session, _sim.ToFlowParams(), _sim.FieldMode, out fmax);
+                    _view.SetField(fld, fmax);
+                    _rulingsDirty = false;
+                }
+                _view.NoiseFreq = 4.0f / MathF.Max(1e-3f, 2f * _view.Radius);   // ~4 noise tiles across the model
+                _view.LicStep = 0.03f * _view.Radius;
+                _view.TintAmount = _sim.FieldMode == 2 ? 0.85f : 0.30f;          // tint the gradient field by |grad|
                 _view.ShowSeams = _sim.FixBSplineEdges;
                 if (_sim.FixBSplineEdges && _view.HasMesh && _seamsDirty && !_baking)
                 {
