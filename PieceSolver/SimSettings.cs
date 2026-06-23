@@ -75,7 +75,7 @@ namespace PieceSolver
         // Accuracy = how developable the result must be, by MATERIAL stiffness (allowable in-plane strain).
         // 0 Fabric (stretchy) .. 3 Plate Metal (near-perfectly developable). Placeholder strain targets for now.
         static readonly string[] AccMaterials = { "Fabric", "Paper", "Sheet Metal", "Plate Metal" };
-        static readonly double[] AccStrainPct = { 3.0, 1.0, 0.2, 0.05 };   // fake allowable strain % per material
+        static readonly double[] AccStrainPct = { 1.0, 0.2, 0.05, 0.01 };   // allowable strain % per material (rigidity)
         int _accuracyLevel = 2;
         public int AccuracyLevel { get => _accuracyLevel; set { if (Set(ref _accuracyLevel, value)) { OnChanged(nameof(AccuracyLabel)); OnChanged(nameof(AccuracyStrainPct)); NotifyGo(); } } }
         public string AccuracyLabel => AccMaterials[System.Math.Clamp(_accuracyLevel, 0, 3)];
@@ -137,10 +137,25 @@ namespace PieceSolver
         double _facetExp = 4.0;
         public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
 
-        // Surface flow-field visualization (LIC grain painted on M, modulating the matcap):
-        // 0 = Off, 1 = Ruling director (developable grain), 2 = Developability gradient (flow field).
-        int _fieldMode;
-        public int FieldMode { get => _fieldMode; set => Set(ref _fieldMode, value); }
+        // Ruling-line overlay: a curvature-driven LIC grain painted on M (the developable "grain"),
+        // modulating the matcap. Off by default.
+        bool _showRuling;
+        public bool ShowRuling { get => _showRuling; set => Set(ref _showRuling, value); }
+
+        // LIC grain tuning (applies to BOTH Ruling and Gradient modes). All three feed shader uniforms
+        // pushed every frame, so they retune live with no shader recompile.
+        double _licGrain = 10.0;    // grain fineness: noise tiles across the model (higher = finer hairs)
+        int    _licLength = 30;     // streak length (high-confidence max): convolution taps each side (uLicTaps)
+        double _licAlpha = 0.7;     // grain alpha / depth (high-confidence max, uLicStrength); ruling scales by confidence
+        // Ruling curvature remap (levels): kappa_max (= 1/radius-of-max-curvature) is bunched, so a linear
+        // map under/over-reads. smoothstep(min,max,kappa_max) windows the active band - below Curv min reads
+        // flat (no hairs), above Curv max reads fully curved (bold hairs). Both live.
+        double _licCurvMin = 0.05, _licCurvMax = 0.2;
+        public double LicGrain { get => _licGrain; set => Set(ref _licGrain, value); }
+        public int LicLength { get => _licLength; set => Set(ref _licLength, value); }
+        public double LicAlpha { get => _licAlpha; set => Set(ref _licAlpha, value); }
+        public double LicCurvMin { get => _licCurvMin; set => Set(ref _licCurvMin, value); }
+        public double LicCurvMax { get => _licCurvMax; set => Set(ref _licCurvMax, value); }
 
         // Pin each patch boundary onto a low-DOF degree-3 B-spline "bent wire" (~1 control point per
         // SeamRatio mesh points) and hold it fixed during the solve, so seams are smooth + shared.

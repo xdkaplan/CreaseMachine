@@ -15,7 +15,7 @@ namespace PieceSolver
     {
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
         int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp, _uEdge, _uEdgeColor;
-        int _uNoise, _uLicMode, _uNoiseFreq, _uLicStep, _uFieldMax, _uLicStrength, _uTint;
+        int _uNoise, _uLicMode, _uNoiseFreq, _uLicStep, _uFieldMax, _uLicStrength, _uLicTaps, _uCurvMin, _uCurvMax;
         int _tex;
         int _vboField;        // per-vertex direction field (attribute @2), for the surface LIC
         int _noiseTex;        // solid (3D) blue-noise volume the LIC convolves along the field
@@ -27,8 +27,9 @@ namespace PieceSolver
         public int LicMode = 0;            // 0 = off, 1 = ruling field, 2 = gradient field
         public float NoiseFreq = 4f;       // model-space position -> noise texcoord scale (tiles across the mesh)
         public float LicStep = 0.05f;      // march length per convolution tap, model units
-        public float LicStrength = 0.85f;  // 0..1 depth of the grain modulation on the matcap
-        public float TintAmount = 0f;      // 0..1 magnitude colour tint (magma) blended over the matcap
+        public int   LicTaps = 30;         // convolution taps each side (streak length); live uniform uLicTaps
+        public float CurvMin = 0.05f, CurvMax = 0.2f; // ruling curvature remap window (smoothstep levels)
+        public float LicStrength = 0.7f;   // 0..1 depth of the grain modulation on the matcap
         bool _hasMatcap;
         int _indexCount;
         bool _ready;
@@ -85,16 +86,11 @@ uniform vec3 uEdgeColor;
 uniform int uLicMode;         // 0 = off, 1/2 = on (the field is chosen host-side)
 uniform float uNoiseFreq;     // model position -> noise texcoord scale
 uniform float uLicStep;       // march length per tap, model units
-uniform float uFieldMax;      // magnitude normaliser for the tint
+uniform float uFieldMax;      // curvature normaliser (kappa_max scale)
 uniform float uLicStrength;   // 0..1 depth of the grain modulation
-uniform float uTint;          // 0..1 magnitude colour tint
-
-vec3 magma(float t) {
-    t = clamp(t, 0.0, 1.0);
-    return clamp(vec3(1.70 * t - 0.18,
-                      1.10 * t * t - 0.05,
-                      0.55 * sin(3.14159 * t) + 0.35 * t), 0.0, 1.0);
-}
+uniform int uLicTaps;         // LIC convolution taps each side (streak length); live -> no recompile
+uniform float uCurvMin;       // ruling curvature remap: kappa_max at/below this -> fully low (specks)
+uniform float uCurvMax;       // ruling curvature remap: kappa_max at/above this -> fully high (bold hairs)
 
 void main() {
     if (uEdge == 1) { FragColor = vec4(uEdgeColor, 1.0); return; }
@@ -114,30 +110,35 @@ void main() {
         surf = mix(vec3(0.16, 0.17, 0.21), vec3(0.82, 0.80, 0.77), wrap);
     }
 
-    // Surface LIC: convolve the solid noise along the (re-normalized) per-fragment field direction.
-    // Symmetric +/-d taps -> the streak is a line, not an arrow (matches the field's director nature).
+    // Surface-LIC ruling overlay: convolve the solid noise along the per-fragment ruling direction
+    // (symmetric +/-d taps -> a line, not an arrow). Per-vertex CURVATURE (kappa_max = 1/radius-of-max-
+    // curvature, m) drives streak LENGTH and ALPHA - nothing on flat areas, short faint specks where
+    // barely curved, long bold wind-swept hairs where tightly curved. uLicTaps (Length) and uLicStrength
+    // (Alpha) set the high-curvature extremes; curvature scales them down. Developable-vs-not reads from
+    // the LIC coherence (combed vs swirly).
     if (uLicMode != 0) {
         float fmag = length(vField);
-        if (fmag > 1e-5) {
-            vec3 d = vField / fmag;
-            const int K = 12;
+        float m = clamp(fmag / max(uFieldMax, 1e-8), 0.0, 1.0);
+        float c = smoothstep(uCurvMin, uCurvMax, m);                    // remapped curvature (Curv min/max)
+        float fade = smoothstep(0.0, 0.03, m);                          // kill grain where the field vanishes (no pop)
+        float effLen = mix(2.0, float(uLicTaps) + 1.0, c);              // kernel half-width -> streak LENGTH
+        float alpha  = uLicStrength * c * fade;                         // grain depth -> streak ALPHA (0 at/below Curv min)
+        float grain = 1.0;
+        if (alpha > 0.0) {
+            vec3 d = vField / max(fmag, 1e-6);
             float acc = 0.0, wsum = 0.0;
-            for (int i = -K; i <= K; i++) {
+            for (int i = -uLicTaps; i <= uLicTaps; i++) {
                 float t = float(i);
-                float wgt = 1.0 - abs(t) / float(K + 1);                  // triangular window
+                float wgt = max(0.0, 1.0 - abs(t) / effLen);            // window tapers at effLen (per-fragment length)
                 vec3 sp = (vModelPos + d * (t * uLicStep)) * uNoiseFreq;
-                acc += wgt * textureLod(uNoise, sp, 0.0).r;   // explicit LOD: implicit derivs are undefined in this branch
+                acc += wgt * textureLod(uNoise, sp, 0.0).r;   // explicit LOD: implicit derivs undefined in this branch
                 wsum += wgt;
             }
-            float g = acc / max(wsum, 1e-5);
-            g = clamp((g - 0.5) * 2.2 + 0.5, 0.0, 1.0);                   // contrast the streaks
-            surf *= mix(1.0 - uLicStrength, 1.0, g);                      // grain modulates the matcap
-            if (uTint > 0.0) {
-                float m = clamp(fmag / max(uFieldMax, 1e-8), 0.0, 1.0);
-                vec3 c = magma(m);
-                surf = mix(surf, surf * (0.35 + 0.65 * c) + 0.18 * c, uTint);
-            }
+            float gg = acc / max(wsum, 1e-5);
+            gg = clamp((gg - 0.5) * 2.2 + 0.5, 0.0, 1.0);                // contrast the streaks
+            grain = mix(1.0 - alpha, 1.0, gg);
         }
+        surf *= grain;                                                  // curvature-modulated ruling hairs
     }
     FragColor = vec4(surf, 1.0);
 }";
@@ -161,7 +162,9 @@ void main() {
             _uLicStep = GL.GetUniformLocation(_prog, "uLicStep");
             _uFieldMax = GL.GetUniformLocation(_prog, "uFieldMax");
             _uLicStrength = GL.GetUniformLocation(_prog, "uLicStrength");
-            _uTint = GL.GetUniformLocation(_prog, "uTint");
+            _uLicTaps = GL.GetUniformLocation(_prog, "uLicTaps");
+            _uCurvMin = GL.GetUniformLocation(_prog, "uCurvMin");
+            _uCurvMax = GL.GetUniformLocation(_prog, "uCurvMax");
         }
 
         public void SetMatcap(byte[] bgra, int w, int h)
@@ -373,7 +376,9 @@ void main() {
             GL.Uniform1(_uLicStep, LicStep);
             GL.Uniform1(_uFieldMax, _fieldMax);
             GL.Uniform1(_uLicStrength, LicStrength);
-            GL.Uniform1(_uTint, TintAmount);
+            GL.Uniform1(_uLicTaps, LicTaps);
+            GL.Uniform1(_uCurvMin, CurvMin);
+            GL.Uniform1(_uCurvMax, CurvMax);
             GL.Uniform1(_uNoise, 1);
             GL.ActiveTexture(TextureUnit.Texture1);
             GL.BindTexture(TextureTarget.Texture3D, _noiseTex);

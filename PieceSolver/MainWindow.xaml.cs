@@ -44,6 +44,7 @@ namespace PieceSolver
         string[] _matcapPaths;                      // bundled matcap files (assets/matcaps)
         byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
         bool _matcapDirty;                          // re-upload the matcap texture on the next render
+        int _neutralLightMc = -1;                   // "Neutral Light" matcap; forced as the base whenever a LIC field is on
 
         // Journal harness: every action routes through Execute(), which records the semantic command
         // (record/replay), so a saved .journal replays the live workflow and times each step for
@@ -120,6 +121,10 @@ namespace PieceSolver
             _matcapPaths = System.IO.Directory.Exists(mcDir)
                 ? System.IO.Directory.GetFiles(mcDir, "*.png") : Array.Empty<string>();
             Array.Sort(_matcapPaths, StringComparer.OrdinalIgnoreCase);
+            // "Neutral Light" matcap (CCC5C9_...): a flat, low-chroma lit sphere we force under the LIC
+            // grain so the field reads cleanly. Resolved by filename so the sort order can't break it.
+            _neutralLightMc = Array.FindIndex(_matcapPaths, p =>
+                System.IO.Path.GetFileName(p).StartsWith("CCC5C9", StringComparison.OrdinalIgnoreCase));
             var thumbs = new System.Collections.Generic.List<System.Windows.Media.ImageSource>();
             foreach (var p in _matcapPaths)
             {
@@ -150,7 +155,16 @@ namespace PieceSolver
             PresetCButton.Click += (s, e) => _sim.ApplyPreset('C');
             PresetDButton.Click += (s, e) => _sim.ApplyPreset('D');
             // recompute the ruling overlay when its toggle flips (so it appears without needing a solve)
-            _sim.PropertyChanged += (s, e) => { if (e.PropertyName == nameof(SimSettings.FieldMode)) { _rulingsDirty = true; _gl?.InvalidateVisual(); } };
+            _sim.PropertyChanged += (s, e) => {
+                if (e.PropertyName == nameof(SimSettings.ShowRuling))
+                {
+                    _rulingsDirty = true;
+                    // When the ruling overlay is switched on, force the Neutral Light matcap as the base
+                    // beneath the grain (MVP: no restore-on-off logic yet, by request).
+                    if (_sim.ShowRuling && _neutralLightMc >= 0) ApplyMatcap(_neutralLightMc);
+                    _gl?.InvalidateVisual();
+                }
+            };
 
             // Collapse chevron at each panel's inner-top corner toggles collapse/expand.
             LeftCollapseBtn.Click += (s, e) => ToggleCollapse(LeftCol, ref _leftRestore);
@@ -1126,17 +1140,26 @@ namespace PieceSolver
             {
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
-                _view.LicMode = _sim.FieldMode;
-                if (_sim.FieldMode != 0 && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
+                _view.LicMode = _sim.ShowRuling ? 1 : 0;
+                if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
                 {
                     float fmax;
-                    var fld = LicField.Compute(_session, _sim.ToFlowParams(), _sim.FieldMode, out fmax);
+                    var fld = RulingField.ComputeField(_session.Mesh, out fmax);
                     _view.SetField(fld, fmax);
                     _rulingsDirty = false;
                 }
-                _view.NoiseFreq = 4.0f / MathF.Max(1e-3f, 2f * _view.Radius);   // ~4 noise tiles across the model
-                _view.LicStep = 0.03f * _view.Radius;
-                _view.TintAmount = _sim.FieldMode == 2 ? 0.85f : 0.30f;          // tint the gradient field by |grad|
+                // Surface-LIC scale, derived from the noise TEXEL size so consecutive march taps stay
+                // CORRELATED (~1 texel/tap) -> coherent streaks. The old 0.03*Radius step was ~4 texels
+                // per tap, so the 24-tap convolution sampled decorrelated noise and washed out to a flat
+                // grey ("scale massively off"). NoiseVolume is 64^3, repeated LIC_TILES across the model.
+                float licTiles = MathF.Max(2f, (float)_sim.LicGrain), NOISE_N = 64f;
+                float licExtent = MathF.Max(1e-3f, 2f * _view.Radius);
+                _view.NoiseFreq   = licTiles / licExtent;
+                _view.LicStep     = licExtent / (licTiles * NOISE_N);   // one noise texel per march tap
+                _view.LicTaps     = System.Math.Clamp(_sim.LicLength, 2, 64);
+                _view.LicStrength = MathF.Max(0f, MathF.Min(1f, (float)_sim.LicAlpha));
+                _view.CurvMin = (float)System.Math.Clamp(_sim.LicCurvMin, 0.0, 1.0);
+                _view.CurvMax = MathF.Max(_view.CurvMin + 0.01f, (float)System.Math.Clamp(_sim.LicCurvMax, 0.0, 1.0));   // keep max > min (smoothstep)
                 _view.ShowSeams = _sim.FixBSplineEdges;
                 if (_sim.FixBSplineEdges && _view.HasMesh && _seamsDirty && !_baking)
                 {

@@ -86,10 +86,12 @@ namespace PieceSolver
         }
 
         // Per-vertex ruling DIRECTION field for the surface LIC (instead of discrete segments). Returns
-        // float[nV*3]: the unit ruling direction scaled by an ANISOTROPY confidence in [0,1] — 0 where the
-        // vertex is flat / isotropic / has no defined ruling, so the LIC grain fades out smoothly exactly
-        // where no meaningful ruling exists (no hard skip). Same shape-operator fit as Compute. The vector
-        // length (= confidence) is what the shader tints by; fieldMax is 1 (already normalized).
+        // float[nV*3]: the unit ruling direction scaled by kappa_max (the MAX principal curvature =
+        // 1 / radius of maximum curvature), robustly normalised so the bulk spans [0,1]. kappa_max - NOT
+        // anisotropy - is the strength driver: flat / barely-curved areas read ~0 (no hairs; we don't
+        // care where a flat plane's ruling points), tightly-curved areas read high (bold hairs). Whether
+        // that curvature is developable shows in the LIC COHERENCE (combed = single ruling; swirly =
+        // doubly-curved), so non-developable spots still light up instead of hiding as low "confidence".
         public static float[] ComputeField(PlanktonMesh M, out float fieldMax)
         {
             fieldMax = 1f;
@@ -136,20 +138,34 @@ namespace PieceSolver
                 double lbig = Math.Abs(l1) >= Math.Abs(l2) ? l1 : l2;
                 double lsmall = Math.Abs(l1) < Math.Abs(l2) ? l1 : l2;
                 if (Math.Abs(lbig) < 1e-20) continue;
-                double aniso = 1.0 - Math.Abs(lsmall) / Math.Abs(lbig);    // 1 = developable, 0 = isotropic
-                if (aniso <= 0.0) continue;
 
-                double ex, ey;   // eigenvector for lsmall (~zero-curvature) = ruling direction (in t1,t2)
+                double ex, ey;   // eigenvector for lsmall (min curvature) = ruling direction (in t1,t2)
                 if (Math.Abs(II12) > 1e-12) { ex = II12; ey = lsmall - II11; }
                 else if (Math.Abs(II11) <= Math.Abs(II22)) { ex = 1; ey = 0; }
                 else { ex = 0; ey = 1; }
                 double el = Math.Sqrt(ex * ex + ey * ey); if (el < 1e-12) continue; ex /= el; ey /= el;
 
+                // Strength = kappa_max (max principal curvature = 1 / radius of max curvature), NOT
+                // anisotropy: flat areas -> ~0 (no hairs), tightly curved -> bold. Direction is still the
+                // min-curvature (ruling) eigenvector; on doubly-curved spots it is arbitrary, so the hairs
+                // go bold + swirly there - which is exactly the non-developable signal we want to SEE.
                 Vec3 r = t1 * ex + t2 * ey;
-                field[v * 3]     = (float)(r.X * aniso);
-                field[v * 3 + 1] = (float)(r.Y * aniso);
-                field[v * 3 + 2] = (float)(r.Z * aniso);
+                float kmax = (float)Math.Abs(lbig);
+                field[v * 3]     = (float)r.X * kmax;
+                field[v * 3 + 1] = (float)r.Y * kmax;
+                field[v * 3 + 2] = (float)r.Z * kmax;
             }
+            // Robust scale: normalise kappa_max by a high percentile (field magnitude == kappa_max since
+            // the direction is unit) so the bulk spans [0,1] and a few sharp-crease spikes just saturate.
+            var mags = new System.Collections.Generic.List<float>(nV);
+            for (int v = 0; v < nV; v++)
+            {
+                float L = (float)System.Math.Sqrt((double)field[v * 3] * field[v * 3] +
+                    (double)field[v * 3 + 1] * field[v * 3 + 1] + (double)field[v * 3 + 2] * field[v * 3 + 2]);
+                if (L > 0f) mags.Add(L);
+            }
+            mags.Sort();
+            fieldMax = mags.Count > 0 ? System.Math.Max(1e-8f, mags[(int)(0.92 * (mags.Count - 1))]) : 1f;
             return field;
         }
 

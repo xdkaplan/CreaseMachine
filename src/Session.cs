@@ -198,23 +198,6 @@ namespace CreaseMachine
             return maxG;
         }
 
-        /// <summary>
-        /// Per-vertex developability-energy gradient evaluated on the CURRENT mesh in place — the
-        /// same analytic CHA gradient <see cref="NesterovStep"/> descends, but with no Nesterov hop
-        /// and no position change. Exposed so a viewer can visualize the flow field (e.g. an LIC of
-        /// the gradient streamlines). Boundary/unused vertices carry zero gradient, as in the step.
-        /// </summary>
-        public Vec3[] EnergyGradient(FlowParams p)
-        {
-            DevelopabilityEnergy.CrazeBand = p.CrazeBand;
-            DevelopabilityEnergy.AdaptiveDetMix = p.AdaptiveDetMix;
-            DevelopabilityEnergy.AdaptiveDetMixPower = p.AdaptiveDetMixPower > 0.0 ? p.AdaptiveDetMixPower : 2.0;
-            double[] energy; Vec3[] grad; bool[] folds; bool[] degenVerts;
-            DevelopabilityEnergy.ComputeHingeEnergyAndGrad(Mesh, out energy, out grad, out folds, out degenVerts,
-                p.deBranch, p.deConsolidate, p.UseMaxCov, p.Sharpness, p.deCraze, true, BrushWeights, p.DetMix);
-            return grad;
-        }
-
         // First non-degenerate edge length; the scale that makes Step*L^2 scale/subdivision-invariant.
         private static double RepEdge(PlanktonMesh P)
         {

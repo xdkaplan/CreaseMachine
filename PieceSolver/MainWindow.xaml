@@ -192,15 +192,6 @@
                                         <TextBlock DockPanel.Dock="Right" Width="80" Text="{Binding ToleranceMm, StringFormat={}{0:0.##} mm}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="0" Maximum="10" Value="{Binding ToleranceIndex}" IsSnapToTickEnabled="True" TickFrequency="1" TickPlacement="BottomRight" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
-                                    <DockPanel Margin="0,6,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Field" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Flow-aligned LIC grain painted on M, modulating the matcap. Ruling = the developable generators (zero-curvature directions); Gradient = the developability flow field (tinted by |grad|). Clean parallel grain = genuinely developable; swirling = not there yet." />
-                                        <ComboBox SelectedIndex="{Binding FieldMode, Mode=TwoWay}" Height="20" FontSize="11" VerticalAlignment="Center" Margin="6,0">
-                                            <ComboBoxItem Content="Off" />
-                                            <ComboBoxItem Content="Ruling LIC (developable grain)" />
-                                            <ComboBoxItem Content="Gradient LIC (flow field)" />
-                                        </ComboBox>
-                                    </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
                                         <CheckBox Content="Fix B-spline edges (pin seams to a bent wire)" IsChecked="{Binding FixBSplineEdges, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
@@ -290,6 +281,44 @@
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding FacetExp, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="1" Maximum="30" Value="{Binding FacetExp}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
+
+                                <TextBlock Text="RULING LINES" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
+                                <CheckBox Content="Show ruling lines (curvature grain)" IsChecked="{Binding ShowRuling, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,0"
+                                          ToolTip="Curvature-driven LIC grain on M (the developable 'grain') modulating the matcap. Flat areas stay bare; tightly-curved areas show wind-swept hairs. Combed = developable, swirly = doubly-curved." />
+                                <Expander Header="Advanced" IsExpanded="False" Foreground="#9AA0A8" FontSize="11" Margin="0,6,0,0">
+                                    <StackPanel Margin="0,6,0,0">
+                                        <DockPanel Margin="0,0,0,2">
+                                            <TextBlock DockPanel.Dock="Left" Text="Grain" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                       ToolTip="LIC grain fineness (both modes): noise tiles across the model. Higher = finer, crisper hairs. Live, no recompile." />
+                                            <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding LicGrain, StringFormat={}{0:0}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                            <Slider Minimum="2" Maximum="40" Value="{Binding LicGrain}" VerticalAlignment="Center" Margin="6,0" />
+                                        </DockPanel>
+                                        <DockPanel Margin="0,3,0,0">
+                                            <TextBlock DockPanel.Dock="Left" Text="Length" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                       ToolTip="LIC streak length — the high-confidence max. On Ruling, confidence scales it down: short specks in poorly-ruled (doubly-curved) areas, long wind-swept hairs where a ruling is crisp. Live." />
+                                            <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding LicLength, StringFormat={}{0:0}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                            <Slider Minimum="2" Maximum="40" Value="{Binding LicLength}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
+                                        </DockPanel>
+                                        <DockPanel Margin="0,3,0,0">
+                                            <TextBlock DockPanel.Dock="Left" Text="Alpha" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                       ToolTip="LIC grain alpha — the high-confidence max opacity. On Ruling, confidence scales it down: faint specks in poorly-ruled areas, bold hairs where a ruling is crisp. Live." />
+                                            <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding LicAlpha, StringFormat={}{0:0.00}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                            <Slider Minimum="0" Maximum="1" Value="{Binding LicAlpha}" VerticalAlignment="Center" Margin="6,0" />
+                                        </DockPanel>
+                                        <DockPanel Margin="0,3,0,0">
+                                            <TextBlock DockPanel.Dock="Left" Text="Curv min" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                       ToolTip="Ruling curvature remap (low falloff): max curvature at/below this reads as flat — no hairs. Raise to ignore more gentle curvature (treat more of the surface as flat). Live." />
+                                            <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding LicCurvMin, StringFormat={}{0:0.00}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                            <Slider Minimum="0" Maximum="1" Value="{Binding LicCurvMin}" VerticalAlignment="Center" Margin="6,0" />
+                                        </DockPanel>
+                                        <DockPanel Margin="0,3,0,0">
+                                            <TextBlock DockPanel.Dock="Left" Text="Curv max" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                       ToolTip="Ruling curvature remap (high falloff): max curvature at/above this reads as fully curved — long bold hairs. Lower it to make hairs appear at gentler curvature. Live." />
+                                            <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding LicCurvMax, StringFormat={}{0:0.00}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                            <Slider Minimum="0" Maximum="1" Value="{Binding LicCurvMax}" VerticalAlignment="Center" Margin="6,0" />
+                                        </DockPanel>
+                                    </StackPanel>
+                                </Expander>
 
                                 <TextBlock Text="MATCAP" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <ListBox x:Name="MatcapList" Background="Transparent" BorderThickness="0" Padding="0"
