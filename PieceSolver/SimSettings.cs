@@ -155,7 +155,7 @@ namespace PieceSolver
 
         // Piece visualization: inset/seam band width as a FRACTION of mesh radius (world-relative). Drives
         // uInset in the piece shader (the border / bevel-lip / gap thickness). Live; default narrow.
-        double _insetWidthFrac = 0.025;
+        double _insetWidthFrac = 0.012;
         public double InsetWidthFrac { get => _insetWidthFrac; set => Set(ref _insetWidthFrac, value); }
 
         // Crease proposer threshold (degrees): after Propose, an interior edge whose settled fold angle
