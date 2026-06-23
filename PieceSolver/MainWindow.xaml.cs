@@ -1686,9 +1686,9 @@ namespace PieceSolver
 
         // World-space brush radius. The slider value (1..100) maps at half scale so its low end is fine enough.
         // Used by BOTH the paint footprint and the screen preview, so they always agree.
-        // Brush Size is a 1..10 notch; world radius is geometric so notch 5 = 0.5 (the old smallest) and
-        // notch 10 = 5.0 (the old largest), with notches 1..4 finer below. radius = 0.5 * 10^((notch-5)/5).
-        public double BrushWorldRadius => 0.5 * Math.Pow(10.0, (_sim.BrushSize - 5.0) / 5.0);
+        // Brush Size is a 1..10 notch; world radius is geometric (sqrt(3)/notch) anchored so notch 5 (default)
+        // ~ the old size-3 footprint (1.5) and notch 3 ~ the old size-1 (0.5). radius = 1.5 * 3^((notch-5)/2).
+        public double BrushWorldRadius => 1.5 * Math.Pow(3.0, (_sim.BrushSize - 5.0) / 2.0);
 
         // The brush's world radius projected to screen pixels at the given surface point's depth.
         public double ScreenRadiusPx(Vector3 hit)

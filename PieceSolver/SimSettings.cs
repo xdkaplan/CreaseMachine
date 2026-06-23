@@ -163,11 +163,11 @@ namespace PieceSolver
         double _creaseAngleDeg = 10.0;
         public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
 
-        // Crease brush (stage 3) is CONTEXTUAL, not a toggle: it is live whenever the model has pieces (after
-        // Propose -> Accept). Left-click a piece to make it the active selection (highlighted); click/drag to
-        // paint region membership (grow the active selection); Shift+click starts a new region; right still
-        // orbits. Size = footprint radius (world units), also via [ / ].
-        double _brushSize = 10.0;
+        // Crease brush (stage 3) is CONTEXTUAL, not a toggle: live whenever the model has pieces (after Propose
+        // -> Accept). Plain-click selects a piece; Shift mints a new region (no selection) or grows the active
+        // piece (selection); Ctrl removes (no selection) or carves (selection); right-drag orbits. Size is a
+        // 1..10 notch (geometric world radius — see Piecer / BrushWorldRadius), also via [ / ].
+        double _brushSize = 5.0;   // notch 5 (default) ~ the old size-3 footprint
         public double BrushSize { get => _brushSize; set => Set(ref _brushSize, value); }
 
         // Ruling-line overlay: a curvature-driven LIC grain painted on M (the developable "grain"),
