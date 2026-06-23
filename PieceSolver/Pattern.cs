@@ -136,28 +136,37 @@ namespace PieceSolver
                              : $"removed {healed} piece(s)";
         }
 
-        // Carve faces OUT of the active piece (the Ctrl gesture when a piece IS selected). Only faces of the
-        // active piece are carved. Each connected blob of carved faces is re-homed: donated to its dominant
-        // FOREIGN neighbour (the active piece is EXCLUDED so it can't reclaim the carve — that is what makes
-        // carving against a small neighbour actually work), or — if the blob is an island with no foreign
-        // neighbour — split off as a brand-new piece. The active piece is shrunk, never deleted: carving away
-        // ALL of it is refused (deselect + Remove to delete a whole piece). Returns a summary, or null if nothing.
-        public string Carve(HashSet<int> touched, PieceId active)
+        // Carve faces OUT of the SELECTED pieces (the Ctrl gesture when one or more pieces are selected). Only
+        // faces belonging to a selected piece are carved. Each connected blob of carved faces is re-homed:
+        // donated to its dominant neighbour OUTSIDE the selection (selected pieces are EXCLUDED so a carve can't
+        // heal back into the selection it left — that is what makes carving against a small neighbour work), or
+        // — if the blob has no such neighbour — split off as a brand-new island piece. No selected piece is ever
+        // fully consumed: a piece the brush would empty is PROTECTED (its faces are left as a no-op); if every
+        // carved face is protected, the carve is refused. Returns a summary, or null if nothing.
+        public string Carve(HashSet<int> touched, HashSet<int> selection)
         {
             var P = _mesh;
-            if (P == null || PieceMap == null || touched == null || active.Value < 0) return null;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count, act = active.Value;
-            bool IsCarved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && touched.Contains(f) && PieceMap[f] == act;
+            if (P == null || PieceMap == null || touched == null || selection == null || selection.Count == 0) return null;
+            int nF = P.Faces.Count, nH = P.Halfedges.Count;
 
-            // Honour "the active piece is never removed": refuse to carve away ALL of it.
-            int activeTotal = 0, carvedCount = 0;
+            // Per selected piece: total faces vs how many the brush marked. A piece the brush would EMPTY is
+            // PROTECTED — carving it all away would delete it (deselect + Remove for that), so it stays put.
+            var total = new Dictionary<int, int>();
+            var marked = new Dictionary<int, int>();
             for (int f = 0; f < nF; f++)
             {
-                if (P.Faces[f].IsUnused || PieceMap[f] != act) continue;
-                activeTotal++; if (touched.Contains(f)) carvedCount++;
+                if (P.Faces[f].IsUnused) continue;
+                int r = PieceMap[f]; if (!selection.Contains(r)) continue;
+                total[r] = DictGet(total, r) + 1;
+                if (touched.Contains(f)) marked[r] = DictGet(marked, r) + 1;
             }
-            if (carvedCount == 0) return null;
-            if (carvedCount >= activeTotal) return "can't carve the whole active piece — deselect (click empty space) to remove it";
+            var prot = new HashSet<int>();
+            int carvable = 0;
+            foreach (var kv in marked) { if (kv.Value >= DictGet(total, kv.Key)) prot.Add(kv.Key); else carvable += kv.Value; }
+            if (carvable == 0) return "can't carve a whole piece — deselect (click empty space) to remove it";
+
+            bool IsCarved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused
+                                    && touched.Contains(f) && selection.Contains(PieceMap[f]) && !prot.Contains(PieceMap[f]);
 
             // Blobs of connected carved faces.
             var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
@@ -173,8 +182,8 @@ namespace PieceSolver
             var blobRoots = new HashSet<int>();
             for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(Find(f));
 
-            // Tally each blob's shared border with each FOREIGN region (anything that isn't the active piece —
-            // unmarked active faces are NOT candidates, so the carve cannot heal back into the piece it left).
+            // Tally each blob's shared border with each region OUTSIDE the selection (selected pieces excluded,
+            // so the carve cannot heal back into the selection it left).
             var tally = new Dictionary<int, Dictionary<int, int>>();
             for (int h = 0; h < nH; h++)
             {
@@ -185,13 +194,13 @@ namespace PieceSolver
                 bool c1 = IsCarved(f1), c2 = IsCarved(f2);
                 if (c1 == c2) continue;
                 int cf = c1 ? f1 : f2, sf = c1 ? f2 : f1, sreg = PieceMap[sf];
-                if (sreg == act) continue;                       // the active piece itself -> excluded
+                if (selection.Contains(sreg)) continue;          // inside the selection -> excluded
                 int blob = Find(cf);
                 if (!tally.TryGetValue(blob, out var d)) { d = new Dictionary<int, int>(); tally[blob] = d; }
                 d[sreg] = DictGet(d, sreg) + 1;
             }
 
-            // Target per blob: dominant foreign neighbour, else a fresh piece id (island).
+            // Target per blob: dominant neighbour outside the selection, else a fresh piece id (island).
             int nextId = NewRegionId().Value, islands = 0;
             var target = new Dictionary<int, int>();
             foreach (int blob in blobRoots)
@@ -266,15 +275,17 @@ namespace PieceSolver
             return changed;
         }
 
-        // Of the candidate `touched` faces, return the subset CONNECTED to the active piece — i.e. reachable
-        // from an active face by a flood that only steps through active faces or other touched candidates. Used
-        // by the provisional Shift+grow: connected candidates preview Green 5 (will be added on release), the
-        // rest preview Green 2 (a disconnected affordance — never applied). Read-only; mutates nothing.
-        public HashSet<int> GrowConnected(HashSet<int> touched, PieceId active)
+        // Multi-source grow assignment. Of the candidate `touched` faces, return a face -> piece map: each touched
+        // face REACHABLE from the selection (a flood seeded from every selected face, stepping only through
+        // selected faces or other touched candidates) is assigned to the SELECTED piece whose front reached it
+        // first (BFS — nearest wins, ties by face index). Touched faces no front reaches are omitted (a
+        // disconnected affordance — never applied). The provisional Shift+grow previews the keys Green 5 and the
+        // remaining touched faces Green 2. Single-select is the special case (one source). Read-only; mutates nothing.
+        public Dictionary<int, int> GrowAssign(HashSet<int> touched, HashSet<int> selection)
         {
-            var connected = new HashSet<int>();
-            if (PieceMap == null || _mesh == null || active.Value < 0 || touched == null || touched.Count == 0) return connected;
-            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count, act = active.Value;
+            var result = new Dictionary<int, int>();
+            if (PieceMap == null || _mesh == null || touched == null || touched.Count == 0 || selection == null || selection.Count == 0) return result;
+            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
             var adj = new List<int>[nF];
             for (int h = 0; h < nH; h++)
             {
@@ -285,30 +296,42 @@ namespace PieceSolver
                 (adj[f1] ??= new List<int>()).Add(f2);
                 (adj[f2] ??= new List<int>()).Add(f1);
             }
-            var seen = new bool[nF];
+            var src = new int[nF]; for (int i = 0; i < nF; i++) src[i] = -1;
             var q = new Queue<int>();
             for (int f = 0; f < nF; f++)
-                if (!P.Faces[f].IsUnused && PieceMap[f] == act) { seen[f] = true; q.Enqueue(f); }   // seed: the active piece
+                if (!P.Faces[f].IsUnused && selection.Contains(PieceMap[f])) { src[f] = PieceMap[f]; q.Enqueue(f); }   // seed: every selected face, labelled with its own piece
             while (q.Count > 0)
             {
-                var nbrs = adj[q.Dequeue()]; if (nbrs == null) continue;
+                int f = q.Dequeue(); var nbrs = adj[f]; if (nbrs == null) continue;
                 foreach (int nf in nbrs)
-                    if (!seen[nf] && (PieceMap[nf] == act || touched.Contains(nf)))
-                    {
-                        seen[nf] = true; q.Enqueue(nf);
-                        if (touched.Contains(nf)) connected.Add(nf);
-                    }
+                {
+                    if (src[nf] != -1) continue;                  // already claimed (selected seed or earlier front)
+                    bool inSel = selection.Contains(PieceMap[nf]);
+                    if (!inSel && !touched.Contains(nf)) continue;
+                    src[nf] = src[f]; q.Enqueue(nf);
+                    if (!inSel) result[nf] = src[f];              // a grown (touched, non-selected) face joins the source piece
+                }
             }
-            return connected;
+            return result;
         }
 
-        // Commit a grow: assign the given (connected) faces to the active region. Re-derives creases.
+        // Commit a single-piece grow / mint: assign the given faces to one region. Re-derives creases.
         public void ApplyGrow(HashSet<int> faces, PieceId active)
         {
             if (PieceMap == null || faces == null || active.Value < 0) return;
             bool changed = false;
             foreach (int f in faces)
                 if (f >= 0 && f < PieceMap.Length && PieceMap[f] != active.Value) { PieceMap[f] = active.Value; changed = true; }
+            if (changed) RegenCrease();
+        }
+
+        // Commit a multi-source grow: assign each face to the piece GrowAssign mapped it to. Re-derives creases.
+        public void ApplyGrowMap(Dictionary<int, int> faceToPiece)
+        {
+            if (PieceMap == null || faceToPiece == null) return;
+            bool changed = false;
+            foreach (var kv in faceToPiece)
+                if (kv.Key >= 0 && kv.Key < PieceMap.Length && PieceMap[kv.Key] != kv.Value) { PieceMap[kv.Key] = kv.Value; changed = true; }
             if (changed) RegenCrease();
         }
 
