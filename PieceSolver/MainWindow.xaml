@@ -388,30 +388,15 @@
 
                         <TabItem Header="BRUSH">
                             <StackPanel Margin="10,12,10,0">
-                                <TextBlock Text="FREEZE / CONSOLIDATE" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
-                                <CheckBox Content="Freeze brush (left-drag to paint)" IsChecked="{Binding FreezeBrush, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,2"
-                                          ToolTip="Paint the per-vertex freeze field (BrushWeights): painted regions consolidate / lock their creases when you Propose. Left-drag paints; right-drag still orbits. Size [ / ], soften Ctrl+Shift+[ / ]." />
+                                <TextBlock Text="CREASE" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
+                                <CheckBox Content="Crease brush (left-drag to nudge)" IsChecked="{Binding CreaseBrush, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,2"
+                                          ToolTip="Refine the proposed creases: drag near a crease and it is repelled from the brush center (an 'opposing magnet'), sliding each candidate edge onto the adjacent edge outward. Left-drag nudges; right-drag still orbits. Size [ / ]." />
                                 <DockPanel Margin="0,6,0,0">
                                     <TextBlock DockPanel.Dock="Left" Text="Size" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Footprint radius (world units) — also [ / ]." />
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="1" Maximum="100" Value="{Binding BrushSize}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
-                                <DockPanel Margin="0,3,0,0">
-                                    <TextBlock DockPanel.Dock="Left" Text="Strength" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Freeze ceiling: how strong a freeze a fully-painted spot reaches." />
-                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushStrength, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                    <Slider Minimum="0" Maximum="1" Value="{Binding BrushStrength}" VerticalAlignment="Center" Margin="6,0" />
-                                </DockPanel>
-                                <DockPanel Margin="0,3,0,0">
-                                    <TextBlock DockPanel.Dock="Left" Text="Softness" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Gaussian falloff (0 sharp .. 1 soft) — also Ctrl+Shift+[ / ]." />
-                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSoftness, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                    <Slider Minimum="0" Maximum="1" Value="{Binding BrushSoftness}" VerticalAlignment="Center" Margin="6,0" />
-                                </DockPanel>
-                                <DockPanel Margin="0,3,0,0">
-                                    <TextBlock DockPanel.Dock="Left" Text="Flow" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Build rate per dab — passes over a spot to reach full Strength." />
-                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushFlow, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                    <Slider Minimum="0" Maximum="1" Value="{Binding BrushFlow}" VerticalAlignment="Center" Margin="6,0" />
-                                </DockPanel>
-                                <TextBlock Text="Paint to lock creases, then Propose / Solve. Reset clears the freeze." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
+                                <TextBlock Text="Propose first to get candidate creases, then sweep along one side to push the line onto the edges you want. Changing Crease ∠ re-seeds (discards nudges)." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
                             </StackPanel>
                         </TabItem>
                     </TabControl>
