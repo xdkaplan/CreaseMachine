@@ -40,7 +40,7 @@ namespace PieceSolver
         // --- Piece visualization: a per-piece-tinted render of the crease-bounded regions. Uploaded SPLIT
         // (one set of 3 corners per triangle) so each piece carries its own colour + boundary-distance with
         // no bleed across creases. The baseline shader is flat tint; subagent aesthetics restyle PIECE_FRAG. ---
-        int _pieceProg, _pieceVao, _pieceVboPos, _pieceVboNrm, _pieceVboCol, _pieceVboDist;
+        int _pieceProg, _pieceVao, _pieceVboPos, _pieceVboNrm, _pieceVboCol, _pieceVboDist, _pieceVboEdge;
         int _uPMvp, _uPView, _uPNormalMat, _uPNeutral, _uPHasNeutral, _uPSharpness, _uPFacetExp, _uPInset;
         int _pieceVertCount;
         public bool ShowPieces = false;     // host sets this (auto-on after Propose) to draw the piece view
@@ -65,7 +65,7 @@ namespace PieceSolver
         int _seamVao, _seamVbo, _seamCount;                               // GL_LINES buffer for the seam curve
         int _seamCtrlVao, _seamCtrlVbo, _seamCtrlCount;                   // GL_LINES buffer for the control polygon + crosses
         public bool ShowCreases = false;                                  // overlay proposed piece-boundary creases
-        public Vector3 CreaseColor = new Vector3(1.0f, 0.42f, 0.12f);     // warm orange
+        public Vector3 CreaseColor = new Vector3(60f / 255f, 80f / 255f, 100f / 255f);   // deep slate (60,80,100)
         int _creaseVao, _creaseVbo, _creaseCount;                         // GL_LINES buffer for proposed creases
 
         const string VERT = @"#version 330 core
@@ -224,6 +224,7 @@ layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec3 aPieceCol;
 layout(location=3) in float aDist;
+layout(location=4) in vec4 aEdgeDist;   // xyz = per-corner perp dist to this tri's 3 edges (BIG if not a crease); w = bridge-tri flat flag
 uniform mat4 uMvp;
 uniform mat4 uView;
 uniform mat3 uNormalMat;
@@ -231,37 +232,94 @@ out vec3 vN;
 out vec3 vViewPos;
 out vec3 vPieceCol;
 out float vDist;
+out vec4 vEdgeDist;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
     vN = uNormalMat * aNormal;
     vViewPos = (uView * vec4(aPos, 1.0)).xyz;
     vPieceCol = aPieceCol;
-    vDist = aDist;            // world-space distance to this piece's nearest crease boundary
+    vDist = aDist;            // per-vertex geodesic dist to nearest crease (good in piece interiors)
+    vEdgeDist = aEdgeDist;    // xyz interpolates to exact perp dist to this tri's crease edges; w = flat flag
 }";
 
-        // BASELINE aesthetic: flat per-piece tint (lit by the neutral matcap). vDist (world distance to the
-        // piece boundary) and uInset (the band width) are passed in but UNUSED here on purpose — the
-        // overnight subagent aesthetics restyle THIS shader (inset band, bevel/AO, exploded gap, ...).
+        // AESTHETIC 'letterpress': each piece reads as a thick matte card debossed at its crease edges.
+        // The boundary band (vDist < uInset) is sculpted into a directional bevel using the SCREEN-SPACE
+        // gradient of vDist as a virtual edge normal: bright sheen on the light-facing slope of the crease,
+        // a soft occlusion roll on the shaded slope, and a thin dark seam line right at vDist==0. The result
+        // is a tactile quilted / pressed-card panel look. World-stable (vDist is world space; nothing
+        // animates) and distinct from contour-line / ceramic-tile / blueprint treatments. ASCII only.
         const string PIECE_FRAG = @"#version 330 core
 in vec3 vN;
 in vec3 vViewPos;
 in vec3 vPieceCol;
 in float vDist;
+in vec4 vEdgeDist;
 out vec4 FragColor;
 uniform sampler2D uNeutral;
 uniform int uHasNeutral;
 uniform float uSharpness;
 uniform float uFacetExp;
-uniform float uInset;        // world-relative inset band width (subagents: use vDist < uInset)
+uniform float uInset;        // world-relative inset band width
+
 void main() {
+    // --- base surface normal (smooth<->faceted blend, same controls as baseline) ---
     vec3 sn = normalize(vN);
     vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
     if (dot(fn, sn) < 0.0) fn = -fn;
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
     vec3 n = normalize(mix(sn, fn, s));
     if (n.z < 0.0) n = -n;
-    vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, n.xy * 0.5 + 0.5).rgb : vec3(clamp(n.z, 0.0, 1.0));
-    FragColor = vec4(lit * vPieceCol, 1.0);   // baseline: flat per-piece tint
+
+    // --- flat (no-deboss) baseline: the piece tint lit on the plain normal. The final colour mixes from
+    // this toward the full deboss, so 'effect strength' (and the bridge-triangle flat case) is a simple lerp.
+    vec3 tint = mix(vPieceCol, vPieceCol * 1.06, 0.5);
+    vec3 litFlat = (uHasNeutral == 1) ? texture(uNeutral, n.xy * 0.5 + 0.5).rgb : vec3(clamp(n.z, 0.0, 1.0));
+    vec3 faceFlat = litFlat * tint;
+
+    // --- corrected distance-to-crease: the per-vertex field (vDist) collapses to ~0 across a triangle
+    // whose corners all sit on creases (e.g. a two-crease 'V' triangle). vEdgeDist interpolates to the
+    // EXACT perpendicular distance to this triangle's own crease edges (BIG sentinel for non-crease
+    // edges), so take the nearest, then max() with the per-vertex field so deeper interiors stay smooth. ---
+    float own = min(min(vEdgeDist.x, vEdgeDist.y), vEdgeDist.z);
+    float d = max(vDist, (own < 1e8) ? own : 0.0);
+
+    // --- normalized distance into the groove band: t==0 at crease, t==1 at the band rim ---
+    float band = max(uInset, 1e-6);
+    float t = clamp(d / band, 0.0, 1.0);
+
+    // --- groove profile w(t): the single weight that SHAPES the whole deboss (bevel tilt, darkening and
+    // sheen all scale by it). A smooth DOME -- STRONGEST at the crease (the centre, t=0), feathering to a
+    // zero-slope landing at the rim (t=1). Both ends are flat, so the effect peaks broadly on the seam and
+    // fades out softly (no thin spike, no harsh edge where the crease-edge triangle ends). ---
+    float w = 0.5 + 0.5 * cos(t * 3.14159265);
+
+    // --- debossed (pressed-in) bevel: tilt the shading normal toward the crease (downhill), scaled by w.
+    // grad(d) points uphill (away from the crease); negate it for the deboss. ---
+    vec2 g = vec2(dFdx(d), dFdy(d));
+    vec2 dir = (length(g) > 1e-9) ? -normalize(g) : vec2(0.0, -1.0);
+    float slope = 0.45 * w;   // bevel tilt strength (reduced 25% from 0.6)
+    vec3 bn = normalize(n + vec3(dir * slope, 0.0));
+    if (bn.z < 0.0) bn = -bn;
+
+    // --- matcap lighting on the beveled normal (the groove wall catches a real highlight) ---
+    vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, bn.xy * 0.5 + 0.5).rgb
+                                  : vec3(clamp(bn.z, 0.0, 1.0));
+    vec3 face = lit * tint;
+
+    // --- directional sheen on the inner wall + ellipsoidal occlusion (darkens toward the crease by w) ---
+    float facing = clamp(dir.y * 0.7 + 0.3, 0.0, 1.0);
+    face += w * facing * 0.30 * vec3(1.0);
+    face *= mix(1.0, 0.45, w);
+
+    // --- crisp seam line: a thin dark line right at the crease (world-stable, AA'd by fwidth) ---
+    float aa = fwidth(d) * 1.5 + 1e-6;
+    float seam = 1.0 - smoothstep(0.0, aa, d);       // 1 exactly on the crease
+    face = mix(face, face * 0.30, seam * 0.9);
+
+    // Triangles with NO crease edge (vEdgeDist.w == 1) get no deboss (flat tint -- a groove belongs only to a
+    // triangle that contains a crease edge); crease-edge tris get the ellipsoidal deboss at 50% strength.
+    float fx = (vEdgeDist.w > 0.5) ? 0.0 : 0.5;
+    FragColor = vec4(mix(faceFlat, face, fx), 1.0);
 }";
 
         void EnsurePieceProgram()
@@ -281,12 +339,12 @@ void main() {
         // Upload the piece-tinted mesh, SPLIT per triangle (3 corners each, sequential — no EBO). Arrays are
         // parallel: pos/nrm = 3 floats per corner, col = 3 floats per corner (the piece colour), dist = 1
         // float per corner (world distance to the piece's crease boundary). vertCount = pos.Length/3.
-        public void SetPieces(float[] pos, float[] nrm, float[] col, float[] dist)
+        public void SetPieces(float[] pos, float[] nrm, float[] col, float[] dist, float[] edge)
         {
             EnsurePieceProgram();
             _pieceVertCount = (pos == null) ? 0 : pos.Length / 3;
             if (_pieceVertCount == 0) return;
-            if (_pieceVao == 0) { _pieceVao = GL.GenVertexArray(); _pieceVboPos = GL.GenBuffer(); _pieceVboNrm = GL.GenBuffer(); _pieceVboCol = GL.GenBuffer(); _pieceVboDist = GL.GenBuffer(); }
+            if (_pieceVao == 0) { _pieceVao = GL.GenVertexArray(); _pieceVboPos = GL.GenBuffer(); _pieceVboNrm = GL.GenBuffer(); _pieceVboCol = GL.GenBuffer(); _pieceVboDist = GL.GenBuffer(); _pieceVboEdge = GL.GenBuffer(); }
             GL.BindVertexArray(_pieceVao);
             GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboPos);
             GL.BufferData(BufferTarget.ArrayBuffer, pos.Length * sizeof(float), pos, BufferUsageHint.DynamicDraw);
@@ -300,6 +358,9 @@ void main() {
             GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboDist);
             GL.BufferData(BufferTarget.ArrayBuffer, dist.Length * sizeof(float), dist, BufferUsageHint.DynamicDraw);
             GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 1 * sizeof(float), 0); GL.EnableVertexAttribArray(3);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboEdge);
+            GL.BufferData(BufferTarget.ArrayBuffer, edge.Length * sizeof(float), edge, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(4, 4, VertexAttribPointerType.Float, false, 4 * sizeof(float), 0); GL.EnableVertexAttribArray(4);
             GL.BindVertexArray(0);
         }
 
@@ -675,7 +736,7 @@ void main() {
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
             if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }
             if (_creaseVao != 0) { GL.DeleteVertexArray(_creaseVao); GL.DeleteBuffer(_creaseVbo); }
-            if (_pieceVao != 0) { GL.DeleteVertexArray(_pieceVao); GL.DeleteBuffer(_pieceVboPos); GL.DeleteBuffer(_pieceVboNrm); GL.DeleteBuffer(_pieceVboCol); GL.DeleteBuffer(_pieceVboDist); }
+            if (_pieceVao != 0) { GL.DeleteVertexArray(_pieceVao); GL.DeleteBuffer(_pieceVboPos); GL.DeleteBuffer(_pieceVboNrm); GL.DeleteBuffer(_pieceVboCol); GL.DeleteBuffer(_pieceVboDist); GL.DeleteBuffer(_pieceVboEdge); }
             if (_pieceProg != 0) GL.DeleteProgram(_pieceProg);
             if (_tex != 0) GL.DeleteTexture(_tex);
             if (_texNeutral != 0) GL.DeleteTexture(_texNeutral);

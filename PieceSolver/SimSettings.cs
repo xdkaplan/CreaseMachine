@@ -153,17 +153,20 @@ namespace PieceSolver
         bool _showProposedMesh;
         public bool ShowProposedMesh { get => _showProposedMesh; set => Set(ref _showProposedMesh, value); }
 
+        // Piece visualization: inset/seam band width as a FRACTION of mesh radius (world-relative). Drives
+        // uInset in the piece shader (the border / bevel-lip / gap thickness). Live; default narrow.
+        double _insetWidthFrac = 0.012;
+        public double InsetWidthFrac { get => _insetWidthFrac; set => Set(ref _insetWidthFrac, value); }
+
         // Crease proposer threshold (degrees): after Propose, an interior edge whose settled fold angle
         // is at least this is drawn as a proposed piece boundary. Live — re-labels without re-proposing.
-        double _creaseAngleDeg = 30.0;
+        double _creaseAngleDeg = 10.0;
         public double CreaseAngleDeg { get => _creaseAngleDeg; set => Set(ref _creaseAngleDeg, value); }
 
-        // Crease brush (stage 3). CreaseBrush = tool active (left-drag bumps proposed creases outward; right
-        // still orbits). It edits the crease selection only — an "opposing magnet" that slides candidate
-        // crease edges under the footprint onto adjacent edges, away from the brush center. Size = footprint
-        // radius (world units), also via [ / ]. (No Strength/Softness/Flow — the bump is a hard radius cutoff.)
-        bool _creaseBrush;
-        public bool CreaseBrush { get => _creaseBrush; set => Set(ref _creaseBrush, value); }
+        // Crease brush (stage 3) is CONTEXTUAL, not a toggle: it is live whenever the model has pieces (after
+        // Propose -> Accept). Left-click a piece to make it the active selection (highlighted); click/drag to
+        // paint region membership (grow the active selection); Shift+click starts a new region; right still
+        // orbits. Size = footprint radius (world units), also via [ / ].
         double _brushSize = 10.0;
         public double BrushSize { get => _brushSize; set => Set(ref _brushSize, value); }
 

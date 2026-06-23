@@ -232,6 +232,29 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   before advancing. The `.journal` grammar is a **superset of the CLI's**, so the same file drives both
   the headed app and the headless `crease.exe` (the CLI maps `solve` to its Nesterov bake equivalent).
   Camera orbit is intentionally not journaled.
+- **Piecing data model + editors** (`Pattern.cs` / `PieceId.cs` / `Editor.cs` / `Piecer.cs`): the
+  Piecing segmentation and its interaction live outside the `MainWindow` god-file. See
+  [`docs/PIECER-REFACTOR.md`](docs/PIECER-REFACTOR.md) for the layered model + glossary + deferred roadmap.
+  - **`Pattern`** — a THIN companion over one `PlanktonMesh` (Plankton has no per-face attribute storage,
+    so the labels have nowhere to live *on* the mesh). NOT a mesh; stores no geometry — only per-face
+    bookkeeping index-coupled to the held mesh. Holds the authoritative **`PieceMap`** (`int[]`, per-face
+    piece id) + the **derived `CreaseMap`** (`HashSet<long>` of packed edge keys = edges between faces of
+    different pieces). Ops mutate the partition (`Seed` flood-fill = a whole-partition Chapter reset;
+    `Paint` grows the active region; `Remove` deletes wholly-marked pieces + heals into the dominant
+    neighbour; `SplitDisconnected` renumbers stroke-carved islands); `RegenCrease` re-derives `CreaseMap`
+    from `PieceMap` (lossy — rebuilds the whole set, no per-crease identity); queries are read-only
+    (`NewRegionId`, `FullyMarked`, `FacesUnderBrush`).
+  - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id. Ints stay dense in
+    `PieceMap` (hot path); the typed handle appears only at the API / selection boundary.
+  - **`Editor` / `Piecer`** — `Editor` is the abstract base (lifecycle + pointer hooks + a per-face
+    `FaceFill` tint the view queries while building the piece buffers). **`Piecer : Editor`** is the
+    editor active during the Piecing phase (after Propose → Accept): the contextual brush (click a piece
+    to select, drag to grow it, Shift = new region, Ctrl = remove + heal, click-vs-drag threshold). It
+    edits the `Pattern` via ops; no geometry moves.
+  - **`IEditorHost`** — the narrow interface `MainWindow` implements so an editor talks to its host
+    (mesh, `Pattern`, picking, brush footprint, view-refresh hooks) rather than the whole window — the
+    wall that keeps the god-file from regrowing. `MainWindow` owns the `Pattern` + the active `Editor`,
+    routes pointer input to it, and keeps the render loop / camera / picking / crease-review modal.
 
 The brush-to-freeze-creases north star and the CreaseStudio consolidation plan live in the user's memory.
 

@@ -46,6 +46,18 @@ become a *module* within the eventual **CreaseStudio**. Its architecture + Solve
 in `AGENTS.md` ("In-process app — PieceSolver/"); the file table below adds its key sources. The
 covariance-flow material in §§4–8 still describes the GH component + the shared Rhino-free engine.
 
+**Piecing model extracted from `MainWindow` (behaviour-preserving refactor).** The Piecing data model +
+interaction were lifted out of the `MainWindow.xaml.cs` god-file into cohesive units. The **partition** now
+lives in **`Pattern`** — a *thin companion* over the `PlanktonMesh` (it stores the per-face `PieceMap` +
+derived `CreaseMap` + the ops, NOT geometry; Plankton has no per-face attribute storage, so the labels have
+nowhere to live on the mesh). The **interaction** is the new **`Editor`/`Piecer`** pair (the contextual
+piecing brush — select / drag-to-grow / Shift = new region / Ctrl = remove + dominant-neighbour heal),
+behind the narrow **`IEditorHost`** interface that `MainWindow` implements (the wall that keeps the god-file
+from regrowing). `MainWindow` keeps the render loop / camera / picking / crease-review modal. This was a pure
+relocation — no behaviour change. The design note, glossary, and **deferred roadmap** (tx/undo stack,
+GUID/entity table, reconciling `RegenCrease`, `Picker.cs`, `UnweldByRegion`/PieceMesh + weld-FBX-on-import,
+polymorphic `Selection`, the partition↔crease authority flip) are in `docs/PIECER-REFACTOR.md`.
+
 ## 2. Orientation
 
 | File | Role | Rhino types? |
@@ -58,7 +70,11 @@ covariance-flow material in §§4–8 still describes the GH component + the sha
 | `lib/Plankton*.dll` | Upstream Plankton 0.4.3 (vendored, unmodified). | — |
 | `PAPER_FORMULAS.md` | Transcription of the App-B formulas used (B.1 Eq 7/8/9, B.2, B.3 Eq 10, B.4, B.5.1). | — |
 | `PieceSolver/IsometricLM.cs` | Isometric **Levenberg–Marquardt** patch-solver: matrix-free Jacobi-preconditioned CG, parallel gather apply, opt-in FD gradient gate, optional `pinned` Dirichlet (seam freeze). The develop engine for the in-process app. | **no** |
-| `PieceSolver/MainWindow.xaml.cs` | The PieceSolver app: load, async modal **Solve** bake, multi-piece split + reassemble, B-spline seam UX, journal/replay. | WPF/GL |
+| `PieceSolver/MainWindow.xaml.cs` | The PieceSolver app: load, async modal **Solve** bake, multi-piece split + reassemble, B-spline seam UX, journal/replay. Now also the `IEditorHost` (owns the `Pattern` + active `Editor`, routes pointer input, keeps render/camera/picking/crease-review). | WPF/GL |
+| `PieceSolver/Pattern.cs` | The Piecing **partition** — a thin companion over the `PlanktonMesh` holding `PieceMap` (per-face piece id) + derived `CreaseMap` + ops (Seed/Paint/Remove/SplitDisconnected), `RegenCrease`, and queries. NOT a mesh. | **no** |
+| `PieceSolver/Editor.cs` | Abstract `Editor` (lifecycle + pointer hooks + per-face fill tint) + the narrow `IEditorHost` interface MainWindow implements. | **no** |
+| `PieceSolver/Piecer.cs` | `Piecer : Editor` — the Piecing-phase contextual brush (select / drag-to-grow / Shift = new region / Ctrl = remove + heal); the gesture code lifted from MainWindow's mouse handlers. | **no** |
+| `PieceSolver/PieceId.cs` | Zero-cost `readonly struct` typed handle over the int piece id (`PieceMap` stays `int[]`). | **no** |
 | `PieceSolver/Bff.cs` | Boundary First Flattening wrapper (drives external `bff-command-line.exe`), per patch. | **no** |
 | `src/FbxIO.cs` | Binary-FBX reader; preserves Rhino's *unwelded* seam topology → one component per face. | **no** |
 | `src/BSpline.cs` | Low-DOF periodic cubic "bent wire" seam fit + sampling. | **no** |

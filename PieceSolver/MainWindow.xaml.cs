@@ -11,7 +11,7 @@ using CreaseMachine;
 
 namespace PieceSolver
 {
-    public partial class MainWindow : Window
+    public partial class MainWindow : Window, IEditorHost
     {
         GLWpfControl _gl;
         MeshView _view;
@@ -69,10 +69,8 @@ namespace PieceSolver
         System.Windows.Point _lastMouse;
         enum DragMode { None, Orbit, Pan, Edit }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = Crease brush
-        // Crease brush: an "opposing magnet" that repels proposed crease edges under the footprint, sliding
-        // each outward across its triangle onto adjacent edges — refines the proposed seam. Edits the
-        // _creaseEdges selection only (no geometry moves). Chassis (pick/preview/stroke/hotkeys) from studio.
-        double _dabAccum;                 // screen-px travelled since the last bump (path-spacing accumulator)
+        // Brush-footprint preview overlay (the hover circle). The brush INTERACTION itself lives in the
+        // Piecer editor; MainWindow only owns the preview dot + picking (exposed to the editor via IEditorHost).
         System.Windows.Point _lastHover;  // last hover position, for the footprint preview
         System.Windows.Shapes.Ellipse _previewDot;   // brush-footprint preview overlay
 
@@ -90,11 +88,25 @@ namespace PieceSolver
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
         double[] _proposedPos;   // settled (developed) geometry from the last Propose, per original vertex (nV*3); for the DISPLAY preview
-        System.Collections.Generic.HashSet<long> _creaseEdges;          // editable crease selection (sorted edge keys); seeded by Propose, edited by the Crease brush
-        System.Collections.Generic.Dictionary<long, (int, int)> _edgeApex;   // edge key -> its two opposite apex vertices (topology cache for the brush)
+        // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
+        // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). Recreated when the mesh changes.
+        Pattern _pattern;
+        // EDITOR: the active interaction. Non-null == a proposal has been accepted and the Crease brush owns the
+        // left-button + hover paths. Set in OpenCreaseReview's onAccept, cleared in ClearProposedCreases (mesh
+        // change / review-cancel / load / reset / subdivide / run / solve). The Piecer instance is retained so
+        // its selection persists across activations. The brush is LIVE only when EditorActive (which also gates
+        // out the transient `_baking` / `_camModal` windows) — exactly the old BrushAvailable condition.
+        Editor _activeEditor;
+        Piecer _piecer;
+        // The old BrushAvailable gate, now expressed over the editor: an editor is bound AND we're not in a
+        // transient blocking state (a bake or a camera-modal). Drives the delegation, preview, and [ / ] keys.
+        bool EditorActive => _activeEditor != null && !_baking && !_camModal;
+        bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
+        System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
+        bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
-        float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist;
+        float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
         bool _pieceDirty, _showPieces; float _pieceInset = 0.05f;
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
@@ -104,6 +116,7 @@ namespace PieceSolver
         {
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
+            _piecer = new Piecer(this);   // the Piecing editor; activated after Propose -> Accept (see OpenCreaseReview)
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
             // hidden by default. Created now so Log() works from startup; its Owner is set lazily on
@@ -187,6 +200,8 @@ namespace PieceSolver
             SolveButton.Click += (s, e) => Execute(StudioCommand.Solve(_sim.ToBakeParams()), record: true);   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal
             ProposeButton.Click += (s, e) => { _ = OnProposeAsync(); };   // stage 2: propose piece-boundary creases (no-collapse flow, reuses the modal)
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
+            CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
+            CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
@@ -222,10 +237,16 @@ namespace PieceSolver
             _sim.PropertyChanged += (s, e) =>
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
-                    || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual();
+                    || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)
+                    || e.PropertyName == nameof(SimSettings.InsetWidthFrac)) _gl?.InvalidateVisual();
                 else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RebuildCreaseOverlay(); RebuildPieces(); _gl?.InvalidateVisual(); }   // re-place creases + pieces on the new positions (keep edits)
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
-                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) { RelabelCreases(); RebuildPieces(); }   // re-seed creases (discards nudges) + re-piece
+                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg))
+                {
+                    RelabelCreases();   // recompute regions + crease-EDGE overlay
+                    RebuildPieces();    // rebuild the crease-shader grooves; colour rule: rainbow when settled, NEUTRAL while dragging
+                    _gl?.InvalidateVisual();
+                }
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
 
@@ -243,11 +264,11 @@ namespace PieceSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
-                else if (e.Key == Key.OemCloseBrackets && _sim.CreaseBrush && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
+                else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1.2); UpdatePreview(_lastHover); e.Handled = true;
                 }
-                else if (e.Key == Key.OemOpenBrackets && _sim.CreaseBrush && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
+                else if (e.Key == Key.OemOpenBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
                 {
                     ResizeBrush(1.0 / 1.2); UpdatePreview(_lastHover); e.Handled = true;
                 }
@@ -369,6 +390,7 @@ namespace PieceSolver
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { Title = "PieceSolver — missing: " + path; return; }
             try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
             catch (Exception ex) { Title = "PieceSolver — load failed: " + ex.Message; return; }
+            RebindPattern();          // the partition companion now wraps the new mesh
             _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
@@ -654,7 +676,7 @@ namespace PieceSolver
                 {
                     _creaseFold = fold; _creaseA = ea; _creaseB = eb;
                     RelabelCreases();
-                    RebuildPieces();   // auto-on: show the per-piece view as soon as creases exist
+                    OpenCreaseReview();   // camera-only modal: full patchwork + Crease angle slider + Accept/Cancel
                     Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
                 if (_view != null) _view.Upload(_session.Mesh, ProposedPreviewPos());   // input mesh, or the proposed preview if toggled
@@ -665,19 +687,135 @@ namespace PieceSolver
             }
         }
 
+        // ===================== CamModal (reusable camera-only modal) =====================
+        // A modal that blocks all the window chrome but leaves the 3D viewport live for orbit/pan/zoom — a
+        // common need (review/confirm a result while still inspecting it in 3D). Title + body content + the
+        // Accept/Cancel callbacks are supplied per use; the host just toggles chrome and shows the floating bar.
+
+        void ShowCamModal(string title, System.Windows.FrameworkElement body, System.Action onAccept, System.Action onCancel)
+        {
+            CamModalTitle.Text = title;
+            CamModalBody.Content = body;
+            _camAccept = onAccept; _camCancel = onCancel;
+            _camModal = true;
+            SetChromeEnabled(false);
+            CamModalBar.Visibility = Visibility.Visible;
+        }
+
+        void CloseCamModal()
+        {
+            _camModal = false;
+            SetChromeEnabled(true);
+            CamModalBar.Visibility = Visibility.Collapsed;
+            CamModalBody.Content = null;
+            _camAccept = null; _camCancel = null;
+        }
+
+        // Enable/disable everything except the viewport (and the modal bar itself), so only camera + the modal
+        // are interactive. The viewport (CenterHost) is deliberately left out.
+        void SetChromeEnabled(bool en)
+        {
+            MenuBar.IsEnabled = en;
+            TopBar.IsEnabled = en;
+            LeftPanel.IsEnabled = en;
+            RightPanel.IsEnabled = en;
+            BottomBar.IsEnabled = en;
+            LeftSplitter.IsEnabled = en;
+            RightSplitter.IsEnabled = en;
+        }
+
+        // ===================== Crease review (a CamModal use) =====================
+        // After Propose: review the proposed creases in 3D with the full patchwork colours and a live Crease
+        // angle slider. Accept commits them (back to neutral display, brush goes live); Cancel discards.
+        void OpenCreaseReview()
+        {
+            ShowCamModal("Review creases — drag Crease ∠, then Accept", BuildCreaseReviewBody(),
+                onAccept: () =>
+                {
+                    _activeEditor = _piecer;   // proposal accepted -> the Crease brush goes live (was: _faceRegion != null)
+                    RebuildPieces();   // _camModal now false -> recolour to neutral (via the editor's FaceFill); creases stay committed
+                    Log($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
+                    Title = "PieceSolver — " + _creaseCount + " creases committed";
+                },
+                onCancel: () =>
+                {
+                    ClearProposedCreases();   // discard the proposal entirely
+                    if (_view != null && _session != null) _view.Upload(_session.Mesh, ProposedPreviewPos());
+                    _gl?.InvalidateVisual();
+                    Log("crease proposal discarded");
+                });
+            RebuildPieces();   // _camModal == true -> full rainbow patchwork
+        }
+
+        // The crease-review modal body: a single live "Crease ∠" slider bound to the same VM property the old
+        // panel slider used, so dragging re-thresholds + re-segments the patchwork live (PropertyChanged hook).
+        System.Windows.FrameworkElement BuildCreaseReviewBody()
+        {
+            System.Windows.Media.SolidColorBrush Brush(byte r, byte g, byte b)
+                => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
+            var dp = new System.Windows.Controls.DockPanel { DataContext = _sim, MinWidth = 320, LastChildFill = true };
+            var label = new System.Windows.Controls.TextBlock
+            {
+                Text = "Crease ∠", Width = 62, Foreground = Brush(0xC8, 0xC8, 0xC8),
+                FontSize = 11, VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+            System.Windows.Controls.DockPanel.SetDock(label, System.Windows.Controls.Dock.Left);
+            var val = new System.Windows.Controls.TextBlock
+            {
+                Width = 44, Foreground = Brush(0x8A, 0x8A, 0x98), FontSize = 11,
+                TextAlignment = System.Windows.TextAlignment.Right, VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+            val.SetBinding(System.Windows.Controls.TextBlock.TextProperty,
+                new System.Windows.Data.Binding("CreaseAngleDeg") { StringFormat = "{0:0.#}°" });
+            System.Windows.Controls.DockPanel.SetDock(val, System.Windows.Controls.Dock.Right);
+            var slider = new System.Windows.Controls.Slider
+            {
+                Minimum = 5, Maximum = 90, MinWidth = 200, VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                Margin = new System.Windows.Thickness(6, 0, 6, 0)
+            };
+            slider.SetBinding(System.Windows.Controls.Slider.ValueProperty,
+                new System.Windows.Data.Binding("CreaseAngleDeg") { Mode = System.Windows.Data.BindingMode.TwoWay });
+            // While the thumb is dragged, the grooves stay live (re-segmenting) but the fill goes NEUTRAL (no
+            // rainbow); on release we rebuild with the colour back. (Thumb drag events bubble to the slider.)
+            slider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragStartedEvent,
+                new System.Windows.Controls.Primitives.DragStartedEventHandler((s, e) => { _angleDragging = true; RebuildPieces(); }));
+            slider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragCompletedEvent,
+                new System.Windows.Controls.Primitives.DragCompletedEventHandler((s, e) => { _angleDragging = false; RebuildPieces(); }));
+            dp.Children.Add(label);
+            dp.Children.Add(val);
+            dp.Children.Add(slider);
+            return dp;
+        }
+
         // Re-seed the editable crease selection from the cached fold angles at the current Crease angle
         // threshold (DISCARDS brush edits), then rebuild the overlay. Called on Propose + the Crease angle
         // slider. No cached angles -> clears.
-        void RelabelCreases() { SeedCreaseEdges(); RebuildCreaseOverlay(); }
+        // Re-seed the per-FACE region map from the threshold creases (DISCARDS brush paint), then derive the
+        // crease set from those region boundaries and rebuild the overlay. The region map is primary; creases
+        // are whatever separates two regions. A dangling threshold crease (doesn't split a region) is dropped.
+        // Seed a provisional crease set (into the Pattern's CreaseMap) to flood-fill the initial regions, then
+        // re-seed the per-FACE region map from it (DISCARDS brush paint) and re-derive the real region-boundary
+        // creases, then rebuild the overlay. The region map is primary; creases are whatever separates two
+        // regions. A dangling threshold crease (doesn't split a region) is dropped. Piecer inactive (modal).
+        void RelabelCreases()
+        {
+            SeedCreaseEdges();          // provisional crease set into _pattern.CreaseMap
+            _piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
+            _pattern?.Seed();           // flood-fill the regions across non-crease edges
+            _pattern?.RegenCrease();    // overwrite CreaseMap with the real region-boundary creases
+            RebuildCreaseOverlay();
+        }
 
-        // Seed the editable selection from the threshold-labeled proposed edges.
+        // Seed a provisional crease set from the threshold-labeled proposed edges (only used to flood-fill the
+        // initial regions in _pattern.Seed; RegenCrease then overwrites CreaseMap with the real boundaries).
         void SeedCreaseEdges()
         {
-            _creaseEdges = new System.Collections.Generic.HashSet<long>();
+            if (_pattern == null) return;
+            _pattern.CreaseMap = new System.Collections.Generic.HashSet<long>();
             if (_creaseFold == null) return;
             double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
             for (int i = 0; i < _creaseFold.Length; i++)
-                if (_creaseFold[i] >= thr) _creaseEdges.Add(EdgeKey(_creaseA[i], _creaseB[i]));
+                if (_creaseFold[i] >= thr) _pattern.CreaseMap.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the
@@ -685,7 +823,8 @@ namespace PieceSolver
         // happens in OnRender. The Crease brush calls this after each bump; the slider re-seeds first.
         void RebuildCreaseOverlay()
         {
-            if (_creaseEdges == null || _creaseEdges.Count == 0 || _session == null)
+            var creaseMap = _pattern?.CreaseMap;
+            if (creaseMap == null || creaseMap.Count == 0 || _session == null)
             {
                 _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
                 return;
@@ -695,7 +834,7 @@ namespace PieceSolver
             double[] src = ProposedPreviewPos();   // place creases on the previewed mesh when shown, else M0
             var pts = new System.Collections.Generic.List<float>();
             int n = 0;
-            foreach (long key in _creaseEdges)
+            foreach (long key in creaseMap)
             {
                 int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
                 if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
@@ -724,13 +863,20 @@ namespace PieceSolver
             => (_sim.ShowProposedMesh && _proposedPos != null && _session != null
                 && _proposedPos.Length == _session.Mesh.Vertices.Count * 3) ? _proposedPos : null;
 
+        // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
+        // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
+        // exactly what ClearProposedCreases would set them to anyway.
+        void RebindPattern() { _pattern = new Pattern(_session?.Mesh); }
+
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos == null && _creaseEdges == null && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
+            if (_creaseFold == null && _proposedPos == null && (_pattern == null || _pattern.CreaseMap == null) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos = null;
-            _creaseEdges = null; _edgeApex = null;
+            if (_pattern != null) { _pattern.CreaseMap = null; _pattern.PieceMap = null; }
+            _piecer?.ClearSelection();
+            _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
             _showPieces = false; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
@@ -741,37 +887,21 @@ namespace PieceSolver
         // angle change, on a brush stroke, and on the proposed-mesh preview toggle.
         void RebuildPieces()
         {
-            if (_session == null || _creaseEdges == null || _creaseEdges.Count == 0)
+            var creaseMap = _pattern?.CreaseMap;
+            if (_session == null || creaseMap == null || creaseMap.Count == 0)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
-            int nV = P.Vertices.Count, nF = P.Faces.Count, nH = P.Halfedges.Count;
+            int nV = P.Vertices.Count, nF = P.Faces.Count;
             double[] dp = ProposedPreviewPos();
             Vector3 Pos(int v) => dp != null
                 ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
 
-            // Union-find face components across non-crease interior edges (a crease blocks the merge).
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                if (_creaseEdges.Contains(EdgeKey(a, b))) continue;
-                int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
-            }
-            var pieceId = new int[nF];
-            var rootId = new System.Collections.Generic.Dictionary<int, int>();
-            int pieceCount = 0;
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) { pieceId[f] = -1; continue; }
-                int r = Find(f); if (!rootId.TryGetValue(r, out int id)) { id = pieceCount++; rootId[r] = id; }
-                pieceId[f] = id;
-            }
+            // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
+            // missing or stale for this topology.
+            if (_pattern.PieceMap == null || _pattern.PieceMap.Length != nF) _pattern.Seed();
+            int[] pieceId = _pattern.PieceMap;
+            int pieceCount = 0; for (int f = 0; f < nF; f++) if (pieceId[f] + 1 > pieceCount) pieceCount = pieceId[f] + 1;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
             float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
@@ -779,7 +909,7 @@ namespace PieceSolver
             _pieceInset = 0.06f * meshR;
             var dist = new float[nV]; for (int v = 0; v < nV; v++) dist[v] = cap;
             var pq = new System.Collections.Generic.PriorityQueue<int, float>();
-            foreach (long key in _creaseEdges)
+            foreach (long key in creaseMap)
             {
                 int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
                 if (a >= 0 && a < nV && dist[a] != 0f) { dist[a] = 0f; pq.Enqueue(a, 0f); }
@@ -807,16 +937,43 @@ namespace PieceSolver
                 vN[fv[0]] += fn; vN[fv[1]] += fn; vN[fv[2]] += fn;
             }
 
-            // SPLIT buffers: 3 corners per triangle, each carrying its piece colour + boundary distance.
+            // SPLIT buffers: 3 corners per triangle, each carrying its piece colour, the per-vertex boundary
+            // distance, and the per-corner perpendicular distance to each of the triangle's 3 edges (BIG when
+            // that edge is NOT a crease). The latter interpolates to the EXACT distance to the tri's own crease
+            // edges, fixing the all-corners-on-crease ("V") triangle that the per-vertex field renders solid.
+            const float BIG = 1e9f;
+            static float PerpDist(Vector3 p, Vector3 a, Vector3 b)
+            {
+                Vector3 ab = b - a; float L = ab.Length;
+                return L < 1e-12f ? (p - a).Length : Vector3.Cross(p - a, ab).Length / L;
+            }
             var pos = new System.Collections.Generic.List<float>(nF * 9);
             var nrm = new System.Collections.Generic.List<float>(nF * 9);
             var col = new System.Collections.Generic.List<float>(nF * 9);
             var dst = new System.Collections.Generic.List<float>(nF * 3);
+            var edg = new System.Collections.Generic.List<float>(nF * 12);
+            // Colour source split (grooves delineate the pieces in every case; this only sets the FILL tint):
+            //   - crease review (cam-modal): settled -> full rainbow patchwork (PieceColor); mid-drag -> neutral
+            //     white (the crease shader still shows the pieces, but no colour churns while you slide the angle)
+            //   - brush mode: the active EDITOR's per-face fill (active region light-blue / remove preview red /
+            //     null -> white). FaceFillBegin precomputes the remove set ONCE so FaceFill stays O(1) per face.
+            _activeEditor?.FaceFillBegin();
             for (int f = 0; f < nF; f++)
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                Vector3 cc = PieceColor(pieceId[f]);
+                Vector3 cc;
+                if (_camModal) cc = _angleDragging ? Vector3.One : PieceColor(pieceId[f]);   // crease-review colouring stays HERE
+                else cc = _activeEditor?.FaceFill(f, pieceId[f]) ?? Vector3.One;              // brush colouring comes from the editor
+                Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
+                bool c0 = creaseMap.Contains(Pattern.EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
+                bool c1 = creaseMap.Contains(Pattern.EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
+                bool c2 = creaseMap.Contains(Pattern.EdgeKey(fv[2], fv[0]));   // edge 2 = (v2,v0)
+                // A groove belongs only to a triangle that actually CONTAINS a crease edge. Any triangle
+                // with no crease edge gets flat-tinted (flag = 1): this kills every spurious groove that the
+                // per-vertex field draws along a non-crease edge whose two endpoints are crease vertices
+                // (e.g. edge 1-3 between crease-chain vertices, or an all-corners "bridge" triangle).
+                float flat = (!c0 && !c1 && !c2) ? 1f : 0f;
                 for (int k = 0; k < 3; k++)
                 {
                     int v = fv[k]; Vector3 pp = Pos(v);
@@ -825,13 +982,19 @@ namespace PieceSolver
                     nrm.Add(nn.X); nrm.Add(nn.Y); nrm.Add(nn.Z);
                     col.Add(cc.X); col.Add(cc.Y); col.Add(cc.Z);
                     dst.Add(dist[v]);
+                    edg.Add(c0 ? PerpDist(pp, p0, p1) : BIG);
+                    edg.Add(c1 ? PerpDist(pp, p1, p2) : BIG);
+                    edg.Add(c2 ? PerpDist(pp, p2, p0) : BIG);
+                    edg.Add(flat);
                 }
             }
-            _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray();
+            _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
             _pieceDirty = true; _showPieces = _piecePos.Length > 0;
             Log($"pieces: {pieceCount} region(s)");
             _gl?.InvalidateVisual();
         }
+
+        // (The active-region + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)
 
         // Distinct per-piece colour via a golden-ratio hue rotation, so adjacent pieces always differ.
         static Vector3 PieceColor(int id)
@@ -1038,6 +1201,7 @@ namespace PieceSolver
             }
 
             _session.Subdivide();                            // refine M
+            RebindPattern();                                 // 1->4 renumbers verts/faces -> rewrap the partition on the new mesh
             if (hadFlat)
             {
                 _flat = MeshOps.UniformSubdivide(_flat);     // refine M' identically -> alignment preserved
@@ -1076,6 +1240,7 @@ namespace PieceSolver
             if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
             catch (Exception ex) { Title = "PieceSolver — reset failed: " + ex.Message; return; }
+            RebindPattern();          // the partition companion now wraps the reloaded mesh
             _totalIters = 0;
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
@@ -1342,8 +1507,8 @@ namespace PieceSolver
             return flip;
         }
 
-        // Mouse scheme: right-drag = orbit, Shift+right-drag = pan. Wheel = zoom (wired in ctor).
-        // Left-drag = Crease brush when that tool is on (else does nothing).
+        // Mouse scheme: right-drag = orbit, Shift+right-drag = pan. Wheel = zoom (wired in ctor). Left-button +
+        // hover delegate to the active editor (the Crease brush, when one is active); else they do nothing.
         void OnMouseDown(object sender, MouseButtonEventArgs e)
         {
             _lastMouse = e.GetPosition(_gl);
@@ -1353,11 +1518,7 @@ namespace PieceSolver
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (_sim.CreaseBrush && _session != null && !_baking)
-                {
-                    _dabAccum = 0;
-                    if (PickSurface(_lastMouse, out var hit)) BumpCreasesUnderBrush(hit);   // initial bump at the down point
-                }
+                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, Keyboard.Modifiers);
             }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
@@ -1365,10 +1526,9 @@ namespace PieceSolver
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
-            bool wasCreaseStroke = _drag == DragMode.Edit && _sim.CreaseBrush;
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
-            if (wasCreaseStroke && _showPieces) RebuildPieces();   // refresh pieces once at stroke end (not per bump)
+            if (EditorActive) _activeEditor.OnPointerUp(_lastMouse);
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
@@ -1377,12 +1537,12 @@ namespace PieceSolver
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
-                if (_sim.CreaseBrush) UpdatePreview(p);   // footprint preview on hover
+                if (EditorActive) _activeEditor.OnHover(p);   // footprint preview on hover (no-op when no editor is active)
                 return;
             }
             if (_drag == DragMode.Edit)
             {
-                if (_sim.CreaseBrush && _session != null && !_baking) BrushStrokeTo(p);   // a bump every `spacing` px along the path
+                if (EditorActive) _activeEditor.OnPointerMove(p);
                 _lastMouse = p;
                 return;
             }
@@ -1419,118 +1579,26 @@ namespace PieceSolver
             InvalidateView();
         }
 
-        // ===================== Crease brush (the one brush) =====================
+        // ===================== Crease brush — host-side helpers (the interaction lives in Piecer) =====================
 
         // [ / ] grow / shrink the brush (the same VM param the BRUSH Size slider binds to).
         void ResizeBrush(double factor) => _sim.BrushSize = Math.Clamp(_sim.BrushSize * factor, 1.0, 100.0);
 
-        // Place a bump every `spacing` screen-pixels along the stroke path (a -> b), so it tracks path
-        // LENGTH, not time. _dabAccum carries the leftover distance across moves.
-        void BrushStrokeTo(System.Windows.Point b)
-        {
-            double dx = b.X - _lastMouse.X, dy = b.Y - _lastMouse.Y;
-            double seg = Math.Sqrt(dx * dx + dy * dy);
-            if (seg < 1e-6) return;
-            double spacing = BrushSpacingPx(b);
-            double pos = spacing - _dabAccum;
-            while (pos <= seg)
-            {
-                double t = pos / seg;
-                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit)) BumpCreasesUnderBrush(hit);
-                pos += spacing;
-            }
-            _dabAccum = seg - (pos - spacing);
-        }
-
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
-        double BrushSpacingPx(System.Windows.Point screen)
+        public double BrushSpacingPx(System.Windows.Point screen)
         {
             if (_session != null && PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
             return 8.0;
         }
 
-        // One Crease-brush bump ("opposing magnet"): every selected crease edge whose midpoint is within the
-        // brush radius is slid outward (away from `center`) across its triangle, repeatedly, until no crease
-        // edge remains under the footprint — so the magnet pushes the line out of the brush. Edits the
-        // _creaseEdges selection only (no geometry moves). Topology is fixed -> the edge->apex map is cached.
-        void BumpCreasesUnderBrush(Vector3 center)
+        // Build a pick ray (eye + direction) from the camera params, convention-independent. Z-up, 45deg FOV.
+        bool PickRay(System.Windows.Point screen, out Vector3 eye, out Vector3 rd)
         {
-            if (_creaseEdges == null || _creaseEdges.Count == 0 || _session == null) return;
-            if (_edgeApex == null) BuildEdgeApexMap();
-            float R2 = (float)(_sim.BrushSize * _sim.BrushSize);
-            var stuck = new System.Collections.Generic.HashSet<long>();   // edges that can't slide further (at the patch edge)
-            bool changed = false;
-            for (int guard = 0; guard < 8192; guard++)
-            {
-                long key = 0; bool found = false;
-                foreach (long k in _creaseEdges)
-                {
-                    if (stuck.Contains(k)) continue;
-                    if ((EdgeMid(k) - center).LengthSquared <= R2) { key = k; found = true; break; }
-                }
-                if (!found) break;
-                if (SlideCreaseOutward(key, center, R2)) changed = true;
-                else stuck.Add(key);
-            }
-            if (changed) RebuildCreaseOverlay();
-        }
-
-        // Slide one crease edge outward across its triangle: a-b -> a-x + x-b, where x is the apex (of the
-        // edge's two triangles) furthest in the outward (away-from-center) direction. While the slid edge is
-        // still under the brush it yields ONE edge (the more-outward half) so a straight push stays a clean
-        // single line; once it fully escapes the footprint it yields the two-edge bulge. Returns false (stuck)
-        // when there is no strictly-outward apex (e.g. the edge is already at the patch boundary).
-        bool SlideCreaseOutward(long key, Vector3 center, float R2)
-        {
-            if (_edgeApex == null || !_edgeApex.TryGetValue(key, out var ap)) return false;
-            var P = _session.Mesh;
-            int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
-            Vector3 m = (BV(P, a) + BV(P, b)) * 0.5f;
-            Vector3 outward = m - center;
-            float oc = ap.Item1 >= 0 ? Vector3.Dot(BV(P, ap.Item1) - m, outward) : float.NegativeInfinity;
-            float od = ap.Item2 >= 0 ? Vector3.Dot(BV(P, ap.Item2) - m, outward) : float.NegativeInfinity;
-            int x = oc >= od ? ap.Item1 : ap.Item2;
-            if (x < 0 || Math.Max(oc, od) <= 1e-7f) return false;   // no outward apex -> at the patch edge
-            _creaseEdges.Remove(key);
-            long e1 = EdgeKey(a, x), e2 = EdgeKey(x, b);
-            bool out1 = (EdgeMid(e1) - center).LengthSquared > R2;
-            bool out2 = (EdgeMid(e2) - center).LengthSquared > R2;
-            if (out1 && out2) { _creaseEdges.Add(e1); _creaseEdges.Add(e2); }   // fully escaped -> two-edge bulge
-            else _creaseEdges.Add((EdgeMid(e1) - center).LengthSquared >= (EdgeMid(e2) - center).LengthSquared ? e1 : e2);   // still under -> yield the more-outward one
-            return true;
-        }
-
-        Vector3 EdgeMid(long key) { var P = _session.Mesh; return (BV(P, (int)(key >> 32)) + BV(P, (int)(key & 0xFFFFFFFFL))) * 0.5f; }
-        static long EdgeKey(int a, int b) { int lo = Math.Min(a, b), hi = Math.Max(a, b); return ((long)lo << 32) | (uint)hi; }
-
-        // Cache the topology lookup the bump needs: edge (sorted key) -> its two opposite apex vertices
-        // (-1 on a boundary side). Rebuilt lazily; cleared whenever the mesh changes (ClearProposedCreases).
-        void BuildEdgeApexMap()
-        {
-            _edgeApex = new System.Collections.Generic.Dictionary<long, (int, int)>();
-            var P = _session.Mesh;
-            int nH = P.Halfedges.Count;
-            for (int h = 0; h < nH; h++)
-            {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                int c = f1 >= 0 ? FaceApex(P, f1, a, b) : -1;
-                int d = f2 >= 0 ? FaceApex(P, f2, a, b) : -1;
-                _edgeApex[EdgeKey(a, b)] = (c, d);
-            }
-        }
-        static int FaceApex(PlanktonMesh P, int face, int a, int b) { foreach (int v in P.Faces.GetFaceVertices(face)) if (v != a && v != b) return v; return -1; }
-
-        // Build a pick ray from the camera params (convention-independent) and intersect the mesh.
-        bool PickSurface(System.Windows.Point screen, out Vector3 hit)
-        {
-            hit = default;
+            eye = default; rd = default;
             if (_session == null) return false;
             double w = Math.Max(1, _gl.ActualWidth), h = Math.Max(1, _gl.ActualHeight);
             Vector3 dir = CamDir();
-            Vector3 eye = _target + dir * _distance;
+            eye = _target + dir * _distance;
             Vector3 forward = -dir;
             Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitZ));
             Vector3 up = Vector3.Cross(right, forward);
@@ -1538,8 +1606,33 @@ namespace PieceSolver
             float aspect = (float)(w / h);
             float ndcX = (float)(2.0 * screen.X / w - 1.0);
             float ndcY = (float)(1.0 - 2.0 * screen.Y / h);
-            Vector3 rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
-            return RayMeshHit(eye, rd, out hit);
+            rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
+            return true;
+        }
+
+        // Build a pick ray and intersect the mesh (nearest hit point).
+        public bool PickSurface(System.Windows.Point screen, out Vector3 hit)
+        {
+            hit = default;
+            return PickRay(screen, out var eye, out var rd) && RayMeshHit(eye, rd, out hit);
+        }
+
+        // Like PickSurface but also returns the nearest hit FACE index (for seeding the brush's active region).
+        public bool PickFace(System.Windows.Point screen, out int face, out Vector3 hit)
+        {
+            face = -1; hit = default;
+            if (!PickRay(screen, out var eye, out var rd)) return false;
+            var P = _session.Mesh;
+            double best = double.MaxValue;
+            int nf = P.Faces.Count;
+            for (int f = 0; f < nf; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
+                if (RayTri(eye, rd, BV(P, fv[0]), BV(P, fv[1]), BV(P, fv[2]), out double t) && t < best)
+                { best = t; face = f; hit = eye + rd * (float)t; }
+            }
+            return face >= 0;
         }
 
         // Nearest ray-triangle hit over the live mesh (linear scan; double-sided since winding is mixed).
@@ -1583,7 +1676,7 @@ namespace PieceSolver
 
         void UpdatePreview(System.Windows.Point cursor)
         {
-            if (!_sim.CreaseBrush || _session == null || !PickSurface(cursor, out var hit))
+            if (!EditorActive || !PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
             double rpx = ScreenRadiusPx(hit);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;
@@ -1591,15 +1684,31 @@ namespace PieceSolver
             _previewDot.Visibility = Visibility.Visible;
         }
 
+        // ===================== IEditorHost (the wall the active editor talks through) =====================
+
+        PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
+        Pattern IEditorHost.Pattern => _pattern;
+        bool IEditorHost.ShowPieces => _showPieces;
+        void IEditorHost.RefreshPieces() => RebuildPieces();
+        void IEditorHost.RefreshCreaseOverlay() => RebuildCreaseOverlay();
+        void IEditorHost.ShowBrushPreview(System.Windows.Point screen) => UpdatePreview(screen);
+        void IEditorHost.HideBrushPreview() => _previewDot.Visibility = Visibility.Collapsed;
+        void IEditorHost.Invalidate() => InvalidateView();
+        void IEditorHost.Log(string msg) => Log(msg);
+
+        // World-space brush radius. The slider value (1..100) maps at half scale so its low end is fine enough.
+        // Used by BOTH the paint footprint and the screen preview, so they always agree.
+        public double BrushWorldRadius => _sim.BrushSize * 0.5;
+
         // The brush's world radius projected to screen pixels at the given surface point's depth.
-        double ScreenRadiusPx(Vector3 hit)
+        public double ScreenRadiusPx(Vector3 hit)
         {
             Vector3 dir = CamDir();
             Vector3 eye = _target + dir * _distance;
             double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
             double h = Math.Max(1, _gl.ActualHeight);
             double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
-            return _sim.BrushSize * h / (2.0 * dist * tanH);
+            return BrushWorldRadius * h / (2.0 * dist * tanH);
         }
 
         void InvalidateView() { _gl?.InvalidateVisual(); }
@@ -1641,7 +1750,7 @@ namespace PieceSolver
             // staged piece-visualization buffers (GL thread)
             if (_pieceDirty && !_baking && _view != null)
             {
-                if (_piecePos != null && _piecePos.Length > 0) _view.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist);
+                if (_piecePos != null && _piecePos.Length > 0) _view.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge);
                 else _view.ClearPieces();
                 _pieceDirty = false;
             }
@@ -1723,7 +1832,7 @@ namespace PieceSolver
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap;            // Shine shading
                 _view.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
-                _view.ShowPieces = _showPieces; _view.InsetWidth = _pieceInset;                // per-piece view (auto-on after Propose)
+                _view.ShowPieces = _showPieces; _view.InsetWidth = (float)_sim.InsetWidthFrac * Math.Max(1e-4f, _view.Radius);   // per-piece view; live inset width (world-relative)
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
                 _view.LicMode = _sim.ShowRuling ? 1 : 0;
                 if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
