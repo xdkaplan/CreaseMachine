@@ -182,7 +182,7 @@ namespace PieceSolver
             _sim.PropertyChanged += (s, e) =>
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual();
-                else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.LoadSolid)) OnMeshIndexChanged();
+                else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
 
@@ -338,8 +338,17 @@ namespace PieceSolver
         // currently live where they were dropped (C:\Temp); relocate alongside the NURBS set when permanent.
         static string SolidMeshPath(int meshIndex) => System.IO.Path.Combine(@"C:\Temp", "Solid" + (meshIndex - 1) + ".fbx");
 
-        // The active test-mesh path for a picker index, per the Surface/Solid toggle.
-        string MeshPath(int meshIndex) => _sim.LoadSolid ? SolidMeshPath(meshIndex) : NurbsMeshPath(meshIndex);
+        // "Meshes" set — arbitrary triangle meshes; currently a single entry (the bunny). The Mesh
+        // index is ignored until more meshes are added to the set.
+        static string MeshSetPath(int meshIndex) => @"C:\Temp\Bunny 5k.stl";
+
+        // The active test-mesh path for a picker index, per the Source dropdown (Solids/Surfaces/Meshes).
+        string MeshPath(int meshIndex) => _sim.AssetSet switch
+        {
+            0 => SolidMeshPath(meshIndex),    // Solids — 6-sided FBX
+            2 => MeshSetPath(meshIndex),      // Meshes — the bunny (only entry for now)
+            _ => NurbsMeshPath(meshIndex),    // Surfaces — NURBS STLs (default)
+        };
 
         // MeshIndex slider changed -> reset the app to that NURBS surface. ApplyLoad already clears
         // _hasFlat and re-arms BFF (_bffNeeded = true). The re-entrancy guard stops a programmatic

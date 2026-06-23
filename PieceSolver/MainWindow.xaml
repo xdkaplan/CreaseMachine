@@ -152,18 +152,23 @@
                         <TabItem Header="SIMULATION">
                             <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,8,0,8">
                                 <StackPanel Margin="10,0,10,0">
-                                    <!-- Mesh picker: 1..30 -> NURBS test surfaces 0.stl..29.stl. Changing this
-                                         resets the app to that mesh (load + clear flat + re-arm BFF). -->
+                                    <!-- Test-asset picker: Source set (Solids/Surfaces/Meshes) + a 1..30 index
+                                         within it. Changing either resets the app to that mesh (load + clear
+                                         flat + re-arm BFF). -->
                                     <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Mesh" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Pick a NURBS test surface (1-30). Switching resets the solver to that mesh." />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MeshIndex}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
+                                        <TextBlock DockPanel.Dock="Left" Text="Source" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Which test-asset set the Mesh index picks from. Solids = 6-sided FBX (unwelded into per-face components); Surfaces = NURBS single open-patch STLs; Meshes = arbitrary triangle meshes (currently just the bunny)." />
+                                        <ComboBox SelectedIndex="{Binding AssetSet, Mode=TwoWay}" FontSize="11" VerticalAlignment="Center" Margin="6,0">
+                                            <ComboBoxItem Content="Solids" />
+                                            <ComboBoxItem Content="Surfaces" />
+                                            <ComboBoxItem Content="Meshes" />
+                                        </ComboBox>
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
-                                        <CheckBox Content="Solid (FBX) — load 6-sided test meshes" IsChecked="{Binding LoadSolid, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"
-                                                  ToolTip="Off = NURBS surface STLs (single open patches). On = Solid FBX meshes (6-sided, unwelded into per-face components). The Mesh index selects within the chosen set." />
+                                        <TextBlock DockPanel.Dock="Left" Text="Mesh" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Index within the selected Source set (1-30). Switching resets the solver to that mesh. (Meshes has one entry for now — the bunny — so the index is ignored there.)" />
+                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding MeshIndex}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                        <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Subdiv" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"

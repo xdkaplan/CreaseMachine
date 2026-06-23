@@ -44,10 +44,12 @@ namespace PieceSolver
         public double AdaptiveDetMixPow { get => _adaptiveDetMixPow; set => Set(ref _adaptiveDetMixPow, value); }
         public int MomFix { get => _momFix; set => Set(ref _momFix, value); }
         public int MeshIndex { get => _meshIndex; set => Set(ref _meshIndex, value); }
-        // Test-mesh source: false = NURBS surface STLs (single open patches); true = Solid FBX meshes
-        // (6-sided, unwelded -> per-face components). The Mesh index selects within the chosen set.
-        bool _loadSolid;
-        public bool LoadSolid { get => _loadSolid; set => Set(ref _loadSolid, value); }
+        // Test-asset set the Mesh index picks from (the "Source" dropdown):
+        //   0 = Solids   — 6-sided FBX (unwelded -> per-face components)
+        //   1 = Surfaces — NURBS single open-patch STLs (the default)
+        //   2 = Meshes   — arbitrary triangle meshes (currently just the bunny)
+        int _assetSet = 1;
+        public int AssetSet { get => _assetSet; set => Set(ref _assetSet, value); }
 
         // Isometric patch-solver knobs (drive IsometricLM.Solve + IsometricSmoothers via IsometricStep()).
         public double IsoWeight { get => _isoWeight; set => Set(ref _isoWeight, value); }
