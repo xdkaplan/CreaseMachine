@@ -57,7 +57,7 @@
         </Grid.RowDefinitions>
 
         <!-- MENU bar (Windows-style). Shortcuts shown via InputGestureText are bound in code-behind. -->
-        <Menu Grid.Row="0" Background="#2D2D30" Foreground="#C8C8C8" Padding="2,1">
+        <Menu x:Name="MenuBar" Grid.Row="0" Background="#2D2D30" Foreground="#C8C8C8" Padding="2,1">
             <MenuItem Header="_File">
                 <MenuItem x:Name="MenuSaveAs" Header="Save Session _As…" InputGestureText="Ctrl+S" />
             </MenuItem>
@@ -70,7 +70,7 @@
         </Menu>
 
         <!-- TOP bar (full width, 32px) -->
-        <Border Grid.Row="1" Background="#2D2D30">
+        <Border x:Name="TopBar" Grid.Row="1" Background="#2D2D30">
             <DockPanel LastChildFill="False" Margin="8,0">
                 <TextBlock DockPanel.Dock="Left" Text="PieceSolver" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
@@ -81,7 +81,7 @@
                         ToolTip="Bake: develop to the selected Accuracy, then for each Subdivision level subdivide and re-develop. Runs on a worker with a progress + cancel modal, then shows the result." />
                 <Button x:Name="ProposeButton" DockPanel.Dock="Right" Content="Propose"
                         Padding="12,2" Margin="4,0,0,0" FontSize="12" VerticalAlignment="Center"
-                        ToolTip="Stage 2: run the developability flow on a copy of the mesh (no collapse) and propose piece-boundary creases at edges whose fold angle ≥ Crease ∠. Runs behind the progress modal; the mesh is restored and the creases overlaid." />
+                        ToolTip="Stage 2: run the developability flow on a copy of the mesh (no collapse) and propose piece-boundary creases at edges whose fold angle ≥ Crease ∠. Runs behind the progress modal, then opens a camera-only review (full patchwork + live Crease ∠) to Accept or discard." />
                 <Button x:Name="ResetButton" DockPanel.Dock="Right" Content="Reset"
                         Padding="10,2" FontSize="12" VerticalAlignment="Center"
                         ToolTip="Reload the input mesh and reset the flow" />
@@ -100,7 +100,7 @@
 
             <!-- LEFT panel: placeholder (the session log now lives in the toggleable Console window;
                  Window > Console or Ctrl+Shift+J). Collapse chevron at the top-RIGHT (inner) corner. -->
-            <Border Grid.Column="0" Background="#252526" ClipToBounds="True">
+            <Border x:Name="LeftPanel" Grid.Column="0" Background="#252526" ClipToBounds="True">
                 <Grid>
                     <Button x:Name="LeftCollapseBtn" HorizontalAlignment="Right" VerticalAlignment="Top"
                             Width="24" Height="24" Margin="0,4,4,0" Background="Transparent"
@@ -130,7 +130,7 @@
             <!-- RIGHT panel: SIMULATION / DISPLAY tabs (bound to SimSettings view-model). Collapse
                  chevron sits in its own thin strip at the top-LEFT (inner) corner, icon mirrored;
                  the tab strip + content fill the rest. -->
-            <Border Grid.Column="4" Background="#2A2A2E" ClipToBounds="True">
+            <Border x:Name="RightPanel" Grid.Column="4" Background="#2A2A2E" ClipToBounds="True">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="26" />
@@ -174,15 +174,7 @@
                                         <Slider Minimum="1" Maximum="30" Value="{Binding MeshIndex}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
 
-                                    <Separator Margin="0,8,0,2" Background="#3F3F46" />
-                                    <TextBlock Text="CREASE PROPOSER" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,2" />
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Crease ∠" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="After Propose, edges whose settled fold angle ≥ this are drawn as proposed piece boundaries. Live — re-labels the overlay without re-proposing." />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding CreaseAngleDeg, StringFormat={}{0:0.#}°}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="5" Maximum="90" Value="{Binding CreaseAngleDeg}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
-
+                                    <!-- Crease ∠ lives in the post-Propose camera-modal review now (not here). -->
                                     <Separator Margin="0,8,0,2" Background="#3F3F46" />
                                     <DockPanel Margin="0,3,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="Subdiv" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
@@ -395,14 +387,14 @@
                         <TabItem Header="BRUSH">
                             <StackPanel Margin="10,12,10,0">
                                 <TextBlock Text="CREASE" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,0,0,6" />
-                                <CheckBox Content="Crease brush (left-drag to nudge)" IsChecked="{Binding CreaseBrush, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,2"
-                                          ToolTip="Refine the proposed creases: drag near a crease and it is repelled from the brush center (an 'opposing magnet'), sliding each candidate edge onto the adjacent edge outward. Left-drag nudges; right-drag still orbits. Size [ / ]." />
+                                <CheckBox Content="Crease brush (left-drag to paint regions)" IsChecked="{Binding CreaseBrush, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,2"
+                                          ToolTip="Refine the committed creases by painting region membership: click inside a patch (it turns light blue = active) and drag across a seam to grow it into the neighbour. The crease follows your brush. Left-drag paints; right-drag still orbits. Size [ / ]." />
                                 <DockPanel Margin="0,6,0,0">
                                     <TextBlock DockPanel.Dock="Left" Text="Size" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" ToolTip="Footprint radius (world units) — also [ / ]." />
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="1" Maximum="100" Value="{Binding BrushSize}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
-                                <TextBlock Text="Propose first to get candidate creases, then sweep along one side to push the line onto the edges you want. Changing Crease ∠ re-seeds (discards nudges)." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
+                                <TextBlock Text="Propose creases, set Crease ∠ in the review and Accept. Then paint here: click a patch to select it (light blue) and drag across a seam to grow it. Re-Propose to redo the angle." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
                             </StackPanel>
                         </TabItem>
                     </TabControl>
@@ -411,7 +403,7 @@
         </Grid>
 
         <!-- BOTTOM bar (full width, 32px): live perf/status readout. Session transport is in the Console. -->
-        <Border Grid.Row="3" Background="#2D2D30">
+        <Border x:Name="BottomBar" Grid.Row="3" Background="#2D2D30">
             <DockPanel Margin="8,0">
                 <TextBlock x:Name="StatusText" DockPanel.Dock="Right" Text="" Foreground="#8A8A98"
                            VerticalAlignment="Center" FontSize="11" Margin="8,0,0,0" />
@@ -426,6 +418,26 @@
                     <TextBlock x:Name="BakeStatus" Text="Solving…" Foreground="#E8E8E8" FontSize="13" Margin="0,0,0,12" TextWrapping="Wrap" />
                     <ProgressBar x:Name="BakeBar" Height="16" Minimum="0" Maximum="100" Value="0" />
                     <Button x:Name="BakeCancel" Content="Cancel" Width="92" HorizontalAlignment="Right" Margin="0,14,0,0" Padding="8,3" />
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- Reusable CAMERA-ONLY modal: a floating card over the viewport. While it is up the rest of the
+             chrome is disabled (SetChromeEnabled), but the viewport keeps orbit/pan/zoom. Title + body are set
+             per use via ShowCamModal(); Accept/Cancel route to the supplied callbacks. Sits below BakeOverlay. -->
+        <Border x:Name="CamModalBar" Grid.Row="2" Visibility="Collapsed" Panel.ZIndex="90"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,28">
+            <Border Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1" CornerRadius="6" Padding="16,12">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" BlurRadius="14" ShadowDepth="2" Opacity="0.5" />
+                </Border.Effect>
+                <StackPanel MinWidth="320">
+                    <TextBlock x:Name="CamModalTitle" Foreground="#E8E8E8" FontSize="12" FontWeight="Bold" Margin="0,0,0,10" />
+                    <ContentControl x:Name="CamModalBody" />
+                    <DockPanel LastChildFill="False" Margin="0,12,0,0">
+                        <Button x:Name="CamModalAccept" DockPanel.Dock="Right" Content="Accept" MinWidth="84" Padding="10,4" Margin="6,0,0,0" FontWeight="Bold" />
+                        <Button x:Name="CamModalCancel" DockPanel.Dock="Right" Content="Cancel" MinWidth="84" Padding="10,4" />
+                    </DockPanel>
                 </StackPanel>
             </Border>
         </Border>

@@ -93,6 +93,8 @@ namespace PieceSolver
         System.Collections.Generic.HashSet<long> _creaseEdges;   // DERIVED crease set = edges between faces of different region; feeds the overlay + piece viz
         int[] _faceRegion;       // PRIMARY segmentation: per-face region id (-1 = unused). Seeded by Propose (flood-fill), painted by the Crease brush
         int _brushRegion = -1;   // active region being painted with = the region of the face clicked on mouse-down (shown light blue)
+        bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
+        System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -188,6 +190,8 @@ namespace PieceSolver
             SolveButton.Click += (s, e) => Execute(StudioCommand.Solve(_sim.ToBakeParams()), record: true);   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal
             ProposeButton.Click += (s, e) => { _ = OnProposeAsync(); };   // stage 2: propose piece-boundary creases (no-collapse flow, reuses the modal)
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
+            CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
+            CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
             ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
@@ -656,7 +660,7 @@ namespace PieceSolver
                 {
                     _creaseFold = fold; _creaseA = ea; _creaseB = eb;
                     RelabelCreases();
-                    RebuildPieces();   // auto-on: show the per-piece view as soon as creases exist
+                    OpenCreaseReview();   // camera-only modal: full patchwork + Crease angle slider + Accept/Cancel
                     Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
                 if (_view != null) _view.Upload(_session.Mesh, ProposedPreviewPos());   // input mesh, or the proposed preview if toggled
@@ -665,6 +669,99 @@ namespace PieceSolver
                 _gl?.InvalidateVisual();
                 _bakeCts?.Dispose(); _bakeCts = null; _bakeProgress = null;
             }
+        }
+
+        // ===================== CamModal (reusable camera-only modal) =====================
+        // A modal that blocks all the window chrome but leaves the 3D viewport live for orbit/pan/zoom — a
+        // common need (review/confirm a result while still inspecting it in 3D). Title + body content + the
+        // Accept/Cancel callbacks are supplied per use; the host just toggles chrome and shows the floating bar.
+
+        void ShowCamModal(string title, System.Windows.FrameworkElement body, System.Action onAccept, System.Action onCancel)
+        {
+            CamModalTitle.Text = title;
+            CamModalBody.Content = body;
+            _camAccept = onAccept; _camCancel = onCancel;
+            _camModal = true;
+            SetChromeEnabled(false);
+            CamModalBar.Visibility = Visibility.Visible;
+        }
+
+        void CloseCamModal()
+        {
+            _camModal = false;
+            SetChromeEnabled(true);
+            CamModalBar.Visibility = Visibility.Collapsed;
+            CamModalBody.Content = null;
+            _camAccept = null; _camCancel = null;
+        }
+
+        // Enable/disable everything except the viewport (and the modal bar itself), so only camera + the modal
+        // are interactive. The viewport (CenterHost) is deliberately left out.
+        void SetChromeEnabled(bool en)
+        {
+            MenuBar.IsEnabled = en;
+            TopBar.IsEnabled = en;
+            LeftPanel.IsEnabled = en;
+            RightPanel.IsEnabled = en;
+            BottomBar.IsEnabled = en;
+            LeftSplitter.IsEnabled = en;
+            RightSplitter.IsEnabled = en;
+        }
+
+        // ===================== Crease review (a CamModal use) =====================
+        // After Propose: review the proposed creases in 3D with the full patchwork colours and a live Crease
+        // angle slider. Accept commits them (back to neutral display, brush goes live); Cancel discards.
+        void OpenCreaseReview()
+        {
+            ShowCamModal("Review creases — drag Crease ∠, then Accept", BuildCreaseReviewBody(),
+                onAccept: () =>
+                {
+                    RebuildPieces();   // _camModal now false -> recolour to neutral; creases stay committed
+                    Log($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
+                    Title = "PieceSolver — " + _creaseCount + " creases committed";
+                },
+                onCancel: () =>
+                {
+                    ClearProposedCreases();   // discard the proposal entirely
+                    if (_view != null && _session != null) _view.Upload(_session.Mesh, ProposedPreviewPos());
+                    _gl?.InvalidateVisual();
+                    Log("crease proposal discarded");
+                });
+            RebuildPieces();   // _camModal == true -> full rainbow patchwork
+        }
+
+        // The crease-review modal body: a single live "Crease ∠" slider bound to the same VM property the old
+        // panel slider used, so dragging re-thresholds + re-segments the patchwork live (PropertyChanged hook).
+        System.Windows.FrameworkElement BuildCreaseReviewBody()
+        {
+            System.Windows.Media.SolidColorBrush Brush(byte r, byte g, byte b)
+                => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
+            var dp = new System.Windows.Controls.DockPanel { DataContext = _sim, MinWidth = 320, LastChildFill = true };
+            var label = new System.Windows.Controls.TextBlock
+            {
+                Text = "Crease ∠", Width = 62, Foreground = Brush(0xC8, 0xC8, 0xC8),
+                FontSize = 11, VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+            System.Windows.Controls.DockPanel.SetDock(label, System.Windows.Controls.Dock.Left);
+            var val = new System.Windows.Controls.TextBlock
+            {
+                Width = 44, Foreground = Brush(0x8A, 0x8A, 0x98), FontSize = 11,
+                TextAlignment = System.Windows.TextAlignment.Right, VerticalAlignment = System.Windows.VerticalAlignment.Center
+            };
+            val.SetBinding(System.Windows.Controls.TextBlock.TextProperty,
+                new System.Windows.Data.Binding("CreaseAngleDeg") { StringFormat = "{0:0.#}°" });
+            System.Windows.Controls.DockPanel.SetDock(val, System.Windows.Controls.Dock.Right);
+            var slider = new System.Windows.Controls.Slider
+            {
+                Minimum = 5, Maximum = 90, MinWidth = 200, VerticalAlignment = System.Windows.VerticalAlignment.Center,
+                Margin = new System.Windows.Thickness(6, 0, 6, 0)
+            };
+            slider.SetBinding(System.Windows.Controls.Slider.ValueProperty,
+                new System.Windows.Data.Binding("CreaseAngleDeg") { Mode = System.Windows.Data.BindingMode.TwoWay });
+            dp.Children.Add(label);
+            dp.Children.Add(val);
+            dp.Children.Add(slider);
+            return dp;
         }
 
         // Re-seed the editable crease selection from the cached fold angles at the current Crease angle
@@ -868,9 +965,11 @@ namespace PieceSolver
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                // Pieces are NOT colour-coded: only the active paint region is tinted (light blue); every other
-                // piece renders as the plain neutral matcap (white tint). Grooves still delineate the regions.
-                Vector3 cc = (pieceId[f] == _brushRegion) ? ActiveRegionColor : Vector3.One;
+                // Colour rule: while the crease-review CamModal is up, show the FULL patchwork (rainbow per
+                // region). Otherwise pieces are not colour-coded -- only the active paint region is tinted light
+                // blue and the rest render as plain neutral matcap (white tint). Grooves delineate either way.
+                Vector3 cc = _camModal ? PieceColor(pieceId[f])
+                                       : (pieceId[f] == _brushRegion ? ActiveRegionColor : Vector3.One);
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
@@ -1424,7 +1523,7 @@ namespace PieceSolver
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (_sim.CreaseBrush && _session != null && !_baking && _faceRegion != null)
+                if (_sim.CreaseBrush && _session != null && !_baking && !_camModal && _faceRegion != null)
                 {
                     _dabAccum = 0;
                     // Pick the face under the click -> its region becomes the ACTIVE paint region. Dragging then
@@ -1455,12 +1554,12 @@ namespace PieceSolver
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
-                if (_sim.CreaseBrush) UpdatePreview(p);   // footprint preview on hover
+                if (_sim.CreaseBrush && !_camModal) UpdatePreview(p);   // footprint preview on hover
                 return;
             }
             if (_drag == DragMode.Edit)
             {
-                if (_sim.CreaseBrush && _session != null && !_baking) BrushStrokeTo(p);   // a bump every `spacing` px along the path
+                if (_sim.CreaseBrush && _session != null && !_baking && !_camModal) BrushStrokeTo(p);   // a bump every `spacing` px along the path
                 _lastMouse = p;
                 return;
             }
