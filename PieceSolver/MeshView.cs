@@ -318,10 +318,14 @@ void main() {
     float seam = 1.0 - smoothstep(0.0, aa, d);       // 1 exactly on the crease
     face = mix(face, face * 0.28, seam * 0.9);
 
-    // Effect strength: triangles with NO crease edge (vEdgeDist.w == 1) get no deboss (flat tint) -- a groove
-    // belongs only to a triangle that actually contains a crease edge, so this kills spurious grooves the
-    // per-vertex field draws along non-crease edges between crease vertices. Crease-edge tris: 50% strength.
-    float fx = (vEdgeDist.w > 0.5) ? 0.0 : 0.5;
+    // Ellipsoidal feather: full deboss near the crease, with a rounded fade that lands SMOOTHLY (zero slope)
+    // at the band rim -- so the groove dissolves gently into the flat field instead of cutting off hard where
+    // the crease-edge triangle ends and a flat neighbour begins. (u: 1 at crease -> 0 at rim; quarter-ellipse.)
+    float u = 1.0 - t;
+    float env = 1.0 - sqrt(max(0.0, 1.0 - u * u));
+    // Triangles with NO crease edge (vEdgeDist.w == 1) get no deboss at all (a groove belongs only to a
+    // triangle that contains a crease edge); crease-edge tris get the feathered deboss at 50% strength.
+    float fx = ((vEdgeDist.w > 0.5) ? 0.0 : 0.5) * env;
     FragColor = vec4(mix(faceFlat, face, fx), 1.0);
 }";
 
