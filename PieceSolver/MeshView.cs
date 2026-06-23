@@ -283,49 +283,44 @@ void main() {
     float own = min(min(vEdgeDist.x, vEdgeDist.y), vEdgeDist.z);
     float d = max(vDist, (own < 1e8) ? own : 0.0);
 
-    // --- normalized distance into the bevel band: t==0 at crease, t==1 at the band rim ---
+    // --- normalized distance into the groove band: t==0 at crease, t==1 at the band rim ---
     float band = max(uInset, 1e-6);
     float t = clamp(d / band, 0.0, 1.0);
 
-    // --- debossed (pressed-in) bevel: tilt the shading normal toward the crease (downhill), so the
-    // groove reads as recessed. grad(d) points uphill (away from the crease); negate it for the deboss. ---
+    // --- ELLIPSOIDAL groove profile w(t): the single weight that SHAPES the whole deboss (bevel tilt,
+    // darkening and sheen all scale by it). It is full (1) at the crease and follows a quarter-ellipse to a
+    // SMOOTH zero-slope landing at the rim, so the groove reads as a rounded valley that feathers gently into
+    // the flat field (no harsh edge where the crease-edge triangle ends) -- a real shape change, not a linear
+    // ramp. (u: 1 at crease -> 0 at rim.) ---
+    float u = 1.0 - t;
+    float w = 1.0 - sqrt(max(0.0, 1.0 - u * u));
+
+    // --- debossed (pressed-in) bevel: tilt the shading normal toward the crease (downhill), scaled by w.
+    // grad(d) points uphill (away from the crease); negate it for the deboss. ---
     vec2 g = vec2(dFdx(d), dFdy(d));
-    vec2 dir = (length(g) > 1e-9) ? -normalize(g) : vec2(0.0, -1.0);   // negated -> deboss
-    // bevel weight: strongest mid-band, zero at crease and at rim (a rounded groove wall).
-    float bev = sin(t * 3.14159265);          // 0 -> 1 -> 0 across the band
-    float slope = 0.55 * bev;                  // how hard the wall tilts
+    vec2 dir = (length(g) > 1e-9) ? -normalize(g) : vec2(0.0, -1.0);
+    float slope = 0.6 * w;
     vec3 bn = normalize(n + vec3(dir * slope, 0.0));
     if (bn.z < 0.0) bn = -bn;
 
     // --- matcap lighting on the beveled normal (the groove wall catches a real highlight) ---
     vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, bn.xy * 0.5 + 0.5).rgb
                                   : vec3(clamp(bn.z, 0.0, 1.0));
-
-    // --- matte card base: lit (on the beveled normal) tint ---
     vec3 face = lit * tint;
 
-    // --- directional sheen on the groove wall that faces the matcap 'up' ---
+    // --- directional sheen on the inner wall + ellipsoidal occlusion (darkens toward the crease by w) ---
     float facing = clamp(dir.y * 0.7 + 0.3, 0.0, 1.0);
-    float sheen = bev * facing * 0.35;
-    face += sheen * vec3(1.0);
-
-    // --- soft inner occlusion: the recessed groove darkens toward the crease bottom ---
-    float ao = mix(0.72, 1.0, smoothstep(0.0, 0.85, t));
-    face *= ao;
+    face += w * facing * 0.30 * vec3(1.0);
+    face *= mix(1.0, 0.45, w);
 
     // --- crisp seam line: a thin dark line right at the crease (world-stable, AA'd by fwidth) ---
     float aa = fwidth(d) * 1.5 + 1e-6;
     float seam = 1.0 - smoothstep(0.0, aa, d);       // 1 exactly on the crease
-    face = mix(face, face * 0.28, seam * 0.9);
+    face = mix(face, face * 0.30, seam * 0.9);
 
-    // Ellipsoidal feather: full deboss near the crease, with a rounded fade that lands SMOOTHLY (zero slope)
-    // at the band rim -- so the groove dissolves gently into the flat field instead of cutting off hard where
-    // the crease-edge triangle ends and a flat neighbour begins. (u: 1 at crease -> 0 at rim; quarter-ellipse.)
-    float u = 1.0 - t;
-    float env = 1.0 - sqrt(max(0.0, 1.0 - u * u));
-    // Triangles with NO crease edge (vEdgeDist.w == 1) get no deboss at all (a groove belongs only to a
-    // triangle that contains a crease edge); crease-edge tris get the feathered deboss at 50% strength.
-    float fx = ((vEdgeDist.w > 0.5) ? 0.0 : 0.5) * env;
+    // Triangles with NO crease edge (vEdgeDist.w == 1) get no deboss (flat tint -- a groove belongs only to a
+    // triangle that contains a crease edge); crease-edge tris get the ellipsoidal deboss at 50% strength.
+    float fx = (vEdgeDist.w > 0.5) ? 0.0 : 0.5;
     FragColor = vec4(mix(faceFlat, face, fx), 1.0);
 }";
 

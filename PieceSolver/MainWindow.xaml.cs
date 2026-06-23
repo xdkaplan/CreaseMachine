@@ -1380,7 +1380,7 @@ namespace PieceSolver
                 if (_sim.CreaseBrush && _session != null && !_baking)
                 {
                     _dabAccum = 0;
-                    if (PickSurface(_lastMouse, out var hit)) BumpCreasesUnderBrush(hit);   // initial bump at the down point
+                    if (PickSurface(_lastMouse, out var hit) && BumpCreasesUnderBrush(hit) && _showPieces) RebuildPieces();   // initial bump at the down point (live patches)
                 }
             }
             else return;
@@ -1392,7 +1392,7 @@ namespace PieceSolver
             bool wasCreaseStroke = _drag == DragMode.Edit && _sim.CreaseBrush;
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
-            if (wasCreaseStroke && _showPieces) RebuildPieces();   // refresh pieces once at stroke end (not per bump)
+            if (wasCreaseStroke && _showPieces) RebuildPieces();   // final settle at stroke end (also updated live per mouse-move)
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
@@ -1457,13 +1457,15 @@ namespace PieceSolver
             if (seg < 1e-6) return;
             double spacing = BrushSpacingPx(b);
             double pos = spacing - _dabAccum;
+            bool changed = false;
             while (pos <= seg)
             {
                 double t = pos / seg;
-                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit)) BumpCreasesUnderBrush(hit);
+                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit) && BumpCreasesUnderBrush(hit)) changed = true;
                 pos += spacing;
             }
             _dabAccum = seg - (pos - spacing);
+            if (changed && _showPieces) RebuildPieces();   // live patch diagram: recompute once per mouse-move (throttle), not per dab
         }
 
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
@@ -1477,9 +1479,9 @@ namespace PieceSolver
         // brush radius is slid outward (away from `center`) across its triangle, repeatedly, until no crease
         // edge remains under the footprint — so the magnet pushes the line out of the brush. Edits the
         // _creaseEdges selection only (no geometry moves). Topology is fixed -> the edge->apex map is cached.
-        void BumpCreasesUnderBrush(Vector3 center)
+        bool BumpCreasesUnderBrush(Vector3 center)
         {
-            if (_creaseEdges == null || _creaseEdges.Count == 0 || _session == null) return;
+            if (_creaseEdges == null || _creaseEdges.Count == 0 || _session == null) return false;
             if (_edgeApex == null) BuildEdgeApexMap();
             float R2 = (float)(_sim.BrushSize * _sim.BrushSize);
             var stuck = new System.Collections.Generic.HashSet<long>();   // edges that can't slide further (at the patch edge)
@@ -1497,6 +1499,7 @@ namespace PieceSolver
                 else stuck.Add(key);
             }
             if (changed) RebuildCreaseOverlay();
+            return changed;
         }
 
         // Slide one crease edge outward across its triangle: a-b -> a-x + x-b, where x is the apex (of the
