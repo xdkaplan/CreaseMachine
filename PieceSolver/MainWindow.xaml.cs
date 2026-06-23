@@ -95,7 +95,7 @@ namespace PieceSolver
         int _brushRegion = -1;   // active region being painted with = the region of the face clicked on mouse-down (shown light blue)
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
-        bool _angleDragging;     // Crease angle slider thumb is being dragged: re-segment + show edges live, defer colour fills to mouse-up
+        bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -234,9 +234,8 @@ namespace PieceSolver
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg))
                 {
-                    RelabelCreases();                          // recompute regions + crease-EDGE overlay (live in both cases)
-                    if (_angleDragging) _showPieces = false;   // mid-drag: edges only -- defer the colour FILLS to mouse-up
-                    else RebuildPieces();                      // settled (release / keyboard / track-click): build + show fills
+                    RelabelCreases();   // recompute regions + crease-EDGE overlay
+                    RebuildPieces();    // rebuild the crease-shader grooves; colour rule: rainbow when settled, NEUTRAL while dragging
                     _gl?.InvalidateVisual();
                 }
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
@@ -765,10 +764,10 @@ namespace PieceSolver
             };
             slider.SetBinding(System.Windows.Controls.Slider.ValueProperty,
                 new System.Windows.Data.Binding("CreaseAngleDeg") { Mode = System.Windows.Data.BindingMode.TwoWay });
-            // While the thumb is dragged, the angle handler shows EDGES only (re-segmenting live) and suppresses
-            // the colour fills; on release we rebuild + show the fills. (Thumb drag events bubble to the slider.)
+            // While the thumb is dragged, the grooves stay live (re-segmenting) but the fill goes NEUTRAL (no
+            // rainbow); on release we rebuild with the colour back. (Thumb drag events bubble to the slider.)
             slider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragStartedEvent,
-                new System.Windows.Controls.Primitives.DragStartedEventHandler((s, e) => _angleDragging = true));
+                new System.Windows.Controls.Primitives.DragStartedEventHandler((s, e) => { _angleDragging = true; RebuildPieces(); }));
             slider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragCompletedEvent,
                 new System.Windows.Controls.Primitives.DragCompletedEventHandler((s, e) => { _angleDragging = false; RebuildPieces(); }));
             dp.Children.Add(label);
@@ -978,11 +977,14 @@ namespace PieceSolver
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                // Colour rule: while the crease-review CamModal is up, show the FULL patchwork (rainbow per
-                // region). Otherwise pieces are not colour-coded -- only the active paint region is tinted light
-                // blue and the rest render as plain neutral matcap (white tint). Grooves delineate either way.
-                Vector3 cc = _camModal ? PieceColor(pieceId[f])
-                                       : (pieceId[f] == _brushRegion ? ActiveRegionColor : Vector3.One);
+                // Colour rule (grooves delineate the pieces in every case; this only sets the FILL tint):
+                //   - crease review, settled       -> full rainbow patchwork (PieceColor)
+                //   - crease review, mid-drag       -> neutral white: the crease shader still shows where the
+                //                                      pieces are, but no colour churns while you slide the angle
+                //   - brush mode                    -> neutral white, except the active paint region (light blue)
+                Vector3 cc = (_camModal && !_angleDragging) ? PieceColor(pieceId[f])
+                           : (!_camModal && pieceId[f] == _brushRegion) ? ActiveRegionColor
+                           : Vector3.One;
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
