@@ -37,6 +37,15 @@ namespace PieceSolver
         int _indexCount;
         bool _ready;
 
+        // --- Piece visualization: a per-piece-tinted render of the crease-bounded regions. Uploaded SPLIT
+        // (one set of 3 corners per triangle) so each piece carries its own colour + boundary-distance with
+        // no bleed across creases. The baseline shader is flat tint; subagent aesthetics restyle PIECE_FRAG. ---
+        int _pieceProg, _pieceVao, _pieceVboPos, _pieceVboNrm, _pieceVboCol, _pieceVboDist;
+        int _uPMvp, _uPView, _uPNormalMat, _uPNeutral, _uPHasNeutral, _uPSharpness, _uPFacetExp, _uPInset;
+        int _pieceVertCount;
+        public bool ShowPieces = false;     // host sets this (auto-on after Propose) to draw the piece view
+        public float InsetWidth = 0.05f;    // world-relative inset band width (the distance field is in world units)
+
         public Vector3 Center { get; private set; }
         public float Radius { get; private set; } = 1f;
         public float Sharpness = 1f;     // 0 = smooth, 1 = faceted; set per frame from the Facet slider
@@ -206,6 +215,123 @@ void main() {
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
             GL.BindTexture(TextureTarget.Texture2D, 0);
+        }
+
+        // ===================== Piece visualization =====================
+
+        const string PIECE_VERT = @"#version 330 core
+layout(location=0) in vec3 aPos;
+layout(location=1) in vec3 aNormal;
+layout(location=2) in vec3 aPieceCol;
+layout(location=3) in float aDist;
+uniform mat4 uMvp;
+uniform mat4 uView;
+uniform mat3 uNormalMat;
+out vec3 vN;
+out vec3 vViewPos;
+out vec3 vPieceCol;
+out float vDist;
+void main() {
+    gl_Position = uMvp * vec4(aPos, 1.0);
+    vN = uNormalMat * aNormal;
+    vViewPos = (uView * vec4(aPos, 1.0)).xyz;
+    vPieceCol = aPieceCol;
+    vDist = aDist;            // world-space distance to this piece's nearest crease boundary
+}";
+
+        // BASELINE aesthetic: flat per-piece tint (lit by the neutral matcap). vDist (world distance to the
+        // piece boundary) and uInset (the band width) are passed in but UNUSED here on purpose — the
+        // overnight subagent aesthetics restyle THIS shader (inset band, bevel/AO, exploded gap, ...).
+        const string PIECE_FRAG = @"#version 330 core
+in vec3 vN;
+in vec3 vViewPos;
+in vec3 vPieceCol;
+in float vDist;
+out vec4 FragColor;
+uniform sampler2D uNeutral;
+uniform int uHasNeutral;
+uniform float uSharpness;
+uniform float uFacetExp;
+uniform float uInset;        // world-relative inset band width (subagents: use vDist < uInset)
+void main() {
+    vec3 sn = normalize(vN);
+    vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
+    if (dot(fn, sn) < 0.0) fn = -fn;
+    float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
+    vec3 n = normalize(mix(sn, fn, s));
+    if (n.z < 0.0) n = -n;
+    vec3 lit = (uHasNeutral == 1) ? texture(uNeutral, n.xy * 0.5 + 0.5).rgb : vec3(clamp(n.z, 0.0, 1.0));
+    FragColor = vec4(lit * vPieceCol, 1.0);   // baseline: flat per-piece tint
+}";
+
+        void EnsurePieceProgram()
+        {
+            if (_pieceProg != 0) return;
+            _pieceProg = Link(PIECE_VERT, PIECE_FRAG);
+            _uPMvp = GL.GetUniformLocation(_pieceProg, "uMvp");
+            _uPView = GL.GetUniformLocation(_pieceProg, "uView");
+            _uPNormalMat = GL.GetUniformLocation(_pieceProg, "uNormalMat");
+            _uPNeutral = GL.GetUniformLocation(_pieceProg, "uNeutral");
+            _uPHasNeutral = GL.GetUniformLocation(_pieceProg, "uHasNeutral");
+            _uPSharpness = GL.GetUniformLocation(_pieceProg, "uSharpness");
+            _uPFacetExp = GL.GetUniformLocation(_pieceProg, "uFacetExp");
+            _uPInset = GL.GetUniformLocation(_pieceProg, "uInset");
+        }
+
+        // Upload the piece-tinted mesh, SPLIT per triangle (3 corners each, sequential — no EBO). Arrays are
+        // parallel: pos/nrm = 3 floats per corner, col = 3 floats per corner (the piece colour), dist = 1
+        // float per corner (world distance to the piece's crease boundary). vertCount = pos.Length/3.
+        public void SetPieces(float[] pos, float[] nrm, float[] col, float[] dist)
+        {
+            EnsurePieceProgram();
+            _pieceVertCount = (pos == null) ? 0 : pos.Length / 3;
+            if (_pieceVertCount == 0) return;
+            if (_pieceVao == 0) { _pieceVao = GL.GenVertexArray(); _pieceVboPos = GL.GenBuffer(); _pieceVboNrm = GL.GenBuffer(); _pieceVboCol = GL.GenBuffer(); _pieceVboDist = GL.GenBuffer(); }
+            GL.BindVertexArray(_pieceVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboPos);
+            GL.BufferData(BufferTarget.ArrayBuffer, pos.Length * sizeof(float), pos, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0); GL.EnableVertexAttribArray(0);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboNrm);
+            GL.BufferData(BufferTarget.ArrayBuffer, nrm.Length * sizeof(float), nrm, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0); GL.EnableVertexAttribArray(1);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboCol);
+            GL.BufferData(BufferTarget.ArrayBuffer, col.Length * sizeof(float), col, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(2, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0); GL.EnableVertexAttribArray(2);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _pieceVboDist);
+            GL.BufferData(BufferTarget.ArrayBuffer, dist.Length * sizeof(float), dist, BufferUsageHint.DynamicDraw);
+            GL.VertexAttribPointer(3, 1, VertexAttribPointerType.Float, false, 1 * sizeof(float), 0); GL.EnableVertexAttribArray(3);
+            GL.BindVertexArray(0);
+        }
+
+        public void ClearPieces() { _pieceVertCount = 0; }
+        public bool HasPieces => _pieceVertCount > 0;
+
+        // Draw the piece-tinted mesh (replaces the matcap mesh while ShowPieces is on). The neutral matcap
+        // lights it; per-piece colour tints it. Sharpness/FacetExp reuse the Facet shading; uInset carries
+        // the world-relative band width for the aesthetic shaders.
+        public void DrawPieces(Matrix4 view, Matrix4 proj)
+        {
+            if (_pieceVertCount == 0 || _pieceProg == 0) return;
+            Matrix4 model = Matrix4.CreateTranslation(ModelOffset);
+            Matrix4 mvp = model * view * proj;
+            Matrix3 normalMat = new Matrix3(view);
+            GL.UseProgram(_pieceProg);
+            GL.UniformMatrix4(_uPMvp, false, ref mvp);
+            GL.UniformMatrix4(_uPView, false, ref view);
+            GL.UniformMatrix3(_uPNormalMat, false, ref normalMat);
+            GL.Uniform1(_uPSharpness, Sharpness);
+            GL.Uniform1(_uPFacetExp, FacetExp);
+            GL.Uniform1(_uPInset, InsetWidth);
+            GL.Uniform1(_uPHasNeutral, _hasNeutral ? 1 : 0);
+            GL.ActiveTexture(TextureUnit.Texture0); GL.BindTexture(TextureTarget.Texture2D, _texNeutral); GL.Uniform1(_uPNeutral, 0);
+            // Push the fill back when creases are overlaid, so the orange crease lines win the near-surface
+            // depth test against the piece fill (same hidden-line trick as the matcap path).
+            bool offset = ShowCreases && _creaseCount > 0;
+            if (offset) { GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1f, 1f); }
+            GL.BindVertexArray(_pieceVao);
+            GL.DrawArrays(PrimitiveType.Triangles, 0, _pieceVertCount);
+            GL.BindVertexArray(0);
+            if (offset) GL.Disable(EnableCap.PolygonOffsetFill);
         }
 
         // Always uploads the welded/smooth mesh (shared verts + area-averaged normals). The faceted
@@ -433,22 +559,34 @@ void main() {
             GL.Uniform1(_uNoise, 1);
             GL.ActiveTexture(TextureUnit.Texture1);
             GL.BindTexture(TextureTarget.Texture3D, _noiseTex);
-            GL.BindVertexArray(_vao);
-            // Filled pass. When edges OR on-surface creases are shown, push the fill back a touch (polygon
-            // offset) so a line overlay drawn at true depth wins the depth test on the NEAR surface (clean
-            // hidden-line look) while the mesh still occludes lines on the FAR side.
-            GL.Uniform1(_uEdge, 0);
-            bool offsetFill = ShowEdges || (ShowCreases && _creaseCount > 0);
-            if (offsetFill) { GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1f, 1f); }
-            GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
-            if (offsetFill) GL.Disable(EnableCap.PolygonOffsetFill);   // line overlays below draw at true depth
-            if (ShowEdges)
+            // Filled pass: when ShowPieces is on (host sets it after Propose), the piece-tinted view REPLACES
+            // the matcap fill; otherwise the matcap/Shine mesh draws. Either way the line overlays below draw
+            // on top at true depth.
+            bool pieces = ShowPieces && _pieceVertCount > 0;
+            if (pieces)
             {
-                GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
-                GL.Uniform1(_uEdge, 1);
-                GL.Uniform3(_uEdgeColor, EdgeColor.X, EdgeColor.Y, EdgeColor.Z);
+                DrawPieces(view, proj);                   // separate program; pushes its fill back if creases are shown
+                GL.UseProgram(_prog);                     // re-bind the line-overlay program + its mvp for the overlays
+                GL.UniformMatrix4(_uMvp, false, ref mvp);
+            }
+            else
+            {
+                GL.BindVertexArray(_vao);
+                // When edges OR on-surface creases are shown, push the fill back a touch (polygon offset) so a
+                // line overlay drawn at true depth wins on the NEAR surface while the mesh occludes the FAR.
+                GL.Uniform1(_uEdge, 0);
+                bool offsetFill = ShowEdges || (ShowCreases && _creaseCount > 0);
+                if (offsetFill) { GL.Enable(EnableCap.PolygonOffsetFill); GL.PolygonOffset(1f, 1f); }
                 GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
-                GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+                if (offsetFill) GL.Disable(EnableCap.PolygonOffsetFill);   // line overlays below draw at true depth
+                if (ShowEdges)
+                {
+                    GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Line);
+                    GL.Uniform1(_uEdge, 1);
+                    GL.Uniform3(_uEdgeColor, EdgeColor.X, EdgeColor.Y, EdgeColor.Z);
+                    GL.DrawElements(PrimitiveType.Triangles, _indexCount, DrawElementsType.UnsignedInt, 0);
+                    GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+                }
             }
             // Ruling overlay: GL_LINES from a separate position-only buffer, flat-coloured (uEdge=1). Lifted
             // off the surface in the field computation, so a normal depth test gives a clean on-surface look.
@@ -537,6 +675,8 @@ void main() {
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
             if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }
             if (_creaseVao != 0) { GL.DeleteVertexArray(_creaseVao); GL.DeleteBuffer(_creaseVbo); }
+            if (_pieceVao != 0) { GL.DeleteVertexArray(_pieceVao); GL.DeleteBuffer(_pieceVboPos); GL.DeleteBuffer(_pieceVboNrm); GL.DeleteBuffer(_pieceVboCol); GL.DeleteBuffer(_pieceVboDist); }
+            if (_pieceProg != 0) GL.DeleteProgram(_pieceProg);
             if (_tex != 0) GL.DeleteTexture(_tex);
             if (_texNeutral != 0) GL.DeleteTexture(_texNeutral);
             if (_texEnv != 0) GL.DeleteTexture(_texEnv);

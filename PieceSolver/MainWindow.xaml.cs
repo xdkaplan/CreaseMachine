@@ -92,6 +92,10 @@ namespace PieceSolver
         double[] _proposedPos;   // settled (developed) geometry from the last Propose, per original vertex (nV*3); for the DISPLAY preview
         System.Collections.Generic.HashSet<long> _creaseEdges;          // editable crease selection (sorted edge keys); seeded by Propose, edited by the Crease brush
         System.Collections.Generic.Dictionary<long, (int, int)> _edgeApex;   // edge key -> its two opposite apex vertices (topology cache for the brush)
+        // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
+        // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
+        float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist;
+        bool _pieceDirty, _showPieces; float _pieceInset = 0.05f;
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
         readonly System.Collections.Generic.List<string> _bakeLog = new System.Collections.Generic.List<string>();   // worker log lines, flushed on the UI thread
@@ -219,9 +223,9 @@ namespace PieceSolver
             {
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
                     || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual();
-                else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RebuildCreaseOverlay(); _gl?.InvalidateVisual(); }   // re-upload M (proposed vs input) + re-place creases (keep edits)
+                else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RebuildCreaseOverlay(); RebuildPieces(); _gl?.InvalidateVisual(); }   // re-place creases + pieces on the new positions (keep edits)
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
-                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) RelabelCreases();   // re-label proposed creases live (no re-propose)
+                else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg)) { RelabelCreases(); RebuildPieces(); }   // re-seed creases (discards nudges) + re-piece
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
 
@@ -650,6 +654,7 @@ namespace PieceSolver
                 {
                     _creaseFold = fold; _creaseA = ea; _creaseB = eb;
                     RelabelCreases();
+                    RebuildPieces();   // auto-on: show the per-piece view as soon as creases exist
                     Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
                 if (_view != null) _view.Upload(_session.Mesh, ProposedPreviewPos());   // input mesh, or the proposed preview if toggled
@@ -723,10 +728,130 @@ namespace PieceSolver
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos == null && _creaseEdges == null && (_creasePts == null || _creasePts.Length == 0)) return;
+            if (_creaseFold == null && _proposedPos == null && _creaseEdges == null && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos = null;
             _creaseEdges = null; _edgeApex = null;
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
+            _showPieces = false; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
+        }
+
+        // Identify pieces (face regions bounded by the crease selection + mesh boundaries) and stage a
+        // per-piece-tinted SPLIT render buffer (pos / normal / piece colour / world distance-to-boundary).
+        // CPU-only here; the GL upload is staged for OnRender. Auto-shown after Propose, refreshed on Crease
+        // angle change, on a brush stroke, and on the proposed-mesh preview toggle.
+        void RebuildPieces()
+        {
+            if (_session == null || _creaseEdges == null || _creaseEdges.Count == 0)
+            { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+            var P = _session.Mesh;
+            int nV = P.Vertices.Count, nF = P.Faces.Count, nH = P.Halfedges.Count;
+            double[] dp = ProposedPreviewPos();
+            Vector3 Pos(int v) => dp != null
+                ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
+                : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
+
+            // Union-find face components across non-crease interior edges (a crease blocks the merge).
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
+                if (_creaseEdges.Contains(EdgeKey(a, b))) continue;
+                int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
+            }
+            var pieceId = new int[nF];
+            var rootId = new System.Collections.Generic.Dictionary<int, int>();
+            int pieceCount = 0;
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused) { pieceId[f] = -1; continue; }
+                int r = Find(f); if (!rootId.TryGetValue(r, out int id)) { id = pieceCount++; rootId[r] = id; }
+                pieceId[f] = id;
+            }
+
+            // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
+            float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
+            float cap = 0.25f * meshR;
+            _pieceInset = 0.06f * meshR;
+            var dist = new float[nV]; for (int v = 0; v < nV; v++) dist[v] = cap;
+            var pq = new System.Collections.Generic.PriorityQueue<int, float>();
+            foreach (long key in _creaseEdges)
+            {
+                int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
+                if (a >= 0 && a < nV && dist[a] != 0f) { dist[a] = 0f; pq.Enqueue(a, 0f); }
+                if (b >= 0 && b < nV && dist[b] != 0f) { dist[b] = 0f; pq.Enqueue(b, 0f); }
+            }
+            while (pq.TryDequeue(out int v, out float dv))
+            {
+                if (dv > dist[v] || dv >= cap) continue;
+                Vector3 pv = Pos(v);
+                foreach (int u in P.Vertices.GetVertexNeighbours(v))
+                {
+                    if (u < 0 || u >= nV || P.Vertices[u].IsUnused) continue;
+                    float nd = dv + (Pos(u) - pv).Length;
+                    if (nd < dist[u]) { dist[u] = nd; if (nd < cap) pq.Enqueue(u, nd); }
+                }
+            }
+
+            // Averaged vertex normals from the display positions.
+            var vN = new Vector3[nV];
+            for (int f = 0; f < nF; f++)
+            {
+                if (pieceId[f] < 0) continue;
+                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
+                Vector3 fn = Vector3.Cross(Pos(fv[1]) - Pos(fv[0]), Pos(fv[2]) - Pos(fv[0]));
+                vN[fv[0]] += fn; vN[fv[1]] += fn; vN[fv[2]] += fn;
+            }
+
+            // SPLIT buffers: 3 corners per triangle, each carrying its piece colour + boundary distance.
+            var pos = new System.Collections.Generic.List<float>(nF * 9);
+            var nrm = new System.Collections.Generic.List<float>(nF * 9);
+            var col = new System.Collections.Generic.List<float>(nF * 9);
+            var dst = new System.Collections.Generic.List<float>(nF * 3);
+            for (int f = 0; f < nF; f++)
+            {
+                if (pieceId[f] < 0) continue;
+                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
+                Vector3 cc = PieceColor(pieceId[f]);
+                for (int k = 0; k < 3; k++)
+                {
+                    int v = fv[k]; Vector3 pp = Pos(v);
+                    Vector3 nn = vN[v].LengthSquared > 1e-20f ? Vector3.Normalize(vN[v]) : Vector3.UnitZ;
+                    pos.Add(pp.X); pos.Add(pp.Y); pos.Add(pp.Z);
+                    nrm.Add(nn.X); nrm.Add(nn.Y); nrm.Add(nn.Z);
+                    col.Add(cc.X); col.Add(cc.Y); col.Add(cc.Z);
+                    dst.Add(dist[v]);
+                }
+            }
+            _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray();
+            _pieceDirty = true; _showPieces = _piecePos.Length > 0;
+            Log($"pieces: {pieceCount} region(s)");
+            _gl?.InvalidateVisual();
+        }
+
+        // Distinct per-piece colour via a golden-ratio hue rotation, so adjacent pieces always differ.
+        static Vector3 PieceColor(int id)
+        {
+            float h = (id * 0.61803398875f) % 1f;
+            return HsvToRgb(h < 0 ? h + 1f : h, 0.5f, 0.95f);
+        }
+        static Vector3 HsvToRgb(float h, float s, float v)
+        {
+            float i = (float)Math.Floor(h * 6f), f = h * 6f - i;
+            float p = v * (1f - s), q = v * (1f - f * s), t = v * (1f - (1f - f) * s);
+            switch (((int)i) % 6)
+            {
+                case 0: return new Vector3(v, t, p);
+                case 1: return new Vector3(q, v, p);
+                case 2: return new Vector3(p, v, t);
+                case 3: return new Vector3(p, q, v);
+                case 4: return new Vector3(t, p, v);
+                default: return new Vector3(v, p, q);
+            }
         }
 
         // Worker entry (background thread): pure compute, dispatched single vs multi-component.
@@ -1240,8 +1365,10 @@ namespace PieceSolver
 
         void OnMouseUp(object sender, MouseButtonEventArgs e)
         {
+            bool wasCreaseStroke = _drag == DragMode.Edit && _sim.CreaseBrush;
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
+            if (wasCreaseStroke && _showPieces) RebuildPieces();   // refresh pieces once at stroke end (not per bump)
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
@@ -1511,6 +1638,13 @@ namespace PieceSolver
             }
             // staged proposed-crease line vertices (GL thread); gate on !_baking like the mesh upload
             if (_creaseDirty && !_baking && _view != null) { _view.SetCreases(_creasePts ?? System.Array.Empty<float>()); _creaseDirty = false; }
+            // staged piece-visualization buffers (GL thread)
+            if (_pieceDirty && !_baking && _view != null)
+            {
+                if (_piecePos != null && _piecePos.Length > 0) _view.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist);
+                else _view.ClearPieces();
+                _pieceDirty = false;
+            }
 
             // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
             // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
@@ -1589,6 +1723,7 @@ namespace PieceSolver
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap;            // Shine shading
                 _view.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
+                _view.ShowPieces = _showPieces; _view.InsetWidth = _pieceInset;                // per-piece view (auto-on after Propose)
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
                 _view.LicMode = _sim.ShowRuling ? 1 : 0;
                 if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
