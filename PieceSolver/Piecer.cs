@@ -11,9 +11,9 @@ namespace PieceSolver
     // press) and a DRAG (past it -> the brush):
     //   PLAIN — tap: REPLACE the selection with the one piece under the cursor (empty canvas / ESC -> deselect).
     //           Plain never brushes.
-    //   SHIFT — tap: ADD that piece to the selection (union). Drag: GROW the whole selection (mint a new region
-    //           when nothing is selected). Provisional — candidates preview Green 5 (will be added) / Green 2 (a
-    //           disconnected no-op affordance); commits on release.
+    //   SHIFT — tap: ADD that piece to the selection (union). Drag: GROW the whole selection (when nothing is
+    //           selected, MINT a new region from the largest connected blob). Provisional — candidates preview
+    //           Green 5 (will be added) / Green 2 (a disconnected no-op affordance); commits on release.
     //   CTRL  — tap: REMOVE that piece from the selection. Drag: CARVE faces out of the whole selection (donated
     //           to a neighbour outside the selection, or split off as an island), or — nothing selected — REMOVE
     //           whole pieces (healed into the dominant neighbour). Marked faces preview red; commits on release.
@@ -155,11 +155,12 @@ namespace PieceSolver
         {
             if (_growMint)
             {
-                // MINT: a brand-new region from every candidate; it becomes the selection.
-                if (_growTouched != null && _growTouched.Count > 0)
+                // MINT: a brand-new region from the largest connected blob (Green 5); disconnected strays were
+                // never written -> dropped. It becomes the selection.
+                if (_growConnected != null && _growConnected.Count > 0)
                 {
                     var id = _host.Pattern.NewRegionId();
-                    _host.Pattern.ApplyGrow(_growTouched, id);
+                    _host.Pattern.ApplyGrow(_growConnected, id);
                     _selection.Clear(); _selection.Add(id.Value);
                 }
             }
@@ -235,11 +236,12 @@ namespace PieceSolver
             return added;
         }
 
-        // Recompute the "will be added" (Green 5) set: a MINT adds every candidate (a fresh island is
-        // self-connected); a GROW adds only candidates a selected front reaches (GrowAssign), the rest stay Green 2.
+        // Recompute the "will be added" (Green 5) set: a MINT adds only the LARGEST connected blob of candidates
+        // (strays stay Green 2, dropped on release — no stray single-triangle pieces); a GROW adds only candidates
+        // a selected front reaches (GrowAssign), the rest stay Green 2.
         void UpdateGrowConnected()
         {
-            if (_growMint) { _growConnected = new HashSet<int>(_growTouched); _growAssign = null; }
+            if (_growMint) { _growConnected = _host.Pattern.LargestComponent(_growTouched); _growAssign = null; }
             else { _growAssign = _host.Pattern.GrowAssign(_growTouched, _selection); _growConnected = new HashSet<int>(_growAssign.Keys); }
         }
 

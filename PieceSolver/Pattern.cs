@@ -315,6 +315,38 @@ namespace PieceSolver
             return result;
         }
 
+        // Of the candidate faces, return the LARGEST edge-connected component (connectivity stepping only through
+        // other candidates). Used by the provisional Shift+mint (no selection): the main blob previews Green 5 and
+        // becomes the new region; disconnected strays preview Green 2 and are dropped on release — so a mint never
+        // spawns stray single-triangle pieces. Same union-find pass as the other grow queries; read-only.
+        public HashSet<int> LargestComponent(HashSet<int> touched)
+        {
+            var result = new HashSet<int>();
+            if (PieceMap == null || _mesh == null || touched == null || touched.Count == 0) return result;
+            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                if (touched.Contains(f1) && touched.Contains(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
+            }
+            var size = new Dictionary<int, int>();
+            int best = -1, bestSize = 0;
+            foreach (int f in touched)
+            {
+                if (f < 0 || f >= nF) continue;
+                int r = Find(f), s = DictGet(size, r) + 1; size[r] = s;
+                if (s > bestSize) { bestSize = s; best = r; }
+            }
+            if (best < 0) return result;
+            foreach (int f in touched) if (f >= 0 && f < nF && Find(f) == best) result.Add(f);
+            return result;
+        }
+
         // Commit a single-piece grow / mint: assign the given faces to one region. Re-derives creases.
         public void ApplyGrow(HashSet<int> faces, PieceId active)
         {
