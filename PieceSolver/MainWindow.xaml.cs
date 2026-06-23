@@ -96,6 +96,8 @@ namespace PieceSolver
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
         bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
+        bool _removing;          // Ctrl+drag "remove pieces" gesture is in progress (faces marked, fully-covered pieces removed on mouse-up)
+        System.Collections.Generic.HashSet<int> _touched;   // faces marked during the current remove gesture (light red; a wholly-marked piece -> dark red -> removed)
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
@@ -973,18 +975,26 @@ namespace PieceSolver
             var col = new System.Collections.Generic.List<float>(nF * 9);
             var dst = new System.Collections.Generic.List<float>(nF * 3);
             var edg = new System.Collections.Generic.List<float>(nF * 12);
+            // Remove-gesture preview: marked faces tint red; a wholly-marked piece tints darker (it will be removed).
+            var marked = (_removing && _touched != null && _touched.Count > 0) ? _touched : null;
+            var fullyMarked = marked != null ? FullyMarkedRegions() : null;
             for (int f = 0; f < nF; f++)
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
                 // Colour rule (grooves delineate the pieces in every case; this only sets the FILL tint):
-                //   - crease review, settled       -> full rainbow patchwork (PieceColor)
+                //   - remove gesture, marked face   -> red (dark if its whole piece is marked = will be removed)
+                //   - crease review, settled        -> full rainbow patchwork (PieceColor)
                 //   - crease review, mid-drag       -> neutral white: the crease shader still shows where the
                 //                                      pieces are, but no colour churns while you slide the angle
                 //   - brush mode                    -> neutral white, except the active paint region (light blue)
-                Vector3 cc = (_camModal && !_angleDragging) ? PieceColor(pieceId[f])
-                           : (!_camModal && pieceId[f] == _brushRegion) ? ActiveRegionColor
-                           : Vector3.One;
+                Vector3 cc;
+                if (marked != null && marked.Contains(f))
+                    cc = fullyMarked.Contains(pieceId[f]) ? RemoveDark : RemoveLight;
+                else
+                    cc = (_camModal && !_angleDragging) ? PieceColor(pieceId[f])
+                       : (!_camModal && pieceId[f] == _brushRegion) ? ActiveRegionColor
+                       : Vector3.One;
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
                 bool c0 = _creaseEdges.Contains(EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = _creaseEdges.Contains(EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
@@ -1017,6 +1027,10 @@ namespace PieceSolver
         // The active paint region (the one the Crease brush is currently painting with) is shown in this light
         // blue, picked from the rainbow palette's hue/sat/val so it sits naturally among the piece colours.
         static readonly Vector3 ActiveRegionColor = HsvToRgb(0.56f, 0.5f, 0.97f);
+
+        // Remove-gesture preview tints: light red = a marked face, dark red = a wholly-marked piece (to be removed).
+        static readonly Vector3 RemoveLight = new Vector3(0.96f, 0.62f, 0.60f);
+        static readonly Vector3 RemoveDark = new Vector3(0.80f, 0.16f, 0.16f);
 
         // Distinct per-piece colour via a golden-ratio hue rotation, so adjacent pieces always differ.
         static Vector3 PieceColor(int id)
@@ -1541,11 +1555,20 @@ namespace PieceSolver
                 if (BrushAvailable)
                 {
                     _dabAccum = 0;
+                    if ((Keyboard.Modifiers & ModifierKeys.Control) != 0)
+                    {
+                        // CTRL+drag = remove pieces: mark faces under the brush (light red); a wholly-marked
+                        // piece reads dark red and is removed on mouse-up (its faces heal into the dominant
+                        // neighbour). No region painting happens during a remove gesture.
+                        _removing = true; _touched = new System.Collections.Generic.HashSet<int>();
+                        if (PickSurface(_lastMouse, out var hit)) MarkFacesUnderBrush(hit);
+                        RebuildPieces();
+                    }
                     // Pick the face under the click. Normally its region becomes the ACTIVE paint region (sample);
                     // holding SHIFT instead starts a brand-NEW region, so painting carves it out of whatever was
                     // there (e.g. Shift+click inside a disc -> a bullseye: new region A inside region B). Dragging
                     // then grows the active region; each Shift+click mints another new region.
-                    if (PickFace(_lastMouse, out int f0, out var hit))
+                    else if (PickFace(_lastMouse, out int f0, out var hit))
                     {
                         bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
                         _brushRegion = shift ? NewRegionId()
@@ -1564,7 +1587,13 @@ namespace PieceSolver
             bool wasCreaseStroke = _drag == DragMode.Edit && BrushAvailable;
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
-            if (wasCreaseStroke && _showPieces) RebuildPieces();   // final settle at stroke end (also updated live per mouse-move)
+            if (_removing)
+            {
+                FinalizeRemoval();                       // remove the wholly-marked pieces, heal into dominant neighbours
+                _removing = false; _touched = null;
+                if (_showPieces) RebuildPieces();        // drop the red preview, show the healed regions
+            }
+            else if (wasCreaseStroke && _showPieces) RebuildPieces();   // final settle at stroke end (also updated live per mouse-move)
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
@@ -1637,11 +1666,15 @@ namespace PieceSolver
             while (pos <= seg)
             {
                 double t = pos / seg;
-                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit) && PaintRegionUnderBrush(hit)) changed = true;
+                if (PickSurface(new System.Windows.Point(_lastMouse.X + dx * t, _lastMouse.Y + dy * t), out var hit))
+                {
+                    if (_removing) { if (MarkFacesUnderBrush(hit)) changed = true; }   // remove gesture: mark faces
+                    else if (PaintRegionUnderBrush(hit)) changed = true;               // paint gesture: grow active region
+                }
                 pos += spacing;
             }
             _dabAccum = seg - (pos - spacing);
-            if (changed && _showPieces) RebuildPieces();   // live patch diagram: recompute once per mouse-move (throttle), not per dab
+            if (changed && _showPieces) RebuildPieces();   // live: recompute once per mouse-move (throttle), not per dab
         }
 
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
@@ -1674,6 +1707,108 @@ namespace PieceSolver
             return changed;
         }
 
+        // One remove-brush dab: add every face whose centroid is within the brush radius to the marked set
+        // (_touched). Pure marking -- no region change; the actual removal happens on mouse-up.
+        bool MarkFacesUnderBrush(Vector3 center)
+        {
+            if (_touched == null || _session == null) return false;
+            var P = _session.Mesh;
+            float R2 = (float)(BrushWorldRadius * BrushWorldRadius);
+            int nF = P.Faces.Count;
+            bool changed = false;
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused || _touched.Contains(f)) continue;
+                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
+                Vector3 c = (BV(P, fv[0]) + BV(P, fv[1]) + BV(P, fv[2])) * (1f / 3f);
+                if ((c - center).LengthSquared <= R2) { _touched.Add(f); changed = true; }
+            }
+            return changed;
+        }
+
+        // The set of regions whose faces are ALL marked (so they read dark red and will be removed). O(F).
+        System.Collections.Generic.HashSet<int> FullyMarkedRegions()
+        {
+            var result = new System.Collections.Generic.HashSet<int>();
+            if (_touched == null || _touched.Count == 0 || _faceRegion == null || _session == null) return result;
+            var P = _session.Mesh; int nF = P.Faces.Count;
+            var total = new System.Collections.Generic.Dictionary<int, int>();
+            var hit = new System.Collections.Generic.Dictionary<int, int>();
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int r = _faceRegion[f]; if (r < 0) continue;
+                total[r] = DictGet(total, r) + 1;
+                if (_touched.Contains(f)) hit[r] = DictGet(hit, r) + 1;
+            }
+            foreach (var kv in total) if (DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
+            return result;
+        }
+
+        // Mouse-up of a Ctrl remove gesture: delete every wholly-marked piece and HEAL the gap by merging its
+        // faces into the DOMINANT neighbour (the surviving region it shares the most boundary edges with).
+        // Connected removed pieces are healed together as one blob into their shared dominant neighbour. A blob
+        // with no surviving neighbour (e.g. a whole disconnected component) is left as-is.
+        void FinalizeRemoval()
+        {
+            var P = _session?.Mesh;
+            if (P == null || _faceRegion == null || _touched == null) return;
+            int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            var remove = FullyMarkedRegions();
+            if (remove.Count == 0) return;
+            bool IsRemoved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && remove.Contains(_faceRegion[f]);
+
+            // Union connected removed faces into blobs (across any edge where BOTH faces are being removed).
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                if (IsRemoved(f1) && IsRemoved(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
+            }
+
+            // Tally each blob's shared boundary (edge count) with each SURVIVING region.
+            var tally = new System.Collections.Generic.Dictionary<int, System.Collections.Generic.Dictionary<int, int>>();
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                bool r1 = IsRemoved(f1), r2 = IsRemoved(f2);
+                if (r1 == r2) continue;                          // both removed (internal) or both surviving
+                int rf = r1 ? f1 : f2, sf = r1 ? f2 : f1;        // removed face / surviving face
+                int blob = Find(rf), sreg = _faceRegion[sf];
+                if (!tally.TryGetValue(blob, out var d)) { d = new System.Collections.Generic.Dictionary<int, int>(); tally[blob] = d; }
+                d[sreg] = DictGet(d, sreg) + 1;
+            }
+
+            // Dominant surviving neighbour per blob.
+            var target = new System.Collections.Generic.Dictionary<int, int>();
+            foreach (var kv in tally)
+            {
+                int best = -1, bestC = -1;
+                foreach (var nb in kv.Value) if (nb.Value > bestC) { bestC = nb.Value; best = nb.Key; }
+                if (best >= 0) target[kv.Key] = best;
+            }
+
+            int healed = 0, stuck = 0;
+            for (int f = 0; f < nF; f++)
+            {
+                if (!IsRemoved(f)) continue;
+                if (target.TryGetValue(Find(f), out int tgt)) _faceRegion[f] = tgt; else stuck++;
+            }
+            foreach (var r in remove) healed++;
+            if (_brushRegion >= 0 && remove.Contains(_brushRegion)) _brushRegion = -1;   // active selection was removed
+            DeriveCreaseEdges();
+            RebuildCreaseOverlay();
+            Log(stuck > 0 ? $"removed {healed} piece(s); {stuck} face(s) had no surviving neighbour (left as-is)"
+                          : $"removed {healed} piece(s)");
+        }
+
         // A fresh, unused region id (one past the current max), so Shift+paint introduces a NEW region rather
         // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten regions are fine.
         int NewRegionId()
@@ -1684,6 +1819,7 @@ namespace PieceSolver
         }
 
         static long EdgeKey(int a, int b) { int lo = Math.Min(a, b), hi = Math.Max(a, b); return ((long)lo << 32) | (uint)hi; }
+        static int DictGet(System.Collections.Generic.Dictionary<int, int> d, int k) => d.TryGetValue(k, out var v) ? v : 0;
 
         // Build a pick ray (eye + direction) from the camera params, convention-independent. Z-up, 45deg FOV.
         bool PickRay(System.Windows.Point screen, out Vector3 eye, out Vector3 rd)
