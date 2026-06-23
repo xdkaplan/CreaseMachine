@@ -16,7 +16,10 @@ namespace PieceSolver
         int _vao, _vboPos, _vboNrm, _ebo, _prog;
         int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp, _uEdge, _uEdgeColor;
         int _uNoise, _uLicMode, _uNoiseFreq, _uLicStep, _uFieldMax, _uLicStrength, _uLicTaps, _uCurvMin, _uCurvMax;
+        int _uNeutral, _uEnv, _uHasShade, _uUseMatcap, _uShine;   // Shine: neutral+environment default-shading blend
         int _tex;
+        int _texNeutral, _texEnv;   // default shading pair (neutral light + environment), blended by Shine
+        bool _hasNeutral, _hasEnv;
         int _vboField;        // per-vertex direction field (attribute @2), for the surface LIC
         int _noiseTex;        // solid (3D) blue-noise volume the LIC convolves along the field
         int[] _vMap;          // original-vertex -> compacted-vertex index (set by Upload; -1 = unused)
@@ -38,6 +41,8 @@ namespace PieceSolver
         public float Radius { get; private set; } = 1f;
         public float Sharpness = 1f;     // 0 = smooth, 1 = faceted; set per frame from the Facet slider
         public float FacetExp = 1f;      // facet response exponent (Curve slider)
+        public float Shine = 0.4f;       // neutral(0) -> environment(1) default-shading blend (Shine slider)
+        public bool UseMatcap = false;   // true -> the picked matcap overrides the neutral+Shine shading
         public Vector3 ModelOffset = Vector3.Zero;   // world translation applied before view (draw a mesh beside another)
         public bool HasMesh => _ready;   // true once a mesh has been uploaded
         public bool ShowEdges = false;   // overlay the triangle edges (used for the flat map M', which is otherwise a featureless flat blob)
@@ -91,6 +96,11 @@ uniform float uLicStrength;   // 0..1 depth of the grain modulation
 uniform int uLicTaps;         // LIC convolution taps each side (streak length); live -> no recompile
 uniform float uCurvMin;       // ruling curvature remap: kappa_max at/below this -> fully low (specks)
 uniform float uCurvMax;       // ruling curvature remap: kappa_max at/above this -> fully high (bold hairs)
+uniform sampler2D uNeutral;   // default shading: neutral lighting matcap
+uniform sampler2D uEnv;       // default shading: environment-map matcap
+uniform int uHasShade;        // the neutral+env pair is loaded
+uniform int uUseMatcap;       // Advanced: sample the picked matcap instead of the neutral+Shine blend
+uniform float uShine;         // neutral(0) -> environment(1)
 
 void main() {
     if (uEdge == 1) { FragColor = vec4(uEdgeColor, 1.0); return; }
@@ -103,7 +113,10 @@ void main() {
     if (n.z < 0.0) n = -n;       // orient toward camera (view looks down -z) - winding-independent
 
     vec3 surf;
-    if (uHasMatcap == 1) { vec2 uv = n.xy * 0.5 + 0.5; surf = texture(uMatcap, uv).rgb; }
+    vec2 uv = n.xy * 0.5 + 0.5;
+    if (uUseMatcap == 1 && uHasMatcap == 1) { surf = texture(uMatcap, uv).rgb; }   // Advanced: explicit matcap
+    else if (uHasShade == 1) { surf = mix(texture(uNeutral, uv).rgb, texture(uEnv, uv).rgb, clamp(uShine, 0.0, 1.0)); }   // default: neutral + environment by Shine
+    else if (uHasMatcap == 1) { surf = texture(uMatcap, uv).rgb; }   // fallback: single matcap
     else {
         vec3 L = normalize(vec3(0.35, 0.55, 0.75));
         float wrap = clamp(dot(n, L) * 0.5 + 0.5, 0.0, 1.0);
@@ -165,13 +178,24 @@ void main() {
             _uLicTaps = GL.GetUniformLocation(_prog, "uLicTaps");
             _uCurvMin = GL.GetUniformLocation(_prog, "uCurvMin");
             _uCurvMax = GL.GetUniformLocation(_prog, "uCurvMax");
+            _uNeutral = GL.GetUniformLocation(_prog, "uNeutral");
+            _uEnv = GL.GetUniformLocation(_prog, "uEnv");
+            _uHasShade = GL.GetUniformLocation(_prog, "uHasShade");
+            _uUseMatcap = GL.GetUniformLocation(_prog, "uUseMatcap");
+            _uShine = GL.GetUniformLocation(_prog, "uShine");
         }
 
-        public void SetMatcap(byte[] bgra, int w, int h)
+        // Hand-picked override matcap (Advanced > Use Matcap).
+        public void SetMatcap(byte[] bgra, int w, int h) { UploadTex(ref _tex, bgra, w, h); _hasMatcap = true; }
+        // Default shading pair: neutral lighting + environment map, blended by Shine.
+        public void SetNeutralMatcap(byte[] bgra, int w, int h) { UploadTex(ref _texNeutral, bgra, w, h); _hasNeutral = true; }
+        public void SetEnvMatcap(byte[] bgra, int w, int h) { UploadTex(ref _texEnv, bgra, w, h); _hasEnv = true; }
+
+        void UploadTex(ref int tex, byte[] bgra, int w, int h)
         {
             EnsureProgram();
-            if (_tex == 0) _tex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _tex);
+            if (tex == 0) tex = GL.GenTexture();
+            GL.BindTexture(TextureTarget.Texture2D, tex);
             GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, w, h, 0,
                 PixelFormat.Bgra, PixelType.UnsignedByte, bgra);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
@@ -179,7 +203,6 @@ void main() {
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
             GL.BindTexture(TextureTarget.Texture2D, 0);
-            _hasMatcap = true;
         }
 
         // Always uploads the welded/smooth mesh (shared verts + area-averaged normals). The faceted
@@ -368,6 +391,12 @@ void main() {
                 GL.BindTexture(TextureTarget.Texture2D, _tex);
                 GL.Uniform1(_uMatcap, 0);
             }
+            // Shine default-shading pair (neutral unit 2, environment unit 3 — clear of matcap@0/noise@1).
+            GL.Uniform1(_uShine, Shine);
+            GL.Uniform1(_uUseMatcap, UseMatcap ? 1 : 0);
+            GL.Uniform1(_uHasShade, (_hasNeutral && _hasEnv) ? 1 : 0);
+            GL.ActiveTexture(TextureUnit.Texture2); GL.BindTexture(TextureTarget.Texture2D, _texNeutral); GL.Uniform1(_uNeutral, 2);
+            GL.ActiveTexture(TextureUnit.Texture3); GL.BindTexture(TextureTarget.Texture2D, _texEnv); GL.Uniform1(_uEnv, 3);
             // Surface-LIC uniforms. The noise sampler is pinned to unit 1 (never unit 0, so it can't
             // collide with the sampler2D matcap on a strict driver). LicMode is forced 0 unless a noise
             // volume exists, so an un-fed view just draws the matcap.
@@ -472,6 +501,8 @@ void main() {
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
             if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }
             if (_tex != 0) GL.DeleteTexture(_tex);
+            if (_texNeutral != 0) GL.DeleteTexture(_texNeutral);
+            if (_texEnv != 0) GL.DeleteTexture(_texEnv);
             if (_prog != 0) GL.DeleteProgram(_prog);
         }
     }

@@ -45,6 +45,9 @@ namespace PieceSolver
         byte[] _matcapPx; int _matcapW, _matcapH;   // pending matcap pixels (BGRA, GL row order)
         bool _matcapDirty;                          // re-upload the matcap texture on the next render
         int _neutralLightMc = -1;                   // "Neutral Light" matcap; forced as the base whenever a LIC field is on
+        // Shine default-shading pair (neutral light + environment map), blended live by the Shine slider.
+        byte[] _neutralPx, _envPx; int _neutralW, _neutralH, _envW, _envH;
+        bool _neutralDirty, _envDirty;
 
         // Journal harness: every action routes through Execute(), which records the semantic command
         // (record/replay), so a saved .journal replays the live workflow and times each step for
@@ -140,7 +143,13 @@ namespace PieceSolver
             MatcapList.ItemsSource = thumbs;
             // Initial matcap applied (not recorded) before the SelectionChanged handler is wired, so
             // setting the index here doesn't fire a recorded command.
-            if (_matcapPaths.Length > 0) { int defMc = System.Math.Min(2, _matcapPaths.Length - 1); MatcapList.SelectedIndex = defMc; ApplyMatcap(defMc); }   // default = 4th matcap (now index 2 after removing the 3rd)
+            if (_matcapPaths.Length > 0) { int defMc = System.Math.Min(2, _matcapPaths.Length - 1); MatcapList.SelectedIndex = defMc; ApplyMatcap(defMc); }   // picked matcap (only shown under Use Matcap)
+
+            // Default shading = a fixed neutral-lighting matcap + an environment matcap, blended live by
+            // the Shine slider (the picker above is only consulted when Use Matcap is on). Stage both for
+            // GL-thread upload.
+            StageShadingMatcap("CCC5C9_3B2B2B_67585B", isEnv: false);   // neutral lighting (soft near-white)
+            StageShadingMatcap("54584E_B1BAC5_818B91", isEnv: true);    // sky / landscape environment map
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
             // Solve is the studio's main develop; it records a full BakeParams snapshot so a recorded
@@ -181,7 +190,8 @@ namespace PieceSolver
             MatcapList.SelectionChanged += (s, e) => { if (!_suppressUi && MatcapList.SelectedIndex >= 0) Execute(StudioCommand.Matcap(MatcapList.SelectedIndex), record: true); };
             _sim.PropertyChanged += (s, e) =>
             {
-                if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)) _gl?.InvalidateVisual();
+                if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
+                    || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)) _gl?.InvalidateVisual();
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
             };
@@ -777,6 +787,27 @@ namespace PieceSolver
             catch { }
         }
 
+        // Find a bundled matcap by filename prefix and stage its pixels for the default shading's neutral
+        // or environment slot (uploaded on the GL thread, like the picked matcap). Missing file -> the slot
+        // stays empty and the shader falls back (no crash).
+        void StageShadingMatcap(string namePrefix, bool isEnv)
+        {
+            if (_matcapPaths == null) return;
+            foreach (var path in _matcapPaths)
+            {
+                if (!System.IO.Path.GetFileName(path).StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase)) continue;
+                try
+                {
+                    var px = DecodeMatcapBgra(path, out int w, out int h);
+                    if (isEnv) { _envPx = px; _envW = w; _envH = h; _envDirty = true; }
+                    else { _neutralPx = px; _neutralW = w; _neutralH = h; _neutralDirty = true; }
+                    _gl?.InvalidateVisual();
+                }
+                catch { }
+                return;
+            }
+        }
+
         // ===================== Flatten (BFF) — direct handler, not journaled =====================
 
         // Run Boundary First Flattening on the live mesh and show the flat map M' beside M. BFF returns
@@ -1072,6 +1103,19 @@ namespace PieceSolver
                 _flatView?.SetMatcap(_matcapPx, _matcapW, _matcapH);
                 _matcapDirty = false;
             }
+            // Default-shading pair (neutral + environment), uploaded to both views like the picked matcap.
+            if (_neutralDirty && _view != null && _neutralPx != null)
+            {
+                _view.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH);
+                _flatView?.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH);
+                _neutralDirty = false;
+            }
+            if (_envDirty && _view != null && _envPx != null)
+            {
+                _view.SetEnvMatcap(_envPx, _envW, _envH);
+                _flatView?.SetEnvMatcap(_envPx, _envW, _envH);
+                _envDirty = false;
+            }
 
             // re-upload when the mesh changed (run / subdivide / reset / load) or shading toggled;
             // re-fit the camera after a load (new bounds). Upload time feeds the perf readout.
@@ -1148,6 +1192,7 @@ namespace PieceSolver
             if (_view != null)
             {
                 _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
+                _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap;            // Shine shading
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
                 _view.LicMode = _sim.ShowRuling ? 1 : 0;
                 if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
@@ -1181,6 +1226,7 @@ namespace PieceSolver
             if (_hasFlat && _flatView != null && _flatView.HasMesh)   // BFF flat map M', beside M on the z=0 plane
             {
                 _flatView.Sharpness = (float)_sim.Facet; _flatView.FacetExp = (float)_sim.FacetExp;
+                _flatView.Shine = (float)_sim.Shine; _flatView.UseMatcap = _sim.UseMatcap;
                 _flatView.Draw(view, proj);
             }
         }

@@ -286,6 +286,12 @@
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding FacetExp, StringFormat=0.#}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="1" Maximum="30" Value="{Binding FacetExp}" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
+                                <DockPanel Margin="0,3,0,0">
+                                    <TextBlock DockPanel.Dock="Left" Text="Shine" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                               ToolTip="Default shading: blend from neutral matte light (0%) to the reflective environment map (100%)." />
+                                    <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding Shine, Converter={StaticResource FractionToPercent}}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
+                                    <Slider Minimum="0" Maximum="1" Value="{Binding Shine}" VerticalAlignment="Center" Margin="6,0" />
+                                </DockPanel>
 
                                 <TextBlock Text="RULING LINES" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <CheckBox Content="Show ruling lines (curvature grain)" IsChecked="{Binding ShowRuling, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,0"
@@ -325,8 +331,11 @@
                                     </StackPanel>
                                 </Expander>
 
-                                <TextBlock Text="MATCAP" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
+                                <TextBlock Text="ADVANCED" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
+                                <CheckBox Content="Use Matcap" IsChecked="{Binding UseMatcap, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,6"
+                                          ToolTip="Override the neutral + Shine shading with a hand-picked matcap from the set below." />
                                 <ListBox x:Name="MatcapList" Background="Transparent" BorderThickness="0" Padding="0"
+                                         IsEnabled="{Binding UseMatcap}"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                     <ListBox.ItemsPanel>
                                         <ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate>

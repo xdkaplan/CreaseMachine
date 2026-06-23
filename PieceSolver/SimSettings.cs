@@ -139,6 +139,15 @@ namespace PieceSolver
         double _facetExp = 4.0;
         public double FacetExp { get => _facetExp; set => Set(ref _facetExp, value); }
 
+        // Shine (display): blends the default shading between the neutral-lighting matcap (0 = matte) and
+        // the environment matcap (1 = reflective sky/landscape). Ignored when UseMatcap is on.
+        double _shine = 0.4;
+        public double Shine { get => _shine; set => Set(ref _shine, value); }
+
+        // Advanced: when on, the hand-picked matcap (the switcher) overrides the neutral+Shine shading.
+        bool _useMatcap;
+        public bool UseMatcap { get => _useMatcap; set => Set(ref _useMatcap, value); }
+
         // Ruling-line overlay: a curvature-driven LIC grain painted on M (the developable "grain"),
         // modulating the matcap. Off by default.
         bool _showRuling;
