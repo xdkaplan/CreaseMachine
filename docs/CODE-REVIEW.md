@@ -18,8 +18,9 @@ the *target* as if *built* (Tier 4).
   classifications identical pre/post). The three dead-code removals (#10) done
   earlier this session.
 - **Tier 1 — 1 of 5 done** (#1 shadow `_pattern` consolidated 2026-06-24); 4 hazards still open.
-- **Tier 2 — `studio/` deleted ✓, `Picker` extracted ✓**; engine library,
-  `DisplaySource`, `BakeRunner` still open.
+- **Tier 2 — `studio/` ✓, `Picker` ✓, `DisplaySource` ✓ (View standup), + the whole View drain
+  (camera/picking/IEditorHost → `View`) landed 2026-06-24**; `CreaseEngine` library + `BakeRunner`
+  + reset-state dedup still open.
 - **Tier 4 — partly closed**: "dirty bit" killed + the Real/Transient/Ephemeral vocabulary now
   aligned across AGENTS.md / DOC-TX-REFACTOR / DoD / DOC-SPEC; "journaling out-of-scope", the
   DOC-TX self-contradiction, and the naming items still open.
@@ -60,15 +61,16 @@ the *target* as if *built* (Tier 4).
   - [ ] extract a **`CreaseEngine`** library (multi-target `net48;net8.0`) so
     `src/` stops being source-copied into 4 `.csproj`s with hand-maintained
     `<Compile>` lists. GH-host code (`src/CreaseMachine.cs`) stays out.
-- [ ] **7. "Which mesh is displayed" is implicit** across `_showPieces` /
-  `_developed` / last-`Upload` / `ShowProposedMesh`, the piece-view *silently
-  occluding* the matcap mesh. → a single `DisplaySource` enum. *(Agents B#1, D#8)*
-  — *the Solve-occlusion bug was fixed pragmatically (`_showPieces=false` flip);
-  the enum refactor itself is not done (no `DisplaySource.cs`).*
+- [x] **7. "Which mesh is displayed" is implicit** → a single `DisplaySource` enum. *(Agents B#1, D#8)*
+  — **done 2026-06-24 (View standup, `b977db1`):** `DisplaySource { Authoring, Pieces, Developed }` on
+  the `View` replaced the scattered `_showPieces` / upload / `ShowProposedMesh`; the occlusion is now
+  unrepresentable (Solve sets `Display=Developed`). `ShowProposedMesh` removed entirely.
 - [~] **8. MainWindow god-file seams.** *(Agent B#5,#7,#2,#11,#12)*
   - [x] ray-pick math → `Picker.cs`.
-  - [ ] the ~640-line bake engine (`OnSolveAsync`/`RunBake*`/`DevelopPiece`/…)
-    → a `BakeRunner` (no `BakeRunner.cs`).
+  - [x] **the View drain (2026-06-24):** display state, orbit `Camera`, picking, brush-footprint,
+    and the whole `IEditorHost` role moved onto `View`/`Camera`; MainWindow is now the chrome shell
+    + render loop. (See `project_view_abstraction` memory.) **Next: render-loop → View.**
+  - [ ] the ~640-line bake engine (`OnSolveAsync`/`RunBake*`/`DevelopPiece`/…) → a `BakeRunner`.
   - [ ] dedupe the 3 copies of "reset develop-state" + the 2 modal-bake setups.
 
 ## Tier 3 — engine dedup + dead code
