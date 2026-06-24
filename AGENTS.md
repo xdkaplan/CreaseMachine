@@ -232,29 +232,53 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   before advancing. The `.journal` grammar is a **superset of the CLI's**, so the same file drives both
   the headed app and the headless `crease.exe` (the CLI maps `solve` to its Nesterov bake equivalent).
   Camera orbit is intentionally not journaled.
-- **Piecing data model + editors** (`Pattern.cs` / `PieceId.cs` / `Editor.cs` / `Piecer.cs`): the
-  Piecing segmentation and its interaction live outside the `MainWindow` god-file. See
-  [`docs/PIECER-REFACTOR.md`](docs/PIECER-REFACTOR.md) for the layered model + glossary + deferred roadmap.
-  - **`Pattern`** — a THIN companion over one `PlanktonMesh` (Plankton has no per-face attribute storage,
-    so the labels have nowhere to live *on* the mesh). NOT a mesh; stores no geometry — only per-face
-    bookkeeping index-coupled to the held mesh. Holds the authoritative **`PieceMap`** (`int[]`, per-face
-    piece id) + the **derived `CreaseMap`** (`HashSet<long>` of packed edge keys = edges between faces of
-    different pieces). Ops mutate the partition (`Seed` flood-fill = a whole-partition Chapter reset;
-    `Paint` grows the active region; `Remove` deletes wholly-marked pieces + heals into the dominant
-    neighbour; `SplitDisconnected` renumbers stroke-carved islands); `RegenCrease` re-derives `CreaseMap`
-    from `PieceMap` (lossy — rebuilds the whole set, no per-crease identity); queries are read-only
-    (`NewRegionId`, `FullyMarked`, `FacesUnderBrush`).
-  - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id. Ints stay dense in
-    `PieceMap` (hot path); the typed handle appears only at the API / selection boundary.
+- **Piecing data model + transactions + editors** (`Pattern.cs` / `PieceId.cs` / `Tx.cs` / `Doc.cs` /
+  `Commands.cs` / `Editor.cs` / `Piecer.cs`): the Piecing partition, its undo/redo transaction layer, and
+  its interaction all live outside the `MainWindow` god-file. See
+  [`docs/PIECER-REFACTOR.md`](docs/PIECER-REFACTOR.md) (the unit extraction) and
+  [`docs/DOC-TX-REFACTOR.md`](docs/DOC-TX-REFACTOR.md) (the Doc / undo-redo layer) for the models +
+  glossary + roadmap. The vocabulary below is shared by both.
+  - **`Doc`** (`Doc.cs`) — the **orchestrator**. Owns the Store(s), the typed `Selection<T>`(s), and the
+    undo/redo stacks, and gatekeeps every piece mutation through `Run` / `Undo` / `Redo` (`Run(delta)` =
+    `Store.Apply` → push undo, clear redo → fire `Changed`). Short for Document; "Project" is reserved for
+    a future on-disk workspace. `Selection<T>` is typed per Element, carries a `Changed` event, and is
+    **NOT** on the undo stack (nor is the view/camera).
+  - **`Pattern`** — the (only, today) **Store**: a THIN companion over one `PlanktonMesh` (Plankton has no
+    per-face attribute storage). Holds **Real** state — the authoritative **`PieceMap`** (`int[]`, per-face
+    piece id) — and a **Transient**, derived **`CreaseMap`** (`HashSet<long>` packed edge keys, edges
+    between differing pieces) that `RegenCrease` re-derives (lossy; runs after every Apply/Invert).
+    Implements `ITxAble` (`Apply`/`Invert` a `PieceDelta` — the single persistent `PieceMap` writer);
+    `ComputeDelta(mutate)` runs an in-place op, captures the net change as a delta, and rolls back (so the
+    intricate in-place engines — `Delete`/`Carve`/`Grow`/`Mint` + `SplitDisconnected` — are reused as
+    delta-producing Commands). `Seed` flood-fill = a whole-partition **Chapter** reset; queries are
+    read-only (`NewRegionId`, `FullyMarked`, `FacesUnderBrush`, `GrowAssign`, `LargestComponent`,
+    `RegionsConnected`).
+  - **`Tx`** (`Tx.cs`) — the transaction primitives: **`IDelta`** (one reversible change, opaque to the
+    Doc, concrete to the Store), **`Op`** (its invertible atom — a face's label `From → To`), `PieceDelta`
+    (a list of Ops), and **`ITxAble`** (`Apply`/`Invert`).
+  - **`Commands`** (`Commands.cs`) — pure functions that read Selection + Real state and **compute** an
+    `IDelta` (never mutate; the Doc applies it). The user calls these **Tools**; we call them Commands.
+    First: `Merge` (relabel the selected pieces to the survivor; adjacent-only via `RegionsConnected`).
+  - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id (an **Element** id at the
+    selection boundary). Ints stay dense in `PieceMap` (hot path).
   - **`Editor` / `Piecer`** — `Editor` is the abstract base (lifecycle + pointer hooks + a per-face
-    `FaceFill` tint the view queries while building the piece buffers). **`Piecer : Editor`** is the
-    editor active during the Piecing phase (after Propose → Accept): the contextual brush (click a piece
-    to select, drag to grow it, Shift = new region, Ctrl = remove + heal, click-vs-drag threshold). It
-    edits the `Pattern` via ops; no geometry moves.
-  - **`IEditorHost`** — the narrow interface `MainWindow` implements so an editor talks to its host
-    (mesh, `Pattern`, picking, brush footprint, view-refresh hooks) rather than the whole window — the
-    wall that keeps the god-file from regrowing. `MainWindow` owns the `Pattern` + the active `Editor`,
-    routes pointer input to it, and keeps the render loop / camera / picking / crease-review modal.
+    `FaceFill` tint). **`Piecer : Editor`** is the editor active during Piecing (after Propose → Accept):
+    selection is a **set** of pieces (in `Doc.Pieces`); each modifier splits at a ~10px threshold into a
+    **tap** and a **drag** — plain tap = replace selection; Shift tap = add, Shift drag = grow (mint when
+    empty); Ctrl tap = remove from selection, Ctrl drag = carve (delete whole pieces when empty). `M`
+    merges; `Ctrl+Z` / `Ctrl+Y` undo/redo. Every committing gesture is one `Doc.Run` transaction; the
+    Piecer computes deltas, no geometry moves.
+  - **`IEditorHost`** — the narrow interface `MainWindow` implements so an editor talks to its host (mesh,
+    `Pattern`, **`Doc`**, picking, brush footprint, view-refresh hooks) rather than the whole window — the
+    wall that keeps the god-file from regrowing. `MainWindow` owns the `Doc` (which owns the `Pattern`) +
+    the active `Editor`, reacts to `Doc.Changed` / `Pieces.Changed`, and keeps the render loop / camera /
+    picking / crease-review modal.
+
+  **Shared vocabulary** (see `DOC-TX-REFACTOR.md`): **Doc** (orchestrator) · **Store** (`ITxAble`, holds
+  Real state) · **IDelta** / **Op** · **Command** (= the user's "Tool") · **Real vs Transient** (undoable
+  vs regen'd) · **Element** (Piece, Crease, … — was "entity") · **Selection<T>** · **regen** · **Chapter**
+  (reset boundary) · **tx** (one gesture = one transaction). Out of scope today: crease-identity /
+  reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs, journaling of piecing.
 
 The brush-to-freeze-creases north star and the CreaseStudio consolidation plan live in the user's memory.
 

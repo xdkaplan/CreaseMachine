@@ -195,7 +195,9 @@ deferred until chrome/buttons need uniform enablement (YAGNI).
 3. **The Command computes the delta; `Doc.Run(delta)` applies it.** `store.Apply` is the sole writer.
 4. **Real / Transient** is the undoable boundary. Transient (`CreaseMap`) regens after Apply/Invert.
 5. **Selection lives in the Doc, typed (`Selection<T>`), and is NOT undoable.** Nor is the view/camera.
-6. **Merge is adjacent-oriented** (the survivor keeps the id; no auto-split) — see Risks.
+6. **Merge is adjacent-only.** `CanMerge` requires the selected pieces to form **one connected
+   group**; non-adjacent pieces are never merged. The result is therefore always one connected
+   piece (the survivor keeps the min id; no auto-split).
 7. **Minor id churn is acceptable** until stable ids land; the Doc recomputes the affected selection
    after a mutating op.
 
@@ -269,12 +271,12 @@ Merge undoable end-to-end; Step 5 converts the remaining piece ops; Step 6 revis
 - **Verification:** each step builds 0/0 and launches; Steps 3–5 are checked against the
   pre-refactor gesture behavior (select/add/remove, carve, grow, mint, delete) plus the new
   undo/redo. No engine/solver code is touched, so the bench checksums are unaffected.
-- **Merge adjacency (decision 6).** v1 `Merge` relabels all selected pieces to the survivor with
-  **no** `SplitDisconnected`, so an *adjacent* selection (the normal case) yields one connected
-  piece, while a *non-adjacent* selection yields a single disjoint-id piece. Two ways to honour
-  "adjacent-only": (a) gate `CanMerge` on the selected pieces being mutually connected (a BFS over
-  the piece-adjacency graph), or (b) accept the disjoint result for now (minor churn). **Plan: ship
-  (b), add (a) if the disjoint case bites** — flag for review.
+- **Merge adjacency (decision 6).** `CanMerge` requires the selected pieces to form **one
+  connected group**, checked by flooding faces through the *union* of selected pieces' faces from
+  one seed: if every union face is reached, the union is a single region ⇔ the pieces are mutually
+  adjacent. A non-adjacent selection **disables** Merge (the `M` key no-ops with a brief console
+  hint). Because the union is connected, the relabel needs **no** `SplitDisconnected` and a
+  disjoint-id piece is never created.
 - **Selection staleness (decision 7).** Until stable `PieceId` GUIDs exist, an op that renumbers
   pieces leaves the selection pointing at stale ids; the Doc recomputes it post-op (Merge →
   `{keep}`; carve/grow → keep surviving ids, drop vanished). Accepted as minor churn.

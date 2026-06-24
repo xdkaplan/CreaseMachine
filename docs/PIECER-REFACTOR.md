@@ -5,6 +5,10 @@ Extract the Piecing interaction and its data model out of the `MainWindow` god-f
 abstraction — without changing any behavior. This is the first concrete step toward
 proper CAD editability (today we select **Pieces**; later, **Creases**).
 
+> **Sequel:** the deferred tx/undo stack + typed `Selection` from this doc's roadmap are now specced and
+> built in [`DOC-TX-REFACTOR.md`](DOC-TX-REFACTOR.md) — the **Doc** orchestrator, `IDelta`/`Op`/`ITxAble`,
+> Commands, Real/Transient state, and undoable Merge. Read that for the current piecing architecture.
+
 This doc has two parts: the **Design Note** (durable — the model and the decisions and
 *why*) and the **Implementation Plan** (this pass — the ordered, behavior-preserving steps).
 

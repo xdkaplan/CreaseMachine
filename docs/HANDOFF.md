@@ -58,6 +58,17 @@ relocation — no behaviour change. The design note, glossary, and **deferred ro
 GUID/entity table, reconciling `RegenCrease`, `Picker.cs`, `UnweldByRegion`/PieceMesh + weld-FBX-on-import,
 polymorphic `Selection`, the partition↔crease authority flip) are in `docs/PIECER-REFACTOR.md`.
 
+**Doc / transaction (undo-redo) layer added on top.** Piecing edits are now undoable. A **`Doc`** (the
+orchestrator) owns the `Pattern` Store, a typed **`Selection<PieceId>`** (hoisted out of the Piecer; *not*
+on the undo stack), and the undo/redo stacks, and gatekeeps every mutation through `Run` / `Undo` / `Redo`.
+A **Command** (pure function in `Commands.cs`) reads the selection + Real state and **computes** an
+**`IDelta`** (a list of **`Op`**s); `Doc.Run(delta)` applies it via the Store's `ITxAble.Apply` (the single
+persistent `PieceMap` writer) and pushes it for undo. The intricate in-place ops (Delete/Carve/Grow/Mint) are
+reused as Commands via `Pattern.ComputeDelta` (run-in-place → capture → roll back). **`Merge`** (`M`) is the
+first native Command; `Ctrl+Z`/`Ctrl+Y` undo/redo. State is split **Real** (authoritative `PieceMap`, in
+deltas) vs **Transient** (derived `CreaseMap`, regen'd after Apply/Invert). Full spec + plan +
+glossary: `docs/DOC-TX-REFACTOR.md`.
+
 ## 2. Orientation
 
 | File | Role | Rhino types? |
@@ -70,10 +81,13 @@ polymorphic `Selection`, the partition↔crease authority flip) are in `docs/PIE
 | `lib/Plankton*.dll` | Upstream Plankton 0.4.3 (vendored, unmodified). | — |
 | `PAPER_FORMULAS.md` | Transcription of the App-B formulas used (B.1 Eq 7/8/9, B.2, B.3 Eq 10, B.4, B.5.1). | — |
 | `PieceSolver/IsometricLM.cs` | Isometric **Levenberg–Marquardt** patch-solver: matrix-free Jacobi-preconditioned CG, parallel gather apply, opt-in FD gradient gate, optional `pinned` Dirichlet (seam freeze). The develop engine for the in-process app. | **no** |
-| `PieceSolver/MainWindow.xaml.cs` | The PieceSolver app: load, async modal **Solve** bake, multi-piece split + reassemble, B-spline seam UX, journal/replay. Now also the `IEditorHost` (owns the `Pattern` + active `Editor`, routes pointer input, keeps render/camera/picking/crease-review). | WPF/GL |
-| `PieceSolver/Pattern.cs` | The Piecing **partition** — a thin companion over the `PlanktonMesh` holding `PieceMap` (per-face piece id) + derived `CreaseMap` + ops (Seed/Paint/Remove/SplitDisconnected), `RegenCrease`, and queries. NOT a mesh. | **no** |
+| `PieceSolver/MainWindow.xaml.cs` | The PieceSolver app: load, async modal **Solve** bake, multi-piece split + reassemble, B-spline seam UX, journal/replay. Now also the `IEditorHost` (owns the **`Doc`** which owns the `Pattern`, hosts the active `Editor`, routes pointer input, reacts to `Doc.Changed`/`Pieces.Changed`, keeps render/camera/picking/crease-review). | WPF/GL |
+| `PieceSolver/Pattern.cs` | The Piecing **Store** — a thin companion over the `PlanktonMesh` holding **Real** `PieceMap` + **Transient** (regen'd) `CreaseMap`; implements `ITxAble` (`Apply`/`Invert` + `ComputeDelta`), plus the in-place ops (Seed/Carve/Grow/**Delete**/SplitDisconnected) and queries (`RegionsConnected`, `GrowAssign`, `LargestComponent`, …). NOT a mesh. | **no** |
+| `PieceSolver/Tx.cs` | Transaction primitives: `IDelta` (opaque to the Doc) + `Op` (invertible atom) + `PieceDelta` + `ITxAble`. | **no** |
+| `PieceSolver/Doc.cs` | The **Doc** orchestrator (Run/Undo/Redo + undo/redo stacks, owns the Store + typed `Selection<T>`, fires `Changed`) and `Selection<T>` (typed, not undoable). | **no** |
+| `PieceSolver/Commands.cs` | **Commands** — pure functions that compute an `IDelta` from selection + Real state (the user's "Tools"). First: `Merge`. | **no** |
 | `PieceSolver/Editor.cs` | Abstract `Editor` (lifecycle + pointer hooks + per-face fill tint) + the narrow `IEditorHost` interface MainWindow implements. | **no** |
-| `PieceSolver/Piecer.cs` | `Piecer : Editor` — the Piecing-phase contextual brush (select / drag-to-grow / Shift = new region / Ctrl = remove + heal); the gesture code lifted from MainWindow's mouse handlers. | **no** |
+| `PieceSolver/Piecer.cs` | `Piecer : Editor` — the Piecing-phase contextual brush. Multi-piece **set** selection (in `Doc.Pieces`); tap = select/add/remove, drag = grow/carve; `M` = merge; commits as one `Doc.Run` transaction (undoable). | **no** |
 | `PieceSolver/PieceId.cs` | Zero-cost `readonly struct` typed handle over the int piece id (`PieceMap` stays `int[]`). | **no** |
 | `PieceSolver/Bff.cs` | Boundary First Flattening wrapper (drives external `bff-command-line.exe`), per patch. | **no** |
 | `src/FbxIO.cs` | Binary-FBX reader; preserves Rhino's *unwelded* seam topology → one component per face. | **no** |
