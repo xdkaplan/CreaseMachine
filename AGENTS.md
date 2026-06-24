@@ -204,7 +204,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   per **Subdivision level**, subdivides + re-develops. **Solve develops a *derived* mesh, never the
   authoring mesh** (so the authoring mesh + its `Pattern` survive — `OnSolveAsync` no longer calls
   `Revert`; it bakes a clone/unweld on a temporary session and keeps the result as the `_developed`
-  Transient the view shows; see [`docs/SOLVER-PHASE.md`](docs/archive/SOLVER-PHASE.md)). The derived mesh: a
+  Transient the view shows; see [`docs/archive/SOLVER-PHASE.md`](docs/archive/SOLVER-PHASE.md)). The derived mesh: a
   **pieced** mesh (>1 painted region) is **unwelded along its creases** (`MeshOps.UnweldByRegion`) so each
   painted piece is its own connected component; an FBX solid arrives multi-component already; a single open
   patch is a plain clone. The multi-component path then splits (`MeshOps.SplitComponents`), BFF-flattens +
@@ -244,7 +244,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 - **Piecing data model + transactions + editors** (`Pattern.cs` / `PieceId.cs` / `Tx.cs` / `Doc.cs` /
   `Commands.cs` / `Editor.cs` / `Piecer.cs`): the Piecing partition, its undo/redo transaction layer, and
   its interaction all live outside the `MainWindow` god-file. See
-  [`docs/PIECER-REFACTOR.md`](docs/archive/PIECER-REFACTOR.md) (the unit extraction) and
+  [`docs/archive/PIECER-REFACTOR.md`](docs/archive/PIECER-REFACTOR.md) (the unit extraction) and
   [`docs/DOC-TX-REFACTOR.md`](docs/DOC-TX-REFACTOR.md) (the Doc / undo-redo layer) for the models +
   glossary + roadmap. The vocabulary below is shared by both.
   - **`Doc`** (`Doc.cs`) — the **orchestrator**. Owns the Store(s), the typed `Selection<T>`(s), and the
