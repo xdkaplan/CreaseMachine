@@ -71,12 +71,10 @@ namespace PieceSolver
         readonly Stack<IDelta> _undo = new Stack<IDelta>();
         readonly Stack<IDelta> _redo = new Stack<IDelta>();
 
-        // The op-log (journal): committed ops (`setpiece <face> <from> <to>`) + `#` comments, in order. Doc-owned;
-        // the Console renders it and (Slice B/C) Save serializes it. Today: forward record only — load/solve ops
-        // and undo/redo cursor-trim land in Slice B/C. See docs/DOC-TX-REFACTOR.md (Revision: the op-log).
-        readonly List<string> _log = new List<string>();
-        public IReadOnlyList<string> Journal => _log;
-        public event Action<string> Recorded;                        // fired per appended line (the Console echoes it)
+        // Op-log emit: the Doc streams committed ops (`setpiece <face> <from> <to>`) + `#` comments to whoever
+        // listens (the Console renders them). The persisted journal is DERIVED on demand — OpLines (the undo
+        // stack) + the StudioCommand log — not stored here. See docs/DOC-TX-REFACTOR.md (Revision: the op-log).
+        public event Action<string> Recorded;                        // fired per emitted op/comment line
 
         Tx _open;                                                    // the single open transaction (null = none)
         public Busy State { get; private set; } = Busy.None;         // a long op (Calculating / Opening) owns the Doc
@@ -98,8 +96,8 @@ namespace PieceSolver
         public void EnterBusy(Busy reason) { State = reason; }
         public void ExitBusy() { State = Busy.None; }
 
-        // Append a bare op/command line, or a `#` comment, to the op-log (and notify the Console via Recorded).
-        public void Record(string line) { _log.Add(line); Recorded?.Invoke(line); }
+        // Emit a bare op/command line, or a `#` comment, to the op-log listeners (the Console).
+        public void Record(string line) => Recorded?.Invoke(line);
         public void Comment(string text) => Record("# " + text);
 
         // Open the single transaction. One at a time: a stale open tx is a leak -> warn + cancel it; opening while
