@@ -35,7 +35,7 @@ namespace PieceSolver
         GroundGrid _grid;            // subtle dot grid on the world Z=0 plane (10-unit spacing)
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
-        string _meshPath;            // source mesh path, so Reset can reload the input from disk
+        string _meshPath;            // source mesh path, so Revert can reload the input from disk
         bool _glInit, _meshDirty, _reframe, _rulingsDirty;   // _reframe: re-fit camera next upload; _rulingsDirty: recompute ruling overlay
         long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
@@ -132,6 +132,7 @@ namespace PieceSolver
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
             _doc.Pieces.Changed += () => { if (_showPieces) RebuildPieces(); };
             _doc.Changed += () => { RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };
+            _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
             // hidden by default. Created now so Log() works from startup; its Owner is set lazily on
@@ -217,7 +218,7 @@ namespace PieceSolver
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
-            ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
+            MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
             PresetAButton.Click += (s, e) => _sim.ApplyPreset('A');
@@ -270,15 +271,14 @@ namespace PieceSolver
             _console.ReplayButton.Click += (s, e) => OpenAndReplay();
             _console.ClearButton.Click += (s, e) => { _journal.Clear(); _console.ClearLog(); Log("journal cleared"); };
 
-            // Menu bar + keyboard shortcuts (Ctrl+S = Save As, Ctrl+Shift+J = toggle Console).
-            MenuSaveAs.Click += (s, e) => SaveSession();
+            // Menu bar + keyboard shortcuts (Ctrl+Shift+J = toggle Console). Session-saving lives on the Console's
+            // Save button; Ctrl+S is intentionally NOT bound here — it's reserved for the future real save.
             MenuAbout.Click += (s, e) => ShowAbout();
             MenuConsole.Click += (s, e) => ShowConsole(MenuConsole.IsChecked);   // IsCheckable flips first
             PreviewKeyDown += (s, e) =>
             {
-                if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
-                else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
-                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
+                if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
+                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
                 else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
@@ -368,13 +368,21 @@ namespace PieceSolver
                 case CmdKind.Load: ApplyLoad(c.Path); break;
                 case CmdKind.Run: ApplyRun(c.N, c.P); break;
                 case CmdKind.Subdivide: ApplySubdivide(); break;
-                case CmdKind.Reset: Revert(); break;
+                case CmdKind.Revert: Revert(); break;   // unified at merge: command (branch's CmdKind.Revert) + method (master's Revert()) are both the CAD term
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
                 // Launch the async bake (fire-and-forget; _baking flips synchronously before the first
                 // await, so the replay loop can wait on it). On a live user click this is the develop.
                 case CmdKind.Solve: _ = OnSolveAsync(); break;
             }
-            if (record) { _journal.Add(c); Log(c.Serialize()); }
+            if (record)
+            {
+                _journal.Add(c);
+                // Load / Revert are coarse ops -> the Doc op-log (Console + journal, as bare replayable lines). The
+                // rest echo to the Console only for now; run/subdivide/matcap/solve get op-ified later (solve stays
+                // off-limits while the solver is being refactored).
+                if (c.Kind == CmdKind.Load || c.Kind == CmdKind.Revert) _doc.Record(c.Serialize());
+                else Echo(c.Serialize());
+            }
             else if (c.Kind != CmdKind.Solve) SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
                                     // LIVE run the controls are already the source of truth, and
                                     // re-writing them here round-trips params lossily (it collapsed the
@@ -986,7 +994,6 @@ namespace PieceSolver
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
 
             int[] pieceId = _pattern.PieceMap;
-            int pieceCount = 0; for (int f = 0; f < nF; f++) if (pieceId[f] + 1 > pieceCount) pieceCount = pieceId[f] + 1;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
             float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
@@ -1075,7 +1082,6 @@ namespace PieceSolver
             }
             _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
             _pieceDirty = true; _showPieces = _piecePos.Length > 0;
-            Log($"pieces: {pieceCount} region(s)");
             _gl?.InvalidateVisual();
         }
 
@@ -1476,7 +1482,9 @@ namespace PieceSolver
             if (dlg.ShowDialog() != true) return;
             var lines = new System.Collections.Generic.List<string> { "# PieceSolver session journal" };
             foreach (var c in _journal) lines.Add(c.Serialize());
-            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands -> " + System.IO.Path.GetFileName(dlg.FileName)); }
+            var ops = _doc.OpLines();                                   // the in-effect piece edits (the undo stack — reflects undo by construction)
+            if (ops.Count > 0) { lines.Add("# pieces"); lines.AddRange(ops); }
+            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands + " + ops.Count + " ops -> " + System.IO.Path.GetFileName(dlg.FileName)); }
             catch (Exception ex) { Log("save failed: " + ex.Message); }
         }
 
@@ -1554,7 +1562,8 @@ namespace PieceSolver
         bool _replaySolvePending;   // a replayed Solve is in flight; log + advance once _baking clears
         string _replaySolveLine;    // the serialized Solve line, held for the deferred completion log
 
-        void Log(string msg) => _console?.AppendLine(msg);
+        void Echo(string line) => _console?.AppendLine(line);          // a bare op/command line (the replayable DSL)
+        void Log(string msg) => _console?.AppendLine("# " + msg);      // a comment line (narration) — '#'-prefixed so the Console is a valid journal
 
         void UpdateStatus()
         {

@@ -19,9 +19,14 @@
             <Button x:Name="ClearButton" DockPanel.Dock="Left" Content="Clear" Padding="10,3"
                     FontSize="11" ToolTip="Clear the current recording and log" />
         </DockPanel>
-        <TextBox x:Name="LogBox" Grid.Row="1" Margin="6,3,6,6" IsReadOnly="True" IsReadOnlyCaretVisible="False"
-                 Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
-                 FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap"
-                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+        <RichTextBox x:Name="LogBox" Grid.Row="1" Margin="6,3,6,6" IsReadOnly="True" IsReadOnlyCaretVisible="False"
+                     Background="#1E1E20" Foreground="#B6BBB0" BorderThickness="0"
+                     FontFamily="Consolas" FontSize="11"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+            <RichTextBox.Resources>
+                <Style TargetType="Paragraph"><Setter Property="Margin" Value="0" /></Style>
+            </RichTextBox.Resources>
+            <FlowDocument x:Name="LogDoc" PagePadding="0" />
+        </RichTextBox>
     </Grid>
 </Window>

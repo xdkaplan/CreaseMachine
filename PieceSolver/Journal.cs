@@ -4,7 +4,7 @@ using CreaseMachine;
 
 namespace PieceSolver
 {
-    enum CmdKind { Load, Run, Subdivide, Reset, Matcap, Solve }
+    enum CmdKind { Load, Run, Subdivide, Revert, Matcap, Solve }
 
     // Full parameter snapshot for a Solve (bake) command. The studio's Solve develops the mesh to the
     // selected Accuracy (target in-plane strain %), optionally subdividing + re-developing SubdivLevel
@@ -45,7 +45,7 @@ namespace PieceSolver
         public static StudioCommand Load(string path) => new StudioCommand { Kind = CmdKind.Load, Path = path };
         public static StudioCommand Run(int n, FlowParams p) => new StudioCommand { Kind = CmdKind.Run, N = n, P = p };
         public static StudioCommand Subdiv() => new StudioCommand { Kind = CmdKind.Subdivide };
-        public static StudioCommand Reset() => new StudioCommand { Kind = CmdKind.Reset };
+        public static StudioCommand Revert() => new StudioCommand { Kind = CmdKind.Revert };   // re-init from the input mesh (was "Reset")
         public static StudioCommand Matcap(int i) => new StudioCommand { Kind = CmdKind.Matcap, N = i };
         public static StudioCommand Solve(BakeParams b) => new StudioCommand { Kind = CmdKind.Solve, B = b };
 
@@ -70,7 +70,7 @@ namespace PieceSolver
                     F(B.TargetStrainPct), B.SubdivLevel, F(B.Iso), F(B.Fair), F(B.Anchor), F(B.Scale), F(B.Bend),
                     B.DiffFair ? 1 : 0, B.BendDiff ? 1 : 0, B.FixEdges ? 1 : 0, B.SeamRatio);
                 case CmdKind.Subdivide: return "subdivide";
-                case CmdKind.Reset: return "reset";
+                case CmdKind.Revert: return "revert";
                 case CmdKind.Matcap: return "matcap " + N;
             }
             return "";
@@ -81,14 +81,17 @@ namespace PieceSolver
         {
             if (line == null) return null;
             line = line.Trim();
-            if (line.Length == 0 || line[0] == '#') return null;
+            if (line.Length == 0 || line[0] == '#') return null;                  // full-line comment / blank
+            int cm = line.IndexOf(" #"); if (cm >= 0) line = line.Substring(0, cm).TrimEnd();   // inline comment (space before '#'; paths with '#' survive)
+            if (line.Length == 0) return null;
             var tok = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
             switch (tok[0].ToLowerInvariant())
             {
                 case "load": return Load(line.Substring(line.IndexOf(' ') + 1).Trim());
                 case "subdivide":
                 case "subd": return Subdiv();
-                case "reset": return Reset();
+                case "revert":
+                case "reset": return Revert();   // "reset" kept as a legacy / CLI alias
                 case "matcap": return Matcap(tok.Length > 1 ? ParseInt(tok[1]) : 0);
                 case "solve":
                     var b = BakeParams.Defaults();
