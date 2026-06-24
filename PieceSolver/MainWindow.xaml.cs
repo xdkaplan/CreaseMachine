@@ -1655,7 +1655,6 @@ namespace PieceSolver
         void IEditorHost.ShowBrushPreview(System.Windows.Point screen) => UpdatePreview(screen);
         void IEditorHost.HideBrushPreview() => _previewDot.Visibility = Visibility.Collapsed;
         void IEditorHost.Invalidate() => InvalidateView();
-        void IEditorHost.Log(string msg) => Log(msg);
 
         // World-space brush radius. Used by BOTH the paint footprint and the screen preview, so they always agree.
         // Brush Size is a 1..10 notch indexing a Fibonacci table of world radii (fine low end, fast growth up top).

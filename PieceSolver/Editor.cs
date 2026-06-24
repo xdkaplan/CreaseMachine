@@ -26,7 +26,6 @@ namespace PieceSolver
         void ShowBrushPreview(Point screen);  // place/show the footprint preview dot (= UpdatePreview)
         void HideBrushPreview();              // hide the footprint preview dot
         void Invalidate();                    // request a viewport repaint
-        void Log(string msg);                 // append a line to the session Console (the Remove op's summary)
     }
 
     // Abstract base for editors: lifecycle + pointer hooks + an optional per-face fill tint the view

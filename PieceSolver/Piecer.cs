@@ -162,7 +162,7 @@ namespace PieceSolver
             }
             bool empty = delta.Empty;
             _removing = false; _carve = false; _touched = null;          // drop preview state before the rebuild
-            if (log != null) _host.Log(log);
+            if (log != null) _host.Doc.Comment(log);   // gesture summary -> the event log (canonical), not Console-only
             _tx?.Apply(delta); _tx?.Commit(); _tx = null;               // apply (fires Changed -> rebuild) + close the stroke's tx
             if (empty && _host.ShowPieces) _host.RefreshPieces();        // refused / no-op: no Changed fired -> drop the red preview
         }
