@@ -375,7 +375,7 @@ namespace PieceSolver
         // Creases are DERIVED from PieceMap (a crease = an interior edge between differing pieces). RegenCrease
         // marks the CreaseMap Transient stale; it rebuilds lazily (DeriveCreases) on the next read. Called after
         // every op + Seed. Lossy — rebuilt wholesale, no per-crease identity.
-        public void RegenCrease() => CreaseMap.MarkStale();
+        public void RegenCrease() => CreaseMap.Rot();
 
         // The pull regen behind the CreaseMap Transient: build the crease set from the current PieceMap.
         HashSet<long> DeriveCreases()

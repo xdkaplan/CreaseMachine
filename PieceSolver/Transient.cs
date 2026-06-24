@@ -32,7 +32,7 @@ namespace PieceSolver
         public bool Peek(out T value) { value = _value; return IsFresh; }
 
         public void Set(T value) { _value = value; IsFresh = true; }   // PUSH: an external producer fills it
-        public void MarkStale() { IsFresh = false; }                   // a dependency changed -> rebuild on next need
+        public void Rot() { IsFresh = false; }                         // a dependency changed -> go stale, rebuild on next need
         public void Clear() { _value = default; IsFresh = false; }     // drop the cache (compact save / free memory)
     }
 }
