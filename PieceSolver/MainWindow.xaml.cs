@@ -132,7 +132,6 @@ namespace PieceSolver
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
             _piecer = new Piecer(this);   // the Piecing editor; activated after Propose -> Accept (see OpenCreaseReview)
-            _view = new View(_doc, () => _gl?.InvalidateVisual());   // the viewport: owns display state + the repaint poke
 
             // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
@@ -149,6 +148,7 @@ namespace PieceSolver
             Closing += (s, e) => _shuttingDown = true;
 
             _gl = new GLWpfControl();
+            _view = new View(_doc, _gl, () => _session?.Mesh);   // the viewport: display + camera + picking on the GL surface
             CenterHost.Children.Add(_gl);   // GL viewport lives in the center cell of the docked layout
             _gl.Start(new GLWpfControlSettings
             {
@@ -1645,35 +1645,15 @@ namespace PieceSolver
         // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
         public double BrushSpacingPx(System.Windows.Point screen)
         {
-            if (_session != null && PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
+            if (_view.PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
             return 8.0;
         }
 
-        // Build a pick ray (eye + direction) from the live camera params. Delegates to the stateless Picker.
-        bool PickRay(System.Windows.Point screen, out Vector3 eye, out Vector3 rd)
-        {
-            eye = default; rd = default;
-            if (_session == null) return false;
-            return _view.Camera.PickRay(screen, _gl.ActualWidth, _gl.ActualHeight, out eye, out rd);
-        }
-
-        // Build a pick ray and intersect the mesh (nearest hit point).
-        public bool PickSurface(System.Windows.Point screen, out Vector3 hit)
-        {
-            hit = default;
-            return PickRay(screen, out var eye, out var rd) && Picker.RayMeshHit(eye, rd, _session.Mesh, out hit, out _);
-        }
-
-        // Like PickSurface but also returns the nearest hit FACE index (for seeding the brush's active region).
-        public bool PickFace(System.Windows.Point screen, out int face, out Vector3 hit)
-        {
-            face = -1; hit = default;
-            return PickRay(screen, out var eye, out var rd) && Picker.RayMeshHit(eye, rd, _session.Mesh, out hit, out face);
-        }
+        // Picking (PickRay / PickSurface / PickFace) now lives on the View — it owns the camera, the GL surface, and the mesh accessor.
 
         void UpdatePreview(System.Windows.Point cursor)
         {
-            if (!EditorActive || !PickSurface(cursor, out var hit))
+            if (!EditorActive || !_view.PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
             double rpx = ScreenRadiusPx(hit);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;
@@ -1684,6 +1664,8 @@ namespace PieceSolver
         // ===================== IEditorHost (the wall the active editor talks through) =====================
 
         PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
+        bool IEditorHost.PickFace(System.Windows.Point screen, out int face, out Vector3 hit) => _view.PickFace(screen, out face, out hit);
+        bool IEditorHost.PickSurface(System.Windows.Point screen, out Vector3 hit) => _view.PickSurface(screen, out hit);
         Pattern IEditorHost.Pattern => _doc.Pattern;
         Doc IEditorHost.Doc => _doc;
         bool IEditorHost.ShowPieces => _view.Display == DisplaySource.Pieces;
