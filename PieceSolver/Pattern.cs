@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using OpenTK.Mathematics;
 using Plankton;
+using CreaseMachine;
 
 namespace PieceSolver
 {
@@ -34,27 +35,21 @@ namespace PieceSolver
             PieceMap = null;
             var P = _mesh;
             if (P == null) return;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            int nF = P.Faces.Count;
+            var uf = new UnionFind(nF);
             CreaseMap.Peek(out var seedCreases);   // peek the cached crease set (provisional or last-derived) — no circular regen
-            for (int h = 0; h < nH; h++)
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                if (seedCreases != null && seedCreases.Contains(EdgeKey(a, b))) continue;
-                int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
-            }
+                if (seedCreases != null && seedCreases.Contains(EdgeKey(a, b))) return;
+                uf.Union(f1, f2);
+            });
             var region = new int[nF];
             var rootId = new Dictionary<int, int>();
             int count = 0;
             for (int f = 0; f < nF; f++)
             {
                 if (P.Faces[f].IsUnused) { region[f] = -1; continue; }
-                int r = Find(f); if (!rootId.TryGetValue(r, out int id)) { id = count++; rootId[r] = id; }
+                int r = uf.Find(f); if (!rootId.TryGetValue(r, out int id)) { id = count++; rootId[r] = id; }
                 region[f] = id;
             }
             PieceMap = region;
@@ -68,38 +63,29 @@ namespace PieceSolver
         {
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null) return null;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            int nF = P.Faces.Count;
             var remove = FullyMarked(touched);
             if (remove.Count == 0) return null;
             bool IsRemoved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && remove.Contains(PieceMap[f]);
 
             // Union connected removed faces into blobs (across any edge where BOTH faces are being removed).
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
+            var uf = new UnionFind(nF);
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (IsRemoved(f1) && IsRemoved(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
+                if (IsRemoved(f1) && IsRemoved(f2)) uf.Union(f1, f2);
+            });
 
             // Tally each blob's shared boundary (edge count) with each SURVIVING region.
             var tally = new Dictionary<int, Dictionary<int, int>>();
-            for (int h = 0; h < nH; h++)
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
                 bool r1 = IsRemoved(f1), r2 = IsRemoved(f2);
-                if (r1 == r2) continue;                          // both removed (internal) or both surviving
+                if (r1 == r2) return;                            // both removed (internal) or both surviving
                 int rf = r1 ? f1 : f2, sf = r1 ? f2 : f1;        // removed face / surviving face
-                int blob = Find(rf), sreg = PieceMap[sf];
+                int blob = uf.Find(rf), sreg = PieceMap[sf];
                 if (!tally.TryGetValue(blob, out var d)) { d = new Dictionary<int, int>(); tally[blob] = d; }
                 d[sreg] = DictGet(d, sreg) + 1;
-            }
+            });
 
             // Heal target per blob = dominant surviving neighbour (most shared border).
             var target = new Dictionary<int, int>();
@@ -114,7 +100,7 @@ namespace PieceSolver
             for (int f = 0; f < nF; f++)
             {
                 if (!IsRemoved(f)) continue;
-                if (target.TryGetValue(Find(f), out int tgt)) PieceMap[f] = tgt; else stuck++;
+                if (target.TryGetValue(uf.Find(f), out int tgt)) PieceMap[f] = tgt; else stuck++;
             }
             foreach (var r in remove) healed++;
             RegenCrease();
@@ -133,7 +119,7 @@ namespace PieceSolver
         {
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null || selection == null || selection.Count == 0) return null;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            int nF = P.Faces.Count;
 
             // Per selected piece: total faces vs how many the brush marked. A piece the brush would EMPTY is
             // PROTECTED — carving it all away would delete it (deselect + Remove for that), so it stays put.
@@ -155,36 +141,27 @@ namespace PieceSolver
                                     && touched.Contains(f) && selection.Contains(PieceMap[f]) && !prot.Contains(PieceMap[f]);
 
             // Blobs of connected carved faces.
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
+            var uf = new UnionFind(nF);
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (IsCarved(f1) && IsCarved(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
+                if (IsCarved(f1) && IsCarved(f2)) uf.Union(f1, f2);
+            });
             var blobRoots = new HashSet<int>();
-            for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(Find(f));
+            for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(uf.Find(f));
 
             // Tally each blob's shared border with each region OUTSIDE the selection (selected pieces excluded,
             // so the carve cannot heal back into the selection it left).
             var tally = new Dictionary<int, Dictionary<int, int>>();
-            for (int h = 0; h < nH; h++)
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
                 bool c1 = IsCarved(f1), c2 = IsCarved(f2);
-                if (c1 == c2) continue;
+                if (c1 == c2) return;
                 int cf = c1 ? f1 : f2, sf = c1 ? f2 : f1, sreg = PieceMap[sf];
-                if (selection.Contains(sreg)) continue;          // inside the selection -> excluded
-                int blob = Find(cf);
+                if (selection.Contains(sreg)) return;            // inside the selection -> excluded
+                int blob = uf.Find(cf);
                 if (!tally.TryGetValue(blob, out var d)) { d = new Dictionary<int, int>(); tally[blob] = d; }
                 d[sreg] = DictGet(d, sreg) + 1;
-            }
+            });
 
             // Target per blob: dominant neighbour outside the selection, else a fresh piece id (island).
             int nextId = NewRegionId().Value, islands = 0;
@@ -204,7 +181,7 @@ namespace PieceSolver
             for (int f = 0; f < nF; f++)
             {
                 if (!IsCarved(f)) continue;
-                PieceMap[f] = target[Find(f)]; carved++;
+                PieceMap[f] = target[uf.Find(f)]; carved++;
             }
             RegenCrease();
             return islands > 0 ? $"carved {carved} face(s) ({islands} new island piece(s))"
@@ -219,25 +196,20 @@ namespace PieceSolver
         {
             if (PieceMap == null || _mesh == null) return false;
             var P = _mesh;
-            int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            int nF = P.Faces.Count;
             // within-region connectivity: union faces sharing an edge that have the SAME region id.
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
+            var uf = new UnionFind(nF);
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (PieceMap[f1] == PieceMap[f2]) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
+                if (PieceMap[f1] == PieceMap[f2]) uf.Union(f1, f2);
+            });
             var blobSize = new Dictionary<int, int>();
             var regionBlobs = new Dictionary<int, List<int>>();
             for (int f = 0; f < nF; f++)
             {
                 if (P.Faces[f].IsUnused) continue;
                 int r = PieceMap[f]; if (r < 0) continue;
-                int root = Find(f);
+                int root = uf.Find(f);
                 blobSize[root] = DictGet(blobSize, root) + 1;
                 if (!regionBlobs.TryGetValue(r, out var lst)) { lst = new List<int>(); regionBlobs[r] = lst; }
                 if (!lst.Contains(root)) lst.Add(root);
@@ -255,7 +227,7 @@ namespace PieceSolver
                 for (int f = 0; f < nF; f++)
                 {
                     if (P.Faces[f].IsUnused || PieceMap[f] != kv.Key) continue;
-                    if (newIdFor.TryGetValue(Find(f), out int nid)) { PieceMap[f] = nid; changed = true; }
+                    if (newIdFor.TryGetValue(uf.Find(f), out int nid)) { PieceMap[f] = nid; changed = true; }
                 }
             }
             return changed;
@@ -271,17 +243,13 @@ namespace PieceSolver
         {
             var result = new Dictionary<int, int>();
             if (PieceMap == null || _mesh == null || touched == null || touched.Count == 0 || selection == null || selection.Count == 0) return result;
-            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            var P = _mesh; int nF = P.Faces.Count;
             var adj = new List<int>[nF];
-            for (int h = 0; h < nH; h++)
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
                 (adj[f1] ??= new List<int>()).Add(f2);
                 (adj[f2] ??= new List<int>()).Add(f1);
-            }
+            });
             var src = new int[nF]; for (int i = 0; i < nF; i++) src[i] = -1;
             var q = new Queue<int>();
             for (int f = 0; f < nF; f++)
@@ -309,27 +277,22 @@ namespace PieceSolver
         {
             var result = new HashSet<int>();
             if (PieceMap == null || _mesh == null || touched == null || touched.Count == 0) return result;
-            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)
+            var P = _mesh; int nF = P.Faces.Count;
+            var uf = new UnionFind(nF);
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (touched.Contains(f1) && touched.Contains(f2)) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
+                if (touched.Contains(f1) && touched.Contains(f2)) uf.Union(f1, f2);
+            });
             var size = new Dictionary<int, int>();
             int best = -1, bestSize = 0;
             foreach (int f in touched)
             {
                 if (f < 0 || f >= nF) continue;
-                int r = Find(f), s = DictGet(size, r) + 1; size[r] = s;
+                int r = uf.Find(f), s = DictGet(size, r) + 1; size[r] = s;
                 if (s > bestSize) { bestSize = s; best = r; }
             }
             if (best < 0) return result;
-            foreach (int f in touched) if (f >= 0 && f < nF && Find(f) == best) result.Add(f);
+            foreach (int f in touched) if (f >= 0 && f < nF && uf.Find(f) == best) result.Add(f);
             return result;
         }
 
@@ -422,30 +385,26 @@ namespace PieceSolver
         {
             var map = new Dictionary<int, int>();
             if (PieceMap == null || _mesh == null || selection == null || selection.Count == 0) return map;
-            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            for (int h = 0; h < nH; h++)   // union faces of ADJACENT selected pieces -> components of the selection
+            var P = _mesh; int nF = P.Faces.Count;
+            var uf = new UnionFind(nF);
+            // union faces of ADJACENT selected pieces -> components of the selection
+            MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
-                if (P.Halfedges[h].IsUnused) continue;
-                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
-                if (f1 < 0 || f2 < 0) continue;
-                if (selection.Contains(PieceMap[f1]) && selection.Contains(PieceMap[f2])) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
-            }
+                if (selection.Contains(PieceMap[f1]) && selection.Contains(PieceMap[f2])) uf.Union(f1, f2);
+            });
             var survivor = new Dictionary<int, int>();   // component root -> min selected piece id in it
             for (int f = 0; f < nF; f++)
             {
                 if (P.Faces[f].IsUnused) continue;
                 int pid = PieceMap[f]; if (!selection.Contains(pid)) continue;
-                int r = Find(f);
+                int r = uf.Find(f);
                 if (!survivor.TryGetValue(r, out int mn) || pid < mn) survivor[r] = pid;
             }
             for (int f = 0; f < nF; f++)
             {
                 if (P.Faces[f].IsUnused) continue;
                 int pid = PieceMap[f]; if (!selection.Contains(pid) || map.ContainsKey(pid)) continue;
-                map[pid] = survivor[Find(f)];
+                map[pid] = survivor[uf.Find(f)];
             }
             return map;
         }

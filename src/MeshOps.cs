@@ -5,6 +5,22 @@ using Plankton;
 namespace CreaseMachine
 {
     /// <summary>
+    /// A tiny path-halving union-find over a dense int domain (face ids). The single reusable copy
+    /// behind the partition passes that were each re-declaring <c>int[] uf; for(i) uf[i]=i; int
+    /// Find(int)</c> + the same inline <c>p[Find(a)] = Find(b)</c> union: MeshOps.ComponentCount /
+    /// SplitComponents, and Pattern's Seed / Delete / Carve / SplitDisconnected / LargestComponent /
+    /// MergeGroups. <c>Union(a, b)</c> reproduces the inline form exactly (find both roots, then
+    /// <c>p[rootA] = rootB</c>), so the resulting partition is identical.
+    /// </summary>
+    public struct UnionFind
+    {
+        private readonly int[] _p;
+        public UnionFind(int n) { _p = new int[n]; for (int i = 0; i < n; i++) _p[i] = i; }
+        public int Find(int x) { while (_p[x] != x) { _p[x] = _p[_p[x]]; x = _p[x]; } return x; }
+        public void Union(int a, int b) { a = Find(a); b = Find(b); if (a != b) _p[a] = b; }
+    }
+
+    /// <summary>
     /// Minimal, Rhino-free mesh-cleanup helpers for the developability flow. Kept separate from
     /// the energy so they can be unit-tested against just Plankton.
     /// </summary>
@@ -278,24 +294,37 @@ namespace CreaseMachine
             return mask;
         }
 
-        private static int UfFind(int[] p, int x) { while (p[x] != x) { p[x] = p[p[x]]; x = p[x]; } return x; }
-        private static void UfUnion(int[] p, int a, int b) { a = UfFind(p, a); b = UfFind(p, b); if (a != b) p[a] = b; }
-
-        /// <summary>Number of connected components (faces joined through shared interior edges). An FBX
-        /// solid loaded with its unwelded seams returns one component per face (e.g. 6 for a 6-sided solid).</summary>
-        public static int ComponentCount(PlanktonMesh M)
+        /// <summary>
+        /// Invoke <paramref name="onEdge"/> once per interior edge (an edge with a real face on BOTH
+        /// sides) with its two face ids and its two endpoint vertex ids: <c>(f1, f2, a, b)</c>. Walks
+        /// each half-edge, visits each undirected edge once via the <c>pr &lt; h</c> tie-break, and
+        /// skips boundary edges (either adjacent face &lt; 0) — the exact <c>for h … GetPairHalfedge …
+        /// if(pr&lt;0||pr&lt;h) continue … AdjacentFace … StartVertex</c> walk the partition + crease
+        /// passes all re-implemented. f1/a come from the smaller half-edge h; f2/b from its pair pr.
+        /// </summary>
+        public static void ForEachInteriorEdge(PlanktonMesh M, Action<int, int, int, int> onEdge)
         {
-            int nF = M.Faces.Count, nH = M.Halfedges.Count;
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int nH = M.Halfedges.Count;
             for (int h = 0; h < nH; h++)
             {
                 if (M.Halfedges[h].IsUnused) continue;
                 int pr = M.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
                 int f1 = M.Halfedges[h].AdjacentFace, f2 = M.Halfedges[pr].AdjacentFace;
-                if (f1 >= 0 && f2 >= 0) UfUnion(uf, f1, f2);
+                if (f1 < 0 || f2 < 0) continue;
+                int a = M.Halfedges[h].StartVertex, b = M.Halfedges[pr].StartVertex;
+                onEdge(f1, f2, a, b);
             }
+        }
+
+        /// <summary>Number of connected components (faces joined through shared interior edges). An FBX
+        /// solid loaded with its unwelded seams returns one component per face (e.g. 6 for a 6-sided solid).</summary>
+        public static int ComponentCount(PlanktonMesh M)
+        {
+            int nF = M.Faces.Count;
+            var uf = new UnionFind(nF);
+            ForEachInteriorEdge(M, (f1, f2, a, b) => uf.Union(f1, f2));
             var roots = new HashSet<int>();
-            for (int f = 0; f < nF; f++) if (!M.Faces[f].IsUnused) roots.Add(UfFind(uf, f));
+            for (int f = 0; f < nF; f++) if (!M.Faces[f].IsUnused) roots.Add(uf.Find(f));
             return roots.Count;
         }
 
@@ -347,20 +376,14 @@ namespace CreaseMachine
         /// can be written back in place. Each sub-mesh keeps its own boundary loop(s).</summary>
         public static List<PlanktonMesh> SplitComponents(PlanktonMesh M, out List<int[]> vertexMaps)
         {
-            int nF = M.Faces.Count, nH = M.Halfedges.Count;
-            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
-            for (int h = 0; h < nH; h++)
-            {
-                if (M.Halfedges[h].IsUnused) continue;
-                int pr = M.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
-                int f1 = M.Halfedges[h].AdjacentFace, f2 = M.Halfedges[pr].AdjacentFace;
-                if (f1 >= 0 && f2 >= 0) UfUnion(uf, f1, f2);
-            }
+            int nF = M.Faces.Count;
+            var uf = new UnionFind(nF);
+            ForEachInteriorEdge(M, (f1, f2, a, b) => uf.Union(f1, f2));
             var groups = new Dictionary<int, List<int>>();
             for (int f = 0; f < nF; f++)
             {
                 if (M.Faces[f].IsUnused) continue;
-                int r = UfFind(uf, f);
+                int r = uf.Find(f);
                 if (!groups.TryGetValue(r, out var g)) { g = new List<int>(); groups[r] = g; }
                 g.Add(f);
             }
