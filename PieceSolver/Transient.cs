@@ -25,7 +25,11 @@ namespace PieceSolver
             get { if (IsStale && _regen != null) { _value = _regen(); IsFresh = true; } return _value; }
         }
 
-        public bool TryGet(out T value) { value = _value; return IsFresh; }
+        // PEEK the cache as-is and report its condition (IsFresh) — an INTENTIONAL leak in the abstraction:
+        // it does NOT trigger a pull regen. Use when you explicitly want the current cache, or to avoid a
+        // circular/expensive regen (e.g. a producer reading mid-build). A pull transient peeked while stale
+        // hands back stale data — the bool is how you'd notice; ignore it only when you mean to.
+        public bool Peek(out T value) { value = _value; return IsFresh; }
 
         public void Set(T value) { _value = value; IsFresh = true; }   // PUSH: an external producer fills it
         public void MarkStale() { IsFresh = false; }                   // a dependency changed -> rebuild on next need

@@ -881,7 +881,7 @@ namespace PieceSolver
         // DISPLAY "preview proposed mesh" toggle is on (and valid for the current topology), else null
         // (= use the live mesh's own coordinates).
         double[] ProposedPreviewPos()
-            => (_sim.ShowProposedMesh && _proposedPos.TryGet(out var pp) && _session != null
+            => (_sim.ShowProposedMesh && _proposedPos.Peek(out var pp) && _session != null
                 && pp.Length == _session.Mesh.Vertices.Count * 3) ? pp : null;
 
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the

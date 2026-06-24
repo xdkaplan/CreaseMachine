@@ -37,7 +37,7 @@ namespace PieceSolver
             int nF = P.Faces.Count, nH = P.Halfedges.Count;
             var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
             int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
-            CreaseMap.TryGet(out var seedCreases);   // peek the cached crease set (provisional or last-derived) — no circular regen
+            CreaseMap.Peek(out var seedCreases);   // peek the cached crease set (provisional or last-derived) — no circular regen
             for (int h = 0; h < nH; h++)
             {
                 if (P.Halfedges[h].IsUnused) continue;
