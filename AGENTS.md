@@ -285,6 +285,11 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   **Chapter** (reset boundary) · **tx** (one gesture = one transaction). Out of scope today: crease-identity
   / reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs, journaling of piecing.
 
+  **Naming & vocabulary are the user's call.** The user owns term, class, method, field, and command
+  naming — and the conceptual model behind a name. **Propose** any new name or rename and get **explicit
+  acceptance** before introducing it; never coin or rename unilaterally. This whole vocabulary was settled
+  exactly that way (propose → debate → accept), and that is the expected workflow for the next one.
+
   **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
   - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable
     (mutated only via a tx) and the *only* state written to file.
