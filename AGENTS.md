@@ -311,15 +311,16 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   first** — the same propose → debate → accept workflow as naming. Building new Commands *on top of* the
   existing primitives is fine; changing the primitives is not.
 
-  **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
+  **Real / Transient / Ephemeral** — one distinction that governs undo, refresh, *and* save:
   - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable
-    (mutated only via a tx) and the *only* state written to file.
+    (mutated only via a tx) and the *only* state written to file. Never stale.
   - **Transient** — *derived* from Real (`CreaseMap`, the unwelded PieceMesh, developed geometry, overlays).
-    Not undoable, not saved: carries a derives-from dependency + dirty bit and is **regenerated** from Real
-    (eagerly if cheap, lazily if expensive). Computed-*from* Real, never a live alias of it.
+    Not undoable, not saved: cached with a **Fresh / Stale** flag and **refreshed** from Real — a *Grown*
+    transient **grows** itself on read, a *Supplied* one is fed by a producer. Computed-*from* Real, never a
+    live alias of it. (Full model: [docs/specs/DOC-SPEC.md](docs/specs/DOC-SPEC.md).)
   - **Ephemeral** — computed once and thrown away when its scope ends: a **transaction** (a gesture's
     preview accumulators) or an **editor** (the selection, cleared when the editor deactivates), plus view
-    state (camera). Not undoable, not saved, and *not* regenerated — just discarded.
+    state (camera). Not undoable, not saved, and *not* refreshed — just discarded.
 
 The brush-to-freeze-creases north star and the CreaseStudio consolidation plan live in the user's memory.
 

@@ -57,10 +57,11 @@ These supersede / extend the [`PIECER-REFACTOR.md`](archive/PIECER-REFACTOR.md) 
 - **Run / Undo / Redo** — the Doc's three verbs. `Run(delta)` is the single mutation path
   (the base meaning of "run" in this layer; the CLI/flow `run` is a different layer).
 - **Real vs Transient** — **Real** = authoritative state that lives in Deltas / is `ITxAble`
-  (`PieceMap`). **Transient** = derived state that is **regen'd**, never in a Delta
+  (`PieceMap`). **Transient** = derived state that is **refreshed** from Real, never in a Delta
   (`CreaseMap`). The line that decides what is undoable.
-- **regen** — re-derive Transient from Real. Runs *after* every `Apply` / `Invert`. Never
-  recorded. (`RegenCrease`.)
+- **refresh** (this doc's older "regen") — re-derive a Transient from Real. `Apply`/`Invert`
+  **rot** the Transient (`RegenCrease`); a *Grown* transient like `CreaseMap` then re-derives
+  lazily on read. Never recorded. Full freshness model: [docs/specs/DOC-SPEC.md](specs/DOC-SPEC.md).
 - **Element** — any selectable/editable thing with identity: **Piece**, **Crease**, and later
   **Join** / **Tab** / **Cone tip** / **Control point**. (Was "entity".)
 - **`Selection<T>`** — a typed selection set, one per Element type, living in the Doc, carrying a

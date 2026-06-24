@@ -4,8 +4,8 @@
 for how the `Doc` owns derived state. Each section marks **✓ built** vs **○ designed**.
 The one thing built today is `Transient<T>` (a freshness bool) plus a single hand-wired
 edge (`Pattern → CreaseMap`). Everything about the *graph* (edges, cascade, flavors,
-threading rule) is designed-not-built. See [DOC-TX-REFACTOR.md](DOC-TX-REFACTOR.md) for the
-undo/transaction layer this sits beside, and [AGENTS.md](../AGENTS.md) for the as-built
+threading rule) is designed-not-built. See [DOC-TX-REFACTOR.md](../DOC-TX-REFACTOR.md) for the
+undo/transaction layer this sits beside, and [AGENTS.md](../../AGENTS.md) for the as-built
 Real/Transient/Ephemeral glossary.
 
 ## 1. Purpose
@@ -177,5 +177,6 @@ reads must `Peek`), because you can't refresh past a not-yet-produced ancestor.
 
 - ✓ `Set` → **Supply** and `_regen` → **Grow** in `Transient.cs`; "TryGet" scrubbed from its comments.
 - Adopt **Refresh** as the umbrella term elsewhere in comments/docs (ongoing).
-- Closes the [CODE-REVIEW.md](CODE-REVIEW.md) Tier-4 "dirty bit" / "derives-from dependency"
-  drift in AGENTS.md by replacing it with this as-built-vs-designed model.
+- ✓ **Closed** the [CODE-REVIEW.md](../CODE-REVIEW.md) Tier-4 "dirty bit" / "derives-from dependency"
+  drift: AGENTS.md's Transient definition (+ DOC-TX-REFACTOR + DoD) now use the Fresh/Stale + Grow/Supply
+  model — no "dirty bit".

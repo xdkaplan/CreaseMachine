@@ -8,7 +8,7 @@ namespace PieceSolver
     //              (total — always has a value).
     //   SUPPLIED — constructed without one; it must be produced in advance by a producer that calls `Supply`.
     //              `.Value` can't make one, so readers `Peek` (partial — a Maybe; might not be ready yet).
-    // Never aliases Real — it is computed-FROM it. See docs/DOC-SPEC.md (the dependency-graph design) and
+    // Never aliases Real — it is computed-FROM it. See docs/specs/DOC-SPEC.md (the dependency-graph design) and
     // AGENTS.md (Real / Transient / Ephemeral).
     // NOTE: the wider graph (parent/child edges, the rot cascade, the `.Value`-throws-on-stale-Supplied
     // contract) is DESIGNED, not built here yet — this is just the single node.

@@ -20,8 +20,9 @@ the *target* as if *built* (Tier 4).
 - **Tier 1 — 1 of 5 done** (#1 shadow `_pattern` consolidated 2026-06-24); 4 hazards still open.
 - **Tier 2 — `studio/` deleted ✓, `Picker` extracted ✓**; engine library,
   `DisplaySource`, `BakeRunner` still open.
-- **Tier 4 — doc coherence largely open** (verified: "dirty bit" and
-  "journaling out-of-scope" still sit in AGENTS.md).
+- **Tier 4 — partly closed**: the "dirty bit" / vocab drift is fixed (AGENTS.md +
+  DOC-TX-REFACTOR + DoD aligned to the DOC-SPEC vocabulary); "journaling out-of-scope" + the
+  rest still open.
 
 ## Tier 1 — real hazards (small fixes, worth doing soon)
 
@@ -99,8 +100,10 @@ but never downgraded to as-built.
   supersedes Parts 1–2" claim fights its own Shortcomings list (the op-log did
   *not* collapse the undo stacks; two journals remain). → reframe Revision as
   *target*, Parts 1–2 + Shortcomings as *as-built*. *(Agent E#1 — top doc fix)*
-- [ ] **"dirty bit" in AGENTS.md** — the banned word, in the canonical glossary.
-  *(Agent E#2)* — *verified AGENTS.md:305.*
+- [x] **"dirty bit" in AGENTS.md** — the banned word, in the canonical glossary.
+  *(Agent E#2)* — **done 2026-06-24:** the AGENTS.md Transient definition now uses the
+  Fresh/Stale + Grow/Supply model (no "dirty bit" / "derives-from dependency"); cross-refs
+  `docs/specs/DOC-SPEC.md`. `DOC-TX-REFACTOR.md` + `DEFINITION-OF-DONE.md` aligned too.
 - [ ] **"journaling of piecing" listed out-of-scope though it shipped.**
   *(Agent E)* — *verified AGENTS.md:294; the journal landed via the concurrent
   agent (`49ecdd0`…`5836ee2`).*
