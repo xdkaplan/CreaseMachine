@@ -56,7 +56,7 @@ behind the narrow **`IEditorHost`** interface that `MainWindow` implements (the 
 from regrowing). `MainWindow` keeps the render loop / camera / picking / crease-review modal. This was a pure
 relocation — no behaviour change. The design note, glossary, and **deferred roadmap** (tx/undo stack,
 GUID/entity table, reconciling `RegenCrease`, `Picker.cs`, `UnweldByRegion`/PieceMesh + weld-FBX-on-import,
-polymorphic `Selection`, the partition↔crease authority flip) are in `docs/PIECER-REFACTOR.md`.
+polymorphic `Selection`, the partition↔crease authority flip) are in `docs/archive/PIECER-REFACTOR.md`.
 
 **Doc / transaction (undo-redo) layer added on top.** Piecing edits are now undoable. A **`Doc`** (the
 orchestrator) owns the `Pattern` Store, a typed **`Selection<PieceId>`** (hoisted out of the Piecer; *not*
@@ -87,7 +87,7 @@ plain clone. `ApplyReset → Revert` (standalone global op). **v1-split:** the P
 deliberately messy (the brush still targets the now-hidden authoring mesh; the Solve finally hand-flips
 `_showPieces`/overlays) — the formal representation swap + Doc-owns-mesh is deferred. **Known limitation:**
 fully-frozen per-piece boundaries over-constrain painted pieces → wrinkly panels; loosening seams is the
-named seam-relaxation follow-up. Full spec + plan: `docs/SOLVER-PHASE.md`.
+named seam-relaxation follow-up. Full spec + plan: `docs/archive/SOLVER-PHASE.md`.
 
 ## 2. Orientation
 

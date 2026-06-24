@@ -415,7 +415,7 @@ namespace CreaseMachine
         /// faces in DIFFERENT pieces sharing a vertex get coincident separate copies (unwelded along the
         /// crease). Geometry is identical (coincident seam verts); faces stay 1:1. <paramref name="vertexMap"/>
         /// maps each new vertex back to its source vertex (like SplitComponents). The Solve handoff: develop the
-        /// painted pieces by feeding this to the per-component bake. See docs/SOLVER-PHASE.md.
+        /// painted pieces by feeding this to the per-component bake. See docs/archive/SOLVER-PHASE.md.
         /// </summary>
         public static PlanktonMesh UnweldByRegion(PlanktonMesh M, int[] pieceMap, out int[] vertexMap)
         {

@@ -1,12 +1,16 @@
 # File > Save / File > Open — document serialize / deserialize
 
+> **Status: SPEC — not yet implemented.** No `DocumentIO.cs`, no File > Save / Save As / Open menu items,
+> and no `.crease` round-trip exist yet; only the Ctrl+O / Ctrl+S shortcut reservations (Decision 5) have
+> landed. This is the plan, not a description of built behaviour.
+
 A real round-trip: **Save** writes the document to disk, **Open** restores it. The just-merged op-log
 "Save" is **one-way** (it serializes the in-effect piece ops, but Open/replay is unwired — and pure replay
 is blocked: Propose isn't journaled, so the seeded partition can't rebuild, and op ids are session-local).
 This spec makes the round-trip robust by saving **state, not a recipe**.
 
-Sequel to [`DOC-TX-REFACTOR.md`](DOC-TX-REFACTOR.md) (Real/Transient/Ephemeral) and
-[`SOLVER-PHASE.md`](SOLVER-PHASE.md). Two parts: **Design Note** + **Implementation Plan**.
+Sequel to [`DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md) (Real/Transient/Ephemeral) and
+[`SOLVER-PHASE.md`](../archive/SOLVER-PHASE.md). Two parts: **Design Note** + **Implementation Plan**.
 
 ---
 
