@@ -625,9 +625,17 @@ namespace PieceSolver
                 BakeOverlay.Visibility = Visibility.Collapsed;
                 foreach (var line in _bakeLog) Log(line);
                 bool developed = !_bakeToken.IsCancellationRequested;
-                if (developed) _developed.Set(_session.Mesh);   // the Solver's Transient = the developed clone
+                if (developed)
+                {
+                    _developed.Set(_session.Mesh);   // the Solver's Transient = the developed clone
+                    // Flip to the Solver view: the piece view (ShowPieces) REPLACES the matcap mesh, so the
+                    // developed mesh stays hidden behind it unless the Piecer-view decorations come off. Drop the
+                    // piece colours + crease wires — DISPLAY only; the Pattern / CreaseMap data survive.
+                    _showPieces = false; _pieceDirty = true;
+                    _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
+                }
                 _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
-                if (_view != null) _view.Upload(developed ? _developed.Value : _session.Mesh);   // show the result, else fall back to authoring
+                if (_view != null) _view.Upload(developed ? _developed.Value : _session.Mesh);   // show the developed result, else authoring
                 if (_hasFlat && _flatView != null && _flat != null) { _flatView.Upload(_flat); PlaceFlat(); }
                 _meshDirty = false; _rulingsDirty = true;     // mesh just uploaded; recompute rulings if shown
                 RefreshSeamDisplay();
