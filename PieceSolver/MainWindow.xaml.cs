@@ -126,6 +126,7 @@ namespace PieceSolver
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
             _doc.Pieces.Changed += () => { if (_showPieces) RebuildPieces(); };
             _doc.Changed += () => { RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };
+            _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
             // hidden by default. Created now so Log() works from startup; its Owner is set lazily on

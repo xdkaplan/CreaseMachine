@@ -70,6 +70,14 @@ namespace PieceSolver
 
         readonly Stack<IDelta> _undo = new Stack<IDelta>();
         readonly Stack<IDelta> _redo = new Stack<IDelta>();
+
+        // The op-log (journal): committed ops (`setpiece <face> <from> <to>`) + `#` comments, in order. Doc-owned;
+        // the Console renders it and (Slice B/C) Save serializes it. Today: forward record only — load/solve ops
+        // and undo/redo cursor-trim land in Slice B/C. See docs/DOC-TX-REFACTOR.md (Revision: the op-log).
+        readonly List<string> _log = new List<string>();
+        public IReadOnlyList<string> Journal => _log;
+        public event Action<string> Recorded;                        // fired per appended line (the Console echoes it)
+
         Tx _open;                                                    // the single open transaction (null = none)
         public Busy State { get; private set; } = Busy.None;         // a long op (Calculating / Opening) owns the Doc
 
@@ -90,6 +98,10 @@ namespace PieceSolver
         public void EnterBusy(Busy reason) { State = reason; }
         public void ExitBusy() { State = Busy.None; }
 
+        // Append a bare op/command line, or a `#` comment, to the op-log (and notify the Console via Recorded).
+        public void Record(string line) { _log.Add(line); Recorded?.Invoke(line); }
+        public void Comment(string text) => Record("# " + text);
+
         // Open the single transaction. One at a time: a stale open tx is a leak -> warn + cancel it; opening while
         // a long op owns the Doc returns a refused (dead) tx whose Apply/Commit no-op.
         public Tx OpenTx()
@@ -105,7 +117,7 @@ namespace PieceSolver
         public bool Run(IDelta d)
         {
             if (!Ready || d == null || (d is PieceDelta { Empty: true }) || (d is CompositeDelta { Empty: true })) return false;
-            ApplyInternal(d); _undo.Push(d); _redo.Clear(); Changed?.Invoke();
+            ApplyInternal(d); _undo.Push(d); _redo.Clear(); RecordOps(d); Changed?.Invoke();
             return true;
         }
 
@@ -126,6 +138,7 @@ namespace PieceSolver
                 if (parts.Count == 1) { _undo.Push(parts[0]); _redo.Clear(); }                          // single delta -> push as-is
                 else if (parts.Count > 1) { _undo.Push(new CompositeDelta(new List<IDelta>(parts))); _redo.Clear(); }   // bundle into one undo unit
                 // 0 parts -> a lease-only tx (e.g. an empty/refused gesture): record nothing
+                foreach (var p in parts) RecordOps(p);   // journal the committed ops
             }
             else
             {
@@ -137,5 +150,12 @@ namespace PieceSolver
         // Recurse composites; route leaf deltas to the (single, today) Store. Multi-store routing lands here later.
         void ApplyInternal(IDelta d)  { if (d is CompositeDelta c) { foreach (var p in c.Parts) ApplyInternal(p); } else Pattern?.Apply(d); }
         void InvertInternal(IDelta d) { if (d is CompositeDelta c) { for (int i = c.Parts.Count - 1; i >= 0; i--) InvertInternal(c.Parts[i]); } else Pattern?.Invert(d); }
+
+        // Serialize a committed delta's ops into the op-log (CLI-tokenized: `setpiece <face> <from> <to>`).
+        void RecordOps(IDelta d)
+        {
+            if (d is CompositeDelta c) { foreach (var p in c.Parts) RecordOps(p); }
+            else if (d is PieceDelta pd) { foreach (var o in pd.Ops) Record($"setpiece {o.Face} {o.From} {o.To}"); }
+        }
     }
 }
