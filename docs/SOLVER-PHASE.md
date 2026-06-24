@@ -68,7 +68,13 @@ MeshOps.UnweldByRegion(PlanktonMesh M, int[] pieceMap, out int[] vertexMap) -> P
 
 1. **Solve develops a derived mesh, never the authoring Real mesh.** Single patch → a clone; pieced →
    unwelded-by-`CreaseMap`. (`TopologyClone` already exists for the clone.) This is what lets the Pattern
-   survive and removes the `ApplyReset` coupling by construction.
+   survive and removes the `ApplyReset` coupling by construction. **Honest caveat:** today `_session.Mesh` is
+   one object playing *authoring + develop-target + displayed* — so "never touch the authoring mesh" requires
+   pulling a **minimal slice of the representation split forward** (Decision 6 is otherwise deferred): the bake
+   runs on a temporary develop-session over the derived mesh, the authoring `_session` is restored afterward,
+   and the developed result is a separate mesh (`_developed`) the view shows. The Piecer↔Solver round-trip
+   stays **deliberately messy** in v1 (the brush still targets the now-hidden authoring mesh; no clean phase
+   toggle yet) — the viewer needs a refactor regardless. The full clean split is Decision 6.
 2. **Revert stays a standalone global op** (rename `ApplyReset → Revert`, keep it the Reset button/`Ctrl+R`/
    journal target). Solve no longer calls it.
 3. **`UnweldByRegion` is a pure `MeshOps` op** (vertex,piece duplication + `vertexMap`). Reusable from Solve,

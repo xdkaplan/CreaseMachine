@@ -88,8 +88,12 @@ namespace PieceSolver
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
         // TRANSIENT: settled (developed) geometry from the last Propose, per original vertex (nV*3), for the
-        // DISPLAY preview. PUSH (produced by the Propose bake, not regenerable on demand) — read via TryGet.
+        // DISPLAY preview. PUSH (produced by the Propose bake, not regenerable on demand) — read via Peek.
         readonly Transient<double[]> _proposedPos = new Transient<double[]>();
+        // TRANSIENT (the Solver's): the developed mesh from the last Solve — a derived clone/unweld of the
+        // authoring mesh, NOT the authoring mesh itself (which + its Pattern survive the bake). PUSH (produced
+        // by the async bake); shown in the Solver phase. v1-split; see docs/SOLVER-PHASE.md.
+        readonly Transient<PlanktonMesh> _developed = new Transient<PlanktonMesh>();
         // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
         // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). Recreated when the mesh changes.
         Pattern _pattern;
@@ -590,8 +594,15 @@ namespace PieceSolver
         async Task OnSolveAsync()
         {
             if (_baking || _session == null || _meshPath == null) return;
-            Revert();                              // UI thread: reload the input mesh + reset flags (Phase A will remove this — develop a clone)
-            _view?.Upload(_session.Mesh);          // show the reset mesh, then clear dirty so the bake's mutations aren't uploaded mid-flight
+
+            // v1-split (docs/SOLVER-PHASE.md): develop a DERIVED clone on a temporary session, so the authoring
+            // _session + its Pattern survive the bake (the authoring mesh is restored in the finally; the result
+            // is kept as the Solver Transient _developed and shown). Phase C unwelds-by-CreaseMap instead of
+            // cloning when the mesh is pieced. Develop-state is reset for the clone exactly as Revert used to.
+            var authoring = _session;
+            _session = new FlowSession(TopologyClone(authoring.Mesh));
+            _totalIters = 0; _hasFlat = false; _flat = null; _M0 = null;
+            _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0; _bffNeeded = true;
             _meshDirty = false;
 
             _baking = true; _doc.EnterBusy(Busy.Calculating);   // the Doc rejects Run/Undo/Redo while the worker owns the mesh
@@ -613,7 +624,10 @@ namespace PieceSolver
                 _baking = false; _doc.ExitBusy();
                 BakeOverlay.Visibility = Visibility.Collapsed;
                 foreach (var line in _bakeLog) Log(line);
-                if (_view != null) _view.Upload(_session.Mesh);
+                bool developed = !_bakeToken.IsCancellationRequested;
+                if (developed) _developed.Set(_session.Mesh);   // the Solver's Transient = the developed clone
+                _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
+                if (_view != null) _view.Upload(developed ? _developed.Value : _session.Mesh);   // show the result, else fall back to authoring
                 if (_hasFlat && _flatView != null && _flat != null) { _flatView.Upload(_flat); PlaceFlat(); }
                 _meshDirty = false; _rulingsDirty = true;     // mesh just uploaded; recompute rulings if shown
                 RefreshSeamDisplay();
