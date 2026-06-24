@@ -282,8 +282,9 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     selection is a **set** of pieces (in `Doc.Pieces`); each modifier splits at a ~10px threshold into a
     **tap** and a **drag** — plain tap = replace selection; Shift tap = add, Shift drag = grow (mint when
     empty); Ctrl tap = remove from selection, Ctrl drag = carve (delete whole pieces when empty). `M`
-    merges; `Del` / `Backspace` deletes the selected pieces (donating each to its neighbour); `Ctrl+Z` /
-    `Ctrl+Y` undo/redo. Every committing gesture is one `Doc.Run` transaction; the
+    merges; `Del` / `Backspace` deletes the selected pieces (donating each to its neighbour); a no-drag
+    right-click pops a context menu (count header · Merge · Delete); `Ctrl+Z` / `Ctrl+Y` undo/redo. Every
+    committing gesture is one `Doc.Run` transaction; the
     Piecer computes deltas, no geometry moves.
   - **`IEditorHost`** — the narrow interface `MainWindow` implements so an editor talks to its host (mesh,
     `Pattern`, **`Doc`**, picking, brush footprint, view-refresh hooks) rather than the whole window — the

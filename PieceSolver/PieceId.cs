@@ -17,5 +17,10 @@ namespace PieceSolver
         public static bool operator ==(PieceId a, PieceId b) => a.Value == b.Value;
         public static bool operator !=(PieceId a, PieceId b) => a.Value != b.Value;
         public override string ToString() => Value.ToString();
+
+        // Pluralized display name for a COUNT of pieces — "1 Piece" / "5 Pieces". A low-churn home for the
+        // element-naming helper until the first-class Element / Piece type lands; then it migrates to
+        // Element (with a heterogeneous Name(list) overload for "15 Pieces, 10 Tabs" / "25 Elements").
+        public static string Name(int count) => $"{count} {(count == 1 ? "Piece" : "Pieces")}";
     }
 }

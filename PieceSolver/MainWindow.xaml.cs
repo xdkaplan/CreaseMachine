@@ -68,6 +68,9 @@ namespace PieceSolver
         System.Windows.Point _lastMouse;
         enum DragMode { None, Orbit, Pan, Edit }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = Crease brush
+        System.Windows.Point _rightDownPos;   // where a right-button press started — to tell a click from an orbit-drag
+        bool _rightClickArmed;                // a plain right-press that, released without dragging, pops the piece menu
+        const double RightClickPx = 6.0;      // right-release within this of the press = a click (menu); beyond = an orbit
         // Brush-footprint preview overlay (the hover circle). The brush INTERACTION itself lives in the
         // Piecer editor; MainWindow only owns the preview dot + picking (exposed to the editor via IEditorHost).
         System.Windows.Point _lastHover;  // last hover position, for the footprint preview
@@ -1556,7 +1559,11 @@ namespace PieceSolver
             _lastMouse = e.GetPosition(_gl);
             _previewDot.Visibility = Visibility.Collapsed;   // hide the footprint preview while dragging
             if (e.ChangedButton == MouseButton.Right)
+            {
                 _drag = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
+                _rightClickArmed = _drag == DragMode.Orbit;   // a plain (no-Shift) right-click, if it doesn't drag, pops the piece menu
+                _rightDownPos = _lastMouse;
+            }
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
@@ -1571,6 +1578,35 @@ namespace PieceSolver
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
             if (EditorActive) _activeEditor.OnPointerUp(_lastMouse);
+            if (e.ChangedButton == MouseButton.Right && _rightClickArmed)
+            {
+                _rightClickArmed = false;
+                var up = e.GetPosition(_gl);
+                double dx = up.X - _rightDownPos.X, dy = up.Y - _rightDownPos.Y;
+                if (dx * dx + dy * dy <= RightClickPx * RightClickPx && EditorActive) ShowPieceMenu();   // a click, not an orbit -> pop the menu
+            }
+        }
+
+        // The right-click (no-drag) piece context menu: a disabled count header ("5 Pieces" / "No Elements
+        // Selected"), then Merge (needs 2+ selected) and Delete (DelPiece, needs 1+). Built fresh per pop so the
+        // enabled state matches the live selection. Only while the Piecer is the active editor.
+        void ShowPieceMenu()
+        {
+            int n = _doc.Pieces.Count;
+            var menu = new System.Windows.Controls.ContextMenu
+            {
+                PlacementTarget = _gl,
+                Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse
+            };
+            menu.Items.Add(new System.Windows.Controls.MenuItem { Header = n == 0 ? "No Elements Selected" : PieceId.Name(n), IsEnabled = false });
+            menu.Items.Add(new System.Windows.Controls.Separator());
+            var merge = new System.Windows.Controls.MenuItem { Header = "Merge", IsEnabled = n >= 2 };
+            merge.Click += (s, e) => TryMerge();
+            menu.Items.Add(merge);
+            var del = new System.Windows.Controls.MenuItem { Header = "Delete", IsEnabled = n >= 1 };
+            del.Click += (s, e) => TryDelPiece();
+            menu.Items.Add(del);
+            menu.IsOpen = true;
         }
 
         void OnMouseMove(object sender, MouseEventArgs e)
