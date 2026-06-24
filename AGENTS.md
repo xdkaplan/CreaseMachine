@@ -299,8 +299,9 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   exactly that way (propose → debate → accept), and that is the expected workflow for the next one.
 
   **Definition of Done** (`docs/DEFINITION-OF-DONE.md`) — the terse bar: every command is **replayable**
-  from the journal, and the journal stays **human-readable & concise** (add a `#` comment only when the
-  user's action can't be inferred from the deltas alone).
+  from the journal; the journal stays **human-readable & concise** (a `#` comment only when the user's
+  action can't be inferred from the deltas alone); and the **Regen / dependency tree** (Real / Transient /
+  Ephemeral) is functional and test-protected.
 
   **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
   - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable
