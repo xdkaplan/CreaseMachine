@@ -71,6 +71,11 @@ namespace PieceSolver
         System.Windows.Point _rightDownPos;   // where a right-button press started — to tell a click from an orbit-drag
         bool _rightClickArmed;                // a plain right-press that, released without dragging, pops the piece menu
         const double RightClickPx = 6.0;      // right-release within this of the press = a click (menu); beyond = an orbit
+        // Modifier state tracked from key events, NOT read live at mouse-down. Reading Keyboard.Modifiers during
+        // WPF's deferred mouse-input processing can miss a just-pressed Shift/Ctrl (the "Shift+click sometimes
+        // doesn't register" race). Captured in key-event order instead, so a click any time the key is physically
+        // held sees it; resynced on window activation to cover a keyup missed while inactive.
+        ModifierKeys _heldMods = ModifierKeys.None;
         // Brush-footprint preview overlay (the hover circle). The brush INTERACTION itself lives in the
         // Piecer editor; MainWindow only owns the preview dot + picking (exposed to the editor via IEditorHost).
         System.Windows.Point _lastHover;  // last hover position, for the footprint preview
@@ -280,6 +285,7 @@ namespace PieceSolver
             MenuConsole.Click += (s, e) => ShowConsole(MenuConsole.IsChecked);   // IsCheckable flips first
             PreviewKeyDown += (s, e) =>
             {
+                _heldMods = e.KeyboardDevice.Modifiers;   // track held modifiers so mouse gestures read this, not a stale/early Keyboard.Modifiers
                 if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
@@ -297,6 +303,8 @@ namespace PieceSolver
                     ResizeBrush(-1); UpdatePreview(_lastHover); e.Handled = true;
                 }
             };
+            PreviewKeyUp += (s, e) => _heldMods = e.KeyboardDevice.Modifiers;   // clear a released modifier (keeps _heldMods current)
+            Activated += (s, e) => _heldMods = Keyboard.Modifiers;              // resync on focus regain (covers a keyup missed while inactive)
             // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
             // a progress+cancel modal.)
         }
@@ -1560,14 +1568,14 @@ namespace PieceSolver
             _previewDot.Visibility = Visibility.Collapsed;   // hide the footprint preview while dragging
             if (e.ChangedButton == MouseButton.Right)
             {
-                _drag = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
+                _drag = (_heldMods & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
                 _rightClickArmed = _drag == DragMode.Orbit;   // a plain (no-Shift) right-click, if it doesn't drag, pops the piece menu
                 _rightDownPos = _lastMouse;
             }
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, Keyboard.Modifiers);
+                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, _heldMods);
             }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
