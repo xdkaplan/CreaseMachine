@@ -177,15 +177,16 @@ keep their own loop copies on purpose: diagnostic harnesses, not under a sync co
 in-process PieceSolver app holds a persistent `FlowSession` (`_session`); note its **Solve** develops
 via the IsometricLM patch-solver, a separate path from this shared `NesterovStep`.
 
-## In-process app — `PieceSolver/` (the active studio)
+## In-process app — `PieceSolver/` (the active in-process app)
 
 `PieceSolver/` (`PieceSolver` → `PieceSolver.exe`) is the active in-process interactive app: load a
 mesh, flatten it, and develop it into a piecewise-developable sheet, all in one net8 process. (It was
-renamed from `patchsolver/CreasePatchSolver`. `studio/` is a fork of the same WPF + OpenTK + engine
-scaffolding — the **CreaseStudio** app, the Nesterov covariance-flow front-end where the crease-proposer
-Solve lives — developed in parallel, not a dead copy.) **Direction:** PieceSolver will become a *module* within the eventual
-**CreaseStudio** — its standalone window goes away and its GUI is fully consumed into CreaseStudio, with
-PieceSolver providing the per-piece flatten/develop solver + workflow. Build:
+renamed from `patchsolver/CreasePatchSolver`. The former `studio/` fork — the **CreaseStudio** Nesterov
+covariance-flow front-end where the crease-proposer Solve originated — was **removed 2026-06-24** once its
+unique work (the proposer + Shine) had been ported here; its remainder, incl. a fuller brush and
+`Perlin.cs`, lives in git history.) **Direction:** PieceSolver is slated to be promoted to **CreaseStudio**
+(the app), with the name `PieceSolver` migrating down to mean the develop kernel (today's `IsometricLM`).
+Build:
 
 ```sh
 dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Release/net8.0-windows/PieceSolver.exe
