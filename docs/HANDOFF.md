@@ -65,9 +65,17 @@ A **Command** (pure function in `Commands.cs`) reads the selection + Real state 
 **`IDelta`** (a list of **`Op`**s); `Doc.Run(delta)` applies it via the Store's `ITxAble.Apply` (the single
 persistent `PieceMap` writer) and pushes it for undo. The intricate in-place ops (Delete/Carve/Grow/Mint) are
 reused as Commands via `Pattern.ComputeDelta` (run-in-place → capture → roll back). **`Merge`** (`M`) is the
-first native Command; `Ctrl+Z`/`Ctrl+Y` undo/redo. State is split **Real** (authoritative `PieceMap`, in
-deltas) vs **Transient** (derived `CreaseMap`, regen'd after Apply/Invert). Full spec + plan +
-glossary: `docs/DOC-TX-REFACTOR.md`.
+first native Command; `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` undo/redo. State is split **Real** (authoritative
+`PieceMap`, in deltas) vs **Transient** (derived `CreaseMap`, regen'd after Apply/Invert).
+
+**Transaction scope + concurrency guard.** A gesture brackets its edit with `Doc.OpenTx()` (the **one**
+transaction — a lease); the tool composes privately and `Tx.Apply`/`Commit`s at mouse-up (`Run` is one-shot
+sugar = open+apply+commit). Mutating entry points **self-reject when `!Ready`** (a tx is open, or a long op
+set `Busy` — the bake calls `EnterBusy(Calculating)`), so a competing `Ctrl+Z` mid-stroke is a clean no-op;
+**ESC** cancels an in-flight stroke (`Editor.GesturePending` / `CancelGesture`). A `Tx` **accumulates**
+(multiple `Apply` → one `CompositeDelta` = one undo unit; the brush only commits one, but macros/parallel
+tools can). One tx at a time, always opened-and-closed — the seam for a future multithreaded ordering guard.
+Full spec + plan + glossary: `docs/DOC-TX-REFACTOR.md`.
 
 ## 2. Orientation
 
@@ -83,11 +91,11 @@ glossary: `docs/DOC-TX-REFACTOR.md`.
 | `PieceSolver/IsometricLM.cs` | Isometric **Levenberg–Marquardt** patch-solver: matrix-free Jacobi-preconditioned CG, parallel gather apply, opt-in FD gradient gate, optional `pinned` Dirichlet (seam freeze). The develop engine for the in-process app. | **no** |
 | `PieceSolver/MainWindow.xaml.cs` | The PieceSolver app: load, async modal **Solve** bake, multi-piece split + reassemble, B-spline seam UX, journal/replay. Now also the `IEditorHost` (owns the **`Doc`** which owns the `Pattern`, hosts the active `Editor`, routes pointer input, reacts to `Doc.Changed`/`Pieces.Changed`, keeps render/camera/picking/crease-review). | WPF/GL |
 | `PieceSolver/Pattern.cs` | The Piecing **Store** — a thin companion over the `PlanktonMesh` holding **Real** `PieceMap` + **Transient** (regen'd) `CreaseMap`; implements `ITxAble` (`Apply`/`Invert` + `ComputeDelta`), plus the in-place ops (Seed/Carve/Grow/**Delete**/SplitDisconnected) and queries (`RegionsConnected`, `GrowAssign`, `LargestComponent`, …). NOT a mesh. | **no** |
-| `PieceSolver/Tx.cs` | Transaction primitives: `IDelta` (opaque to the Doc) + `Op` (invertible atom) + `PieceDelta` + `ITxAble`. | **no** |
-| `PieceSolver/Doc.cs` | The **Doc** orchestrator (Run/Undo/Redo + undo/redo stacks, owns the Store + typed `Selection<T>`, fires `Changed`) and `Selection<T>` (typed, not undoable). | **no** |
+| `PieceSolver/Tx.cs` | Transaction primitives: `IDelta` (opaque to the Doc) + `Op` (invertible atom) + `PieceDelta` + `CompositeDelta` (multi-delta bundle) + `ITxAble`. | **no** |
+| `PieceSolver/Doc.cs` | The **Doc** orchestrator: `OpenTx`/`Run`/`Undo`/`Redo` (self-reject when `!Ready`) + `Tx` (accumulating, one-at-a-time, `Commit`/`Cancel`/auto-cancel-on-dispose) + `Busy` state (bake's `EnterBusy`) + undo/redo stacks; owns the Store + typed `Selection<T>` (not undoable); fires `Changed`. | **no** |
 | `PieceSolver/Commands.cs` | **Commands** — pure functions that compute an `IDelta` from selection + Real state (the user's "Tools"). First: `Merge`. | **no** |
 | `PieceSolver/Editor.cs` | Abstract `Editor` (lifecycle + pointer hooks + per-face fill tint) + the narrow `IEditorHost` interface MainWindow implements. | **no** |
-| `PieceSolver/Piecer.cs` | `Piecer : Editor` — the Piecing-phase contextual brush. Multi-piece **set** selection (in `Doc.Pieces`); tap = select/add/remove, drag = grow/carve; `M` = merge; commits as one `Doc.Run` transaction (undoable). | **no** |
+| `PieceSolver/Piecer.cs` | `Piecer : Editor` — the Piecing-phase contextual brush. Multi-piece **set** selection (in `Doc.Pieces`); tap = select/add/remove, drag = grow/carve; `M` = merge. A stroke holds an open `Doc.OpenTx()` lease, commits the composed delta at mouse-up; ESC → `CancelGesture`. | **no** |
 | `PieceSolver/PieceId.cs` | Zero-cost `readonly struct` typed handle over the int piece id (`PieceMap` stays `int[]`). | **no** |
 | `PieceSolver/Bff.cs` | Boundary First Flattening wrapper (drives external `bff-command-line.exe`), per patch. | **no** |
 | `src/FbxIO.cs` | Binary-FBX reader; preserves Rhino's *unwelded* seam topology → one component per face. | **no** |
