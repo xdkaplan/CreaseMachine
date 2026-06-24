@@ -1589,10 +1589,7 @@ namespace PieceSolver
         }
 
         // Unit vector from the orbit target toward the eye (eye = target + dir*distance). Z-up.
-        Vector3 CamDir() => new Vector3(
-            MathF.Cos(_elevation) * MathF.Sin(_azimuth),
-            MathF.Cos(_elevation) * MathF.Cos(_azimuth),
-            MathF.Sin(_elevation));
+        Vector3 CamDir() => Picker.CamDir(_azimuth, _elevation);
 
         // Translate the orbit target in the camera's screen plane (Shift+right-drag). Speed scales
         // with zoom distance so the feel is consistent at any zoom.
@@ -1618,88 +1615,27 @@ namespace PieceSolver
             return 8.0;
         }
 
-        // Build a pick ray (eye + direction) from the camera params, convention-independent. Z-up, 45deg FOV.
+        // Build a pick ray (eye + direction) from the live camera params. Delegates to the stateless Picker.
         bool PickRay(System.Windows.Point screen, out Vector3 eye, out Vector3 rd)
         {
             eye = default; rd = default;
             if (_session == null) return false;
-            double w = Math.Max(1, _gl.ActualWidth), h = Math.Max(1, _gl.ActualHeight);
-            Vector3 dir = CamDir();
-            eye = _target + dir * _distance;
-            Vector3 forward = -dir;
-            Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitZ));
-            Vector3 up = Vector3.Cross(right, forward);
-            float tanH = MathF.Tan(MathHelper.DegreesToRadians(45f) * 0.5f);   // matches the 45 deg proj FOV
-            float aspect = (float)(w / h);
-            float ndcX = (float)(2.0 * screen.X / w - 1.0);
-            float ndcY = (float)(1.0 - 2.0 * screen.Y / h);
-            rd = Vector3.Normalize(forward + right * (ndcX * tanH * aspect) + up * (ndcY * tanH));
-            return true;
+            return Picker.PickRay(screen, _gl.ActualWidth, _gl.ActualHeight, _target, _azimuth, _elevation, _distance, out eye, out rd);
         }
 
         // Build a pick ray and intersect the mesh (nearest hit point).
         public bool PickSurface(System.Windows.Point screen, out Vector3 hit)
         {
             hit = default;
-            return PickRay(screen, out var eye, out var rd) && RayMeshHit(eye, rd, out hit);
+            return PickRay(screen, out var eye, out var rd) && Picker.RayMeshHit(eye, rd, _session.Mesh, out hit, out _);
         }
 
         // Like PickSurface but also returns the nearest hit FACE index (for seeding the brush's active region).
         public bool PickFace(System.Windows.Point screen, out int face, out Vector3 hit)
         {
             face = -1; hit = default;
-            if (!PickRay(screen, out var eye, out var rd)) return false;
-            var P = _session.Mesh;
-            double best = double.MaxValue;
-            int nf = P.Faces.Count;
-            for (int f = 0; f < nf; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                if (RayTri(eye, rd, BV(P, fv[0]), BV(P, fv[1]), BV(P, fv[2]), out double t) && t < best)
-                { best = t; face = f; hit = eye + rd * (float)t; }
-            }
-            return face >= 0;
+            return PickRay(screen, out var eye, out var rd) && Picker.RayMeshHit(eye, rd, _session.Mesh, out hit, out face);
         }
-
-        // Nearest ray-triangle hit over the live mesh (linear scan; double-sided since winding is mixed).
-        bool RayMeshHit(Vector3 ro, Vector3 rd, out Vector3 hit)
-        {
-            hit = default;
-            var P = _session.Mesh;
-            double best = double.MaxValue;
-            bool found = false;
-            int nf = P.Faces.Count;
-            for (int f = 0; f < nf; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int[] fv = P.Faces.GetFaceVertices(f);
-                if (fv.Length != 3) continue;
-                if (RayTri(ro, rd, BV(P, fv[0]), BV(P, fv[1]), BV(P, fv[2]), out double t) && t < best)
-                { best = t; hit = ro + rd * (float)t; found = true; }
-            }
-            return found;
-        }
-
-        static bool RayTri(Vector3 ro, Vector3 rd, Vector3 a, Vector3 b, Vector3 c, out double t)
-        {
-            t = 0;
-            Vector3 e1 = b - a, e2 = c - a;
-            Vector3 pv = Vector3.Cross(rd, e2);
-            float det = Vector3.Dot(e1, pv);
-            if (MathF.Abs(det) < 1e-12f) return false;
-            float inv = 1f / det;
-            Vector3 tv = ro - a;
-            float u = Vector3.Dot(tv, pv) * inv;
-            if (u < 0f || u > 1f) return false;
-            Vector3 qv = Vector3.Cross(tv, e1);
-            float v = Vector3.Dot(rd, qv) * inv;
-            if (v < 0f || u + v > 1f) return false;
-            t = Vector3.Dot(e2, qv) * inv;
-            return t > 1e-6;
-        }
-
-        static Vector3 BV(PlanktonMesh P, int i) { var v = P.Vertices[i]; return new Vector3((float)v.X, (float)v.Y, (float)v.Z); }
 
         void UpdatePreview(System.Windows.Point cursor)
         {
