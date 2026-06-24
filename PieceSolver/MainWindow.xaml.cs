@@ -94,8 +94,8 @@ namespace PieceSolver
         // by the async bake); shown in the Solver phase. v1-split; see docs/SOLVER-PHASE.md.
         readonly Transient<PlanktonMesh> _developed = new Transient<PlanktonMesh>();
         // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
-        // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). Recreated when the mesh changes.
-        Pattern _pattern;
+        // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). It is the Doc's Store — the single
+        // authority — so read it as `_doc.Pattern` (no shadow field); recreated via _doc.Rebind when the mesh changes.
         // The Doc — the orchestrator that owns the Pattern Store, the typed Selection, and the undo/redo stacks,
         // and gatekeeps all piece mutation through Run/Undo/Redo. Re-pointed at the new Pattern on every rebind.
         // See docs/DOC-TX-REFACTOR.md.
@@ -565,7 +565,7 @@ namespace PieceSolver
             // The derived develop mesh: when the mesh is PIECED (>1 painted region), UNWELD along the creases so
             // each piece is its own connected component — the per-component bake (RunBakeMulti) then develops the
             // painted pieces. Otherwise a plain clone (single-patch develop). The authoring mesh is untouched.
-            var pieceMap = _pattern?.PieceMap;
+            var pieceMap = _doc.Pattern?.PieceMap;
             bool pieced = false;
             if (pieceMap != null && pieceMap.Length == authoring.Mesh.Faces.Count)
             {
@@ -817,19 +817,19 @@ namespace PieceSolver
         // regions. A dangling threshold crease (doesn't split a region) is dropped. Piecer inactive (modal).
         void RelabelCreases()
         {
-            SeedCreaseEdges();          // provisional crease set into _pattern.CreaseMap
+            SeedCreaseEdges();          // provisional crease set into _doc.Pattern.CreaseMap
             _piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
             _doc.ClearHistory();        // Chapter reset: the re-partition invalidates the undo/redo deltas
-            _pattern?.Seed();           // flood-fill the regions across non-crease edges
-            _pattern?.RegenCrease();    // overwrite CreaseMap with the real region-boundary creases
+            _doc.Pattern?.Seed();           // flood-fill the regions across non-crease edges
+            _doc.Pattern?.RegenCrease();    // overwrite CreaseMap with the real region-boundary creases
             RebuildCreaseOverlay();
         }
 
         // Seed a provisional crease set from the threshold-labeled proposed edges (only used to flood-fill the
-        // initial regions in _pattern.Seed; RegenCrease then overwrites CreaseMap with the real boundaries).
+        // initial regions in _doc.Pattern.Seed; RegenCrease then overwrites CreaseMap with the real boundaries).
         void SeedCreaseEdges()
         {
-            if (_pattern == null) return;
+            if (_doc.Pattern == null) return;
             var set = new System.Collections.Generic.HashSet<long>();
             if (_creaseFold != null)
             {
@@ -837,7 +837,7 @@ namespace PieceSolver
                 for (int i = 0; i < _creaseFold.Length; i++)
                     if (_creaseFold[i] >= thr) set.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
             }
-            _pattern.CreaseMap.Supply(set);   // Supply the provisional set; Seed peeks it, then RegenCrease marks it stale
+            _doc.Pattern.CreaseMap.Supply(set);   // Supply the provisional set; Seed peeks it, then RegenCrease marks it stale
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the
@@ -845,7 +845,7 @@ namespace PieceSolver
         // happens in OnRender. The Crease brush calls this after each bump; the slider re-seeds first.
         void RebuildCreaseOverlay()
         {
-            var creaseMap = _pattern?.CreaseMap.Value;   // Transient: lazily derived from PieceMap
+            var creaseMap = _doc.Pattern?.CreaseMap.Value;   // Transient: lazily derived from PieceMap
             if (creaseMap == null || creaseMap.Count == 0 || _session == null)
             {
                 _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
@@ -888,19 +888,19 @@ namespace PieceSolver
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
         // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
         // exactly what ClearProposedCreases would set them to anyway.
-        void RebindPattern() { _pattern = new Pattern(_session?.Mesh); _doc.Rebind(_pattern); }   // Doc re-points + drops history/selection
+        void RebindPattern() => _doc.Rebind(new Pattern(_session?.Mesh));   // Doc re-points + drops history/selection; Pattern lives only on the Doc now
 
         // Merge the selected pieces as a single undoable transaction. Each ADJACENT cluster fuses into one piece
         // (survivor = min id); isolated selected pieces are left as-is. Refused only if no two selected pieces
         // touch (nothing to merge). The selection collapses to the surviving pieces.
         void TryMerge()
         {
-            if (_pattern == null) return;
+            if (_doc.Pattern == null) return;
             var sel = _doc.Pieces;
             if (sel.Count < 2) { _doc.Comment("merge: select 2+ pieces first"); return; }
             var ids = new System.Collections.Generic.HashSet<int>(); foreach (var p in sel.Items) ids.Add(p.Value);
-            var groups = _pattern.MergeGroups(ids);
-            var delta = Commands.Merge(_pattern, groups);
+            var groups = _doc.Pattern.MergeGroups(ids);
+            var delta = Commands.Merge(_doc.Pattern, groups);
             if (delta.Empty) { _doc.Comment("merge: no adjacent pieces to merge"); return; }
             var involved = new System.Collections.Generic.HashSet<int>();              // pieces touched (from ∪ to)
             foreach (var o in delta.Ops) { involved.Add(o.From); involved.Add(o.To); }
@@ -918,9 +918,9 @@ namespace PieceSolver
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos.IsStale && (_pattern == null || _pattern.CreaseMap.IsStale) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
+            if (_creaseFold == null && _proposedPos.IsStale && (_doc.Pattern == null || _doc.Pattern.CreaseMap.IsStale) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos.Clear();
-            if (_pattern != null) { _pattern.CreaseMap.Clear(); _pattern.PieceMap = null; }
+            if (_doc.Pattern != null) { _doc.Pattern.CreaseMap.Clear(); _doc.Pattern.PieceMap = null; }
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
@@ -933,15 +933,15 @@ namespace PieceSolver
         // angle change, on a brush stroke, and on the proposed-mesh preview toggle.
         void RebuildPieces()
         {
-            if (_session == null || _pattern == null)
+            if (_session == null || _doc.Pattern == null)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
             int nV = P.Vertices.Count, nF = P.Faces.Count;
 
             // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
             // missing or stale for this topology — BEFORE pulling the (derived) crease set off it.
-            if (_pattern.PieceMap == null || _pattern.PieceMap.Length != nF) _pattern.Seed();
-            var creaseMap = _pattern.CreaseMap.Value;   // Transient: derived from the now-ensured PieceMap
+            if (_doc.Pattern.PieceMap == null || _doc.Pattern.PieceMap.Length != nF) _doc.Pattern.Seed();
+            var creaseMap = _doc.Pattern.CreaseMap.Value;   // Transient: derived from the now-ensured PieceMap
             if (creaseMap == null || creaseMap.Count == 0)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
 
@@ -950,7 +950,7 @@ namespace PieceSolver
                 ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
 
-            int[] pieceId = _pattern.PieceMap;
+            int[] pieceId = _doc.Pattern.PieceMap;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
             float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
@@ -1646,7 +1646,7 @@ namespace PieceSolver
         // ===================== IEditorHost (the wall the active editor talks through) =====================
 
         PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
-        Pattern IEditorHost.Pattern => _pattern;
+        Pattern IEditorHost.Pattern => _doc.Pattern;
         Doc IEditorHost.Doc => _doc;
         bool IEditorHost.ShowPieces => _showPieces;
         void IEditorHost.RefreshPieces() => RebuildPieces();

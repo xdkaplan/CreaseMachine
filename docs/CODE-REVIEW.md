@@ -17,7 +17,7 @@ the *target* as if *built* (Tier 4).
   (`f147074`→`8547b8c`, value-identical — bench `sumE` bit-identical, FD
   classifications identical pre/post). The three dead-code removals (#10) done
   earlier this session.
-- **Tier 1 — all 5 hazards still open** (verified against the live tree).
+- **Tier 1 — 1 of 5 done** (#1 shadow `_pattern` consolidated 2026-06-24); 4 hazards still open.
 - **Tier 2 — `studio/` deleted ✓, `Picker` extracted ✓**; engine library,
   `DisplaySource`, `BakeRunner` still open.
 - **Tier 4 — doc coherence largely open** (verified: "dirty bit" and
@@ -25,10 +25,12 @@ the *target* as if *built* (Tier 4).
 
 ## Tier 1 — real hazards (small fixes, worth doing soon)
 
-- [ ] **1. Shadow `_pattern` field** — `MainWindow._pattern` parallels
+- [x] **1. Shadow `_pattern` field** — `MainWindow._pattern` parallels
   `Doc.Pattern`, kept equal only by convention. → delete it, route
   `IEditorHost.Pattern` through `_doc.Pattern`. *(Agent A#1)*
-  — *verified still present: 20 refs in `MainWindow.xaml.cs`.*
+  — **done 2026-06-24:** field deleted; all reads + `IEditorHost.Pattern` route
+  through `_doc.Pattern`; `RebindPattern` goes through `_doc.Rebind`. `_doc.Pattern`
+  is now the single authority (0 `_pattern` refs).
 - [ ] **2. Unguarded `_session` swap during bake** — `OnSolveAsync` swaps
   `_session` to a clone and restores in `finally`, but the mesh-index slider /
   `ApplyLoad` aren't gated on `_baking`; a mid-bake load overwrites `_session`,
