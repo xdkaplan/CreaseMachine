@@ -303,6 +303,13 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   action can't be inferred from the deltas alone); and the **Regen / dependency tree** (Real / Transient /
   Ephemeral) is functional and test-protected.
 
+  **Do not modify any Doc orchestration — user acceptance required in all cases.** The transaction layer
+  (`Doc` / `Tx` / `IDelta` / `Op` / the undo-redo stacks / the op-log) is load-bearing and easy to break
+  subtly. Treat it as frozen: do not touch `Run` / `OpenTx` / `CloseTx` / `Undo` / `Redo` / `Record` /
+  `Apply` / `Invert` or the delta shapes without **proposing the change and getting explicit acceptance
+  first** — the same propose → debate → accept workflow as naming. Building new Commands *on top of* the
+  existing primitives is fine; changing the primitives is not.
+
   **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
   - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable
     (mutated only via a tx) and the *only* state written to file.
