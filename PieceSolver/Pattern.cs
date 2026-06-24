@@ -16,11 +16,13 @@ namespace PieceSolver
         // PRIMARY segmentation: per-face piece id (-1 = unused). Seeded by Propose (flood-fill), painted
         // by the Piecer. The hot-path array stays int[]; PieceId is the typed handle at the API boundary.
         public int[] PieceMap;
-        // DERIVED crease set = edges between faces of different region; a materialized view of PieceMap.
-        // Feeds the overlay + piece viz. Rebuilt (lossily) by RegenCrease.
-        public HashSet<long> CreaseMap;
+        // DERIVED crease set = edges between faces of different region; a Transient view of PieceMap. Feeds the
+        // overlay + piece viz. PULL: lazily (re)derived from PieceMap (DeriveCreases) on read; marked stale by
+        // RegenCrease after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Set (see
+        // SeedCreaseEdges). Lossy — rebuilt wholesale, no per-crease identity. See AGENTS.md (Real/Transient).
+        public readonly Transient<HashSet<long>> CreaseMap;
 
-        public Pattern(PlanktonMesh mesh) { _mesh = mesh; }
+        public Pattern(PlanktonMesh mesh) { _mesh = mesh; CreaseMap = new Transient<HashSet<long>>(DeriveCreases); }
 
         // ===================== ops (mutate the authoritative partition) =====================
 
@@ -35,6 +37,7 @@ namespace PieceSolver
             int nF = P.Faces.Count, nH = P.Halfedges.Count;
             var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
             int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            CreaseMap.TryGet(out var seedCreases);   // peek the cached crease set (provisional or last-derived) — no circular regen
             for (int h = 0; h < nH; h++)
             {
                 if (P.Halfedges[h].IsUnused) continue;
@@ -42,7 +45,7 @@ namespace PieceSolver
                 int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
                 if (f1 < 0 || f2 < 0) continue;
                 int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                if (CreaseMap != null && CreaseMap.Contains(EdgeKey(a, b))) continue;
+                if (seedCreases != null && seedCreases.Contains(EdgeKey(a, b))) continue;
                 int ra = Find(f1), rb = Find(f2); if (ra != rb) uf[ra] = rb;
             }
             var region = new int[nF];
@@ -369,13 +372,16 @@ namespace PieceSolver
 
         // ===================== regen (re-derive the cached crease view) =====================
 
-        // Derive the crease set from the region map: an interior edge is a crease iff its two faces are in
-        // different regions. Called after every paint (and after Seed) so the overlay + piece grooves always
-        // trace the current region boundaries. Lossy by design (rebuilds the whole set; no per-crease identity).
-        public void RegenCrease()
+        // Creases are DERIVED from PieceMap (a crease = an interior edge between differing pieces). RegenCrease
+        // marks the CreaseMap Transient stale; it rebuilds lazily (DeriveCreases) on the next read. Called after
+        // every op + Seed. Lossy — rebuilt wholesale, no per-crease identity.
+        public void RegenCrease() => CreaseMap.MarkStale();
+
+        // The pull regen behind the CreaseMap Transient: build the crease set from the current PieceMap.
+        HashSet<long> DeriveCreases()
         {
-            CreaseMap = new HashSet<long>();
-            if (_mesh == null || PieceMap == null) return;
+            var set = new HashSet<long>();
+            if (_mesh == null || PieceMap == null) return set;
             var P = _mesh;
             int nH = P.Halfedges.Count;
             for (int h = 0; h < nH; h++)
@@ -385,8 +391,9 @@ namespace PieceSolver
                 int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
                 if (f1 < 0 || f2 < 0 || PieceMap[f1] == PieceMap[f2]) continue;
                 int a = P.Halfedges[h].StartVertex, b = P.Halfedges[pr].StartVertex;
-                CreaseMap.Add(EdgeKey(a, b));
+                set.Add(EdgeKey(a, b));
             }
+            return set;
         }
 
         // ===================== transactions (ITxAble) =====================

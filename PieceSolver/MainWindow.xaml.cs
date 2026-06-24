@@ -829,11 +829,14 @@ namespace PieceSolver
         void SeedCreaseEdges()
         {
             if (_pattern == null) return;
-            _pattern.CreaseMap = new System.Collections.Generic.HashSet<long>();
-            if (_creaseFold == null) return;
-            double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
-            for (int i = 0; i < _creaseFold.Length; i++)
-                if (_creaseFold[i] >= thr) _pattern.CreaseMap.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
+            var set = new System.Collections.Generic.HashSet<long>();
+            if (_creaseFold != null)
+            {
+                double thr = _sim.CreaseAngleDeg * Math.PI / 180.0;
+                for (int i = 0; i < _creaseFold.Length; i++)
+                    if (_creaseFold[i] >= thr) set.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
+            }
+            _pattern.CreaseMap.Set(set);   // PUSH the provisional set; Seed peeks it, then RegenCrease marks it stale
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the
@@ -841,7 +844,7 @@ namespace PieceSolver
         // happens in OnRender. The Crease brush calls this after each bump; the slider re-seeds first.
         void RebuildCreaseOverlay()
         {
-            var creaseMap = _pattern?.CreaseMap;
+            var creaseMap = _pattern?.CreaseMap.Value;   // Transient: lazily derived from PieceMap
             if (creaseMap == null || creaseMap.Count == 0 || _session == null)
             {
                 _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
@@ -911,9 +914,9 @@ namespace PieceSolver
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos.IsStale && (_pattern == null || _pattern.CreaseMap == null) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
+            if (_creaseFold == null && _proposedPos.IsStale && (_pattern == null || _pattern.CreaseMap.IsStale) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos.Clear();
-            if (_pattern != null) { _pattern.CreaseMap = null; _pattern.PieceMap = null; }
+            if (_pattern != null) { _pattern.CreaseMap.Clear(); _pattern.PieceMap = null; }
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
@@ -926,19 +929,23 @@ namespace PieceSolver
         // angle change, on a brush stroke, and on the proposed-mesh preview toggle.
         void RebuildPieces()
         {
-            var creaseMap = _pattern?.CreaseMap;
-            if (_session == null || creaseMap == null || creaseMap.Count == 0)
+            if (_session == null || _pattern == null)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
             int nV = P.Vertices.Count, nF = P.Faces.Count;
+
+            // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
+            // missing or stale for this topology — BEFORE pulling the (derived) crease set off it.
+            if (_pattern.PieceMap == null || _pattern.PieceMap.Length != nF) _pattern.Seed();
+            var creaseMap = _pattern.CreaseMap.Value;   // Transient: derived from the now-ensured PieceMap
+            if (creaseMap == null || creaseMap.Count == 0)
+            { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+
             double[] dp = ProposedPreviewPos();
             Vector3 Pos(int v) => dp != null
                 ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
 
-            // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
-            // missing or stale for this topology.
-            if (_pattern.PieceMap == null || _pattern.PieceMap.Length != nF) _pattern.Seed();
             int[] pieceId = _pattern.PieceMap;
             int pieceCount = 0; for (int f = 0; f < nF; f++) if (pieceId[f] + 1 > pieceCount) pieceCount = pieceId[f] + 1;
 
