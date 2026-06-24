@@ -1502,8 +1502,8 @@ namespace PieceSolver
         bool _replaySolvePending;   // a replayed Solve is in flight; log + advance once _baking clears
         string _replaySolveLine;    // the serialized Solve line, held for the deferred completion log
 
-        void Echo(string line) => _console?.AppendLine(line);          // a bare op/command line (the replayable DSL)
-        void Log(string msg) => _console?.AppendLine("# " + msg);      // a comment line (narration) — '#'-prefixed so the Console is a valid journal
+        void Echo(string line) => _console?.AppendLine(line);          // the Console sink for every Doc-recorded line (op/command OR '#' comment)
+        void Log(string msg) => _doc.Comment(msg);                     // narration -> the event log (canonical) -> Recorded -> Echo -> Console
 
         void UpdateStatus()
         {
