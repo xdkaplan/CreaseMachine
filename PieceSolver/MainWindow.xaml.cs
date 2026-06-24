@@ -902,6 +902,9 @@ namespace PieceSolver
             var groups = _pattern.MergeGroups(ids);
             var delta = Commands.Merge(_pattern, groups);
             if (delta.Empty) { Log("merge: no adjacent pieces to merge"); return; }
+            var involved = new System.Collections.Generic.HashSet<int>();              // pieces touched (from ∪ to)
+            foreach (var o in delta.Ops) { involved.Add(o.From); involved.Add(o.To); }
+            _doc.Comment($"merge {involved.Count} pieces, {delta.Ops.Count} faces");   // label the otherwise-opaque setpiece block
             if (_doc.Run(delta))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
             {
                 var survivors = new System.Collections.Generic.HashSet<PieceId>();
