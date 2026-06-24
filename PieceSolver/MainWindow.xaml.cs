@@ -14,8 +14,8 @@ namespace PieceSolver
     public partial class MainWindow : Window, IEditorHost
     {
         GLWpfControl _gl;
-        MeshView _view;
-        MeshView _flatView;          // BFF flat map M', drawn beside M (offset in +X) on the z=0 plane
+        MeshView _renderer;
+        MeshView _flatRenderer;          // BFF flat map M', drawn beside M (offset in +X) on the z=0 plane
         PlanktonMesh _flat;          // the live flat map M' the isometric solver mutates (retained from ShowFlat)
         CreaseMachine.Vec3[] _M0;    // original M positions, captured when the flat first appears (proximity anchor)
         double _lastEIso;            // last E_iso (edge-length-squared mismatch) for the convergence readout
@@ -618,8 +618,8 @@ namespace PieceSolver
                     _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
                 }
                 _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
-                if (_view != null) _view.Upload(developed ? _developed.Value : _session.Mesh);   // show the developed result, else authoring
-                if (_hasFlat && _flatView != null && _flat != null) { _flatView.Upload(_flat); PlaceFlat(); }
+                if (_renderer != null) _renderer.Upload(developed ? _developed.Value : _session.Mesh);   // show the developed result, else authoring
+                if (_hasFlat && _flatRenderer != null && _flat != null) { _flatRenderer.Upload(_flat); PlaceFlat(); }
                 _meshDirty = false; _rulingsDirty = true;     // mesh just uploaded; recompute rulings if shown
                 RefreshSeamDisplay();
                 if (!double.IsNaN(_bakeStrain)) _sim.StrainPct = _bakeStrain;
@@ -701,7 +701,7 @@ namespace PieceSolver
                     OpenCreaseReview();   // camera-only modal: full patchwork + Crease angle slider + Accept/Cancel
                     _doc.Comment($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
-                if (_view != null) _view.Upload(_session.Mesh);   // input mesh, or the proposed preview if toggled
+                if (_renderer != null) _renderer.Upload(_session.Mesh);   // input mesh, or the proposed preview if toggled
                 _meshDirty = false;
                 Title = "PieceSolver — " + (token.IsCancellationRequested ? "propose cancelled" : _creaseCount + " creases proposed");
                 _gl?.InvalidateVisual();
@@ -762,7 +762,7 @@ namespace PieceSolver
                 onCancel: () =>
                 {
                     ClearProposedCreases();   // discard the proposal entirely
-                    if (_view != null && _session != null) _view.Upload(_session.Mesh);
+                    if (_renderer != null && _session != null) _renderer.Upload(_session.Mesh);
                     _gl?.InvalidateVisual();
                     _doc.Comment("crease proposal discarded");
                 });
@@ -968,7 +968,7 @@ namespace PieceSolver
             int[] pieceId = _doc.Pattern.PieceMap;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
-            float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
+            float meshR = (_renderer != null) ? Math.Max(1e-4f, _renderer.Radius) : 1f;
             float cap = 0.25f * meshR;
             _pieceInset = 0.06f * meshR;
             var dist = new float[nV]; for (int v = 0; v < nV; v++) dist[v] = cap;
@@ -1251,9 +1251,9 @@ namespace PieceSolver
             if (_session == null) return;
             SubdivideCompute();
             bool aligned = _flat != null && _M0 != null && _M0.Length == _session.Mesh.Vertices.Count;
-            if (aligned && _flatView != null)
+            if (aligned && _flatRenderer != null)
             {
-                _flatView.Upload(_flat);                                  // re-upload the refined M'
+                _flatRenderer.Upload(_flat);                                  // re-upload the refined M'
                 _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;    // strain stays ~constant (subdivide is metric-preserving)
             }
             _meshDirty = true;
@@ -1343,10 +1343,10 @@ namespace PieceSolver
         // plus a gap). Driven by EnsureFlat's lazy first flatten. Sets _hasFlat.
         void ShowFlat(PlanktonMesh flat)
         {
-            if (_view == null || _flatView == null) return;   // GL views not built yet (pre-first-render)
+            if (_renderer == null || _flatRenderer == null) return;   // GL views not built yet (pre-first-render)
             _flat = flat;             // retain M' — the actual mesh the isometric solver mutates
             CaptureM0();              // snapshot M's positions once per mesh (proximity anchor for the solver)
-            _flatView.Upload(flat);   // sets _flatView.Center / .Radius from the flat geometry
+            _flatRenderer.Upload(flat);   // sets _flatRenderer.Center / .Radius from the flat geometry
             PlaceFlat();              // place M' beside M on the z=0 plane
 
             _hasFlat = true;
@@ -1359,13 +1359,13 @@ namespace PieceSolver
         // from ShowFlat (first flatten) so M' sits alongside M.
         void PlaceFlat()
         {
-            if (_view == null || _flatView == null) return;
-            float gap = 0.3f * (_view.Radius + _flatView.Radius);
+            if (_renderer == null || _flatRenderer == null) return;
+            float gap = 0.3f * (_renderer.Radius + _flatRenderer.Radius);
             var targetCenter = new Vector3(
-                _view.Center.X + _view.Radius + _flatView.Radius + gap,
-                _view.Center.Y,
+                _renderer.Center.X + _renderer.Radius + _flatRenderer.Radius + gap,
+                _renderer.Center.Y,
                 0f);
-            _flatView.ModelOffset = targetCenter - _flatView.Center;
+            _flatRenderer.ModelOffset = targetCenter - _flatRenderer.Center;
         }
 
         // Snapshot the live 3D mesh M's current positions as the proximity anchor M0, ONCE per mesh
@@ -1725,41 +1725,41 @@ namespace PieceSolver
         {
             if (!_glInit)
             {
-                _view = new MeshView();
-                _view.SetNoiseVolume(NoiseVolume.Blue(64, 1337), 64);    // solid blue-noise volume for the surface LIC
-                _flatView = new MeshView(); _flatView.EnsureProgram();   // BFF flat map, drawn beside M
-                _flatView.ShowEdges = true;   // M' is flat (uniform shading) -> reveal its triangulation with edges
+                _renderer = new MeshView();
+                _renderer.SetNoiseVolume(NoiseVolume.Blue(64, 1337), 64);    // solid blue-noise volume for the surface LIC
+                _flatRenderer = new MeshView(); _flatRenderer.EnsureProgram();   // BFF flat map, drawn beside M
+                _flatRenderer.ShowEdges = true;   // M' is flat (uniform shading) -> reveal its triangulation with edges
                 _grid = new GroundGrid();
                 _glInit = true;
             }
 
             // apply a queued matcap texture (GL thread = here); M' shades the same as M
-            if (_matcapDirty && _view != null && _matcapPx != null)
+            if (_matcapDirty && _renderer != null && _matcapPx != null)
             {
-                _view.SetMatcap(_matcapPx, _matcapW, _matcapH);
-                _flatView?.SetMatcap(_matcapPx, _matcapW, _matcapH);
+                _renderer.SetMatcap(_matcapPx, _matcapW, _matcapH);
+                _flatRenderer?.SetMatcap(_matcapPx, _matcapW, _matcapH);
                 _matcapDirty = false;
             }
             // Default-shading pair (neutral + environment), uploaded to both views like the picked matcap.
-            if (_neutralDirty && _view != null && _neutralPx != null)
+            if (_neutralDirty && _renderer != null && _neutralPx != null)
             {
-                _view.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH);
-                _flatView?.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH);
+                _renderer.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH);
+                _flatRenderer?.SetNeutralMatcap(_neutralPx, _neutralW, _neutralH);
                 _neutralDirty = false;
             }
-            if (_envDirty && _view != null && _envPx != null)
+            if (_envDirty && _renderer != null && _envPx != null)
             {
-                _view.SetEnvMatcap(_envPx, _envW, _envH);
-                _flatView?.SetEnvMatcap(_envPx, _envW, _envH);
+                _renderer.SetEnvMatcap(_envPx, _envW, _envH);
+                _flatRenderer?.SetEnvMatcap(_envPx, _envW, _envH);
                 _envDirty = false;
             }
             // staged proposed-crease line vertices (GL thread); gate on !_baking like the mesh upload
-            if (_creaseDirty && !_baking && _view != null) { _view.SetCreases(_creasePts ?? System.Array.Empty<float>()); _creaseDirty = false; }
+            if (_creaseDirty && !_baking && _renderer != null) { _renderer.SetCreases(_creasePts ?? System.Array.Empty<float>()); _creaseDirty = false; }
             // staged piece-visualization buffers (GL thread)
-            if (_pieceDirty && !_baking && _view != null)
+            if (_pieceDirty && !_baking && _renderer != null)
             {
-                if (_piecePos != null && _piecePos.Length > 0) _view.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge);
-                else _view.ClearPieces();
+                if (_piecePos != null && _piecePos.Length > 0) _renderer.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge);
+                else _renderer.ClearPieces();
                 _pieceDirty = false;
             }
 
@@ -1768,7 +1768,7 @@ namespace PieceSolver
             if (_meshDirty && !_baking && _session != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                _view.Upload(_session.Mesh);
+                _renderer.Upload(_session.Mesh);
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;
@@ -1777,13 +1777,13 @@ namespace PieceSolver
 
             // Re-fit the camera (and ground grid) when flagged — after a load/reset, and when the BFF
             // flat map M' first appears (so M' isn't left off to the side). Fits M, plus M' if shown.
-            if (_reframe && _view != null && _view.HasMesh)
+            if (_reframe && _renderer != null && _renderer.HasMesh)
             {
-                Vector3 fitCenter = _view.Center; float fitRadius = _view.Radius;
-                if (_hasFlat && _flatView != null && _flatView.HasMesh)
+                Vector3 fitCenter = _renderer.Center; float fitRadius = _renderer.Radius;
+                if (_hasFlat && _flatRenderer != null && _flatRenderer.HasMesh)
                 {
-                    Vector3 flatCen = _flatView.Center + _flatView.ModelOffset;   // M' placed center
-                    float flatRad = _flatView.Radius;
+                    Vector3 flatCen = _flatRenderer.Center + _flatRenderer.ModelOffset;   // M' placed center
+                    float flatRad = _flatRenderer.Radius;
                     Vector3 bbLo = Vector3.ComponentMin(fitCenter - new Vector3(fitRadius), flatCen - new Vector3(flatRad));
                     Vector3 bbHi = Vector3.ComponentMax(fitCenter + new Vector3(fitRadius), flatCen + new Vector3(flatRad));
                     fitCenter = (bbLo + bbHi) * 0.5f; fitRadius = MathF.Max(1e-4f, (bbHi - bbLo).Length * 0.5f);
@@ -1830,24 +1830,24 @@ namespace PieceSolver
             Vector3 dir = CamDir();
             Vector3 eye = _target + dir * _distance;
             Matrix4 view = Matrix4.LookAt(eye, _target, Vector3.UnitZ);
-            float r = _view != null ? _view.Radius : 1f;
+            float r = _renderer != null ? _renderer.Radius : 1f;
             Matrix4 proj = Matrix4.CreatePerspectiveFieldOfView(
                 MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
-            if (_view != null)
+            if (_renderer != null)
             {
-                _view.Sharpness = (float)_sim.Facet; _view.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
-                _view.Shine = (float)_sim.Shine; _view.UseMatcap = _sim.UseMatcap;            // Shine shading
-                _view.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
-                _view.ShowPieces = _showPieces; _view.InsetWidth = (float)_sim.InsetWidthFrac * Math.Max(1e-4f, _view.Radius);   // per-piece view; live inset width (world-relative)
+                _renderer.Sharpness = (float)_sim.Facet; _renderer.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
+                _renderer.Shine = (float)_sim.Shine; _renderer.UseMatcap = _sim.UseMatcap;            // Shine shading
+                _renderer.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
+                _renderer.ShowPieces = _showPieces; _renderer.InsetWidth = (float)_sim.InsetWidthFrac * Math.Max(1e-4f, _renderer.Radius);   // per-piece view; live inset width (world-relative)
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
-                _view.LicMode = _sim.ShowRuling ? 1 : 0;
-                if (_sim.ShowRuling && _view.HasMesh && _session != null && _rulingsDirty && !_baking)
+                _renderer.LicMode = _sim.ShowRuling ? 1 : 0;
+                if (_sim.ShowRuling && _renderer.HasMesh && _session != null && _rulingsDirty && !_baking)
                 {
                     float fmax;
                     var fld = RulingField.ComputeField(_session.Mesh, out fmax);
-                    _view.SetField(fld, fmax);
+                    _renderer.SetField(fld, fmax);
                     _rulingsDirty = false;
                 }
                 // Surface-LIC scale, derived from the noise TEXEL size so consecutive march taps stay
@@ -1855,27 +1855,27 @@ namespace PieceSolver
                 // per tap, so the 24-tap convolution sampled decorrelated noise and washed out to a flat
                 // grey ("scale massively off"). NoiseVolume is 64^3, repeated LIC_TILES across the model.
                 float licTiles = MathF.Max(2f, (float)_sim.LicGrain), NOISE_N = 64f;
-                float licExtent = MathF.Max(1e-3f, 2f * _view.Radius);
-                _view.NoiseFreq   = licTiles / licExtent;
-                _view.LicStep     = licExtent / (licTiles * NOISE_N);   // one noise texel per march tap
-                _view.LicTaps     = System.Math.Clamp(_sim.LicLength, 2, 64);
-                _view.LicStrength = MathF.Max(0f, MathF.Min(1f, (float)_sim.LicAlpha));
-                _view.CurvMin = (float)System.Math.Clamp(_sim.LicCurvMin, 0.0, 1.0);
-                _view.CurvMax = MathF.Max(_view.CurvMin + 0.01f, (float)System.Math.Clamp(_sim.LicCurvMax, 0.0, 1.0));   // keep max > min (smoothstep)
-                _view.ShowSeams = _sim.FixBSplineEdges;
-                if (_sim.FixBSplineEdges && _view.HasMesh && _seamsDirty && !_baking)
+                float licExtent = MathF.Max(1e-3f, 2f * _renderer.Radius);
+                _renderer.NoiseFreq   = licTiles / licExtent;
+                _renderer.LicStep     = licExtent / (licTiles * NOISE_N);   // one noise texel per march tap
+                _renderer.LicTaps     = System.Math.Clamp(_sim.LicLength, 2, 64);
+                _renderer.LicStrength = MathF.Max(0f, MathF.Min(1f, (float)_sim.LicAlpha));
+                _renderer.CurvMin = (float)System.Math.Clamp(_sim.LicCurvMin, 0.0, 1.0);
+                _renderer.CurvMax = MathF.Max(_renderer.CurvMin + 0.01f, (float)System.Math.Clamp(_sim.LicCurvMax, 0.0, 1.0));   // keep max > min (smoothstep)
+                _renderer.ShowSeams = _sim.FixBSplineEdges;
+                if (_sim.FixBSplineEdges && _renderer.HasMesh && _seamsDirty && !_baking)
                 {
-                    _view.SetSeams(_seamLineF ?? System.Array.Empty<float>());
-                    _view.SetSeamControls(_seamCtrlF ?? System.Array.Empty<float>());
+                    _renderer.SetSeams(_seamLineF ?? System.Array.Empty<float>());
+                    _renderer.SetSeamControls(_seamCtrlF ?? System.Array.Empty<float>());
                     _seamsDirty = false;
                 }
-                _view.Draw(view, proj);
+                _renderer.Draw(view, proj);
             }
-            if (_hasFlat && _flatView != null && _flatView.HasMesh)   // BFF flat map M', beside M on the z=0 plane
+            if (_hasFlat && _flatRenderer != null && _flatRenderer.HasMesh)   // BFF flat map M', beside M on the z=0 plane
             {
-                _flatView.Sharpness = (float)_sim.Facet; _flatView.FacetExp = (float)_sim.FacetExp;
-                _flatView.Shine = (float)_sim.Shine; _flatView.UseMatcap = _sim.UseMatcap;
-                _flatView.Draw(view, proj);
+                _flatRenderer.Sharpness = (float)_sim.Facet; _flatRenderer.FacetExp = (float)_sim.FacetExp;
+                _flatRenderer.Shine = (float)_sim.Shine; _flatRenderer.UseMatcap = _sim.UseMatcap;
+                _flatRenderer.Draw(view, proj);
             }
         }
     }
