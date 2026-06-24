@@ -104,6 +104,9 @@ namespace PieceSolver
         // and gatekeeps all piece mutation through Run/Undo/Redo. Re-pointed at the new Pattern on every rebind.
         // See docs/DOC-TX-REFACTOR.md.
         readonly Doc _doc = new Doc();
+        // VIEW: the viewport abstraction bound to the Doc — owns the DISPLAY state (the single source of truth
+        // for what's rendered) + the repaint poke (Rot). Built in the ctor (needs _gl). See PieceSolver/View.cs.
+        readonly View _view;
         // EDITOR: the active interaction. Non-null == a proposal has been accepted and the Crease brush owns the
         // left-button + hover paths. Set in OpenCreaseReview's onAccept, cleared in ClearProposedCreases (mesh
         // change / review-cancel / load / reset / subdivide / run / solve). The Piecer instance is retained so
@@ -120,7 +123,7 @@ namespace PieceSolver
         // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
         // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
         float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
-        bool _pieceDirty, _showPieces; float _pieceInset = 0.05f;
+        bool _pieceDirty; float _pieceInset = 0.05f;
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
         readonly System.Collections.Generic.List<string> _bakeLog = new System.Collections.Generic.List<string>();   // worker log lines, flushed on the UI thread
@@ -130,10 +133,11 @@ namespace PieceSolver
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
             _piecer = new Piecer(this);   // the Piecing editor; activated after Propose -> Accept (see OpenCreaseReview)
+            _view = new View(_doc, () => _gl?.InvalidateVisual());   // the viewport: owns display state + the repaint poke
 
             // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
-            _doc.Pieces.Changed += () => { if (_showPieces) RebuildPieces(); };
+            _doc.Pieces.Changed += () => { if (_view.Display == DisplaySource.Pieces) RebuildPieces(); };
             _doc.Changed += () => { RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };
             _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
@@ -614,7 +618,7 @@ namespace PieceSolver
                     // Flip to the Solver view: the piece view (ShowPieces) REPLACES the matcap mesh, so the
                     // developed mesh stays hidden behind it unless the Piecer-view decorations come off. Drop the
                     // piece colours + crease wires — DISPLAY only; the Pattern / CreaseMap data survive.
-                    _showPieces = false; _pieceDirty = true;
+                    _view.Display = DisplaySource.Developed; _pieceDirty = true;   // Solve shows the developed mesh; Developed => pieces off (no occlusion)
                     _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
                 }
                 _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
@@ -933,13 +937,13 @@ namespace PieceSolver
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos.IsStale && (_doc.Pattern == null || _doc.Pattern.CreaseMap.IsStale) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
+            if (_creaseFold == null && _proposedPos.IsStale && (_doc.Pattern == null || _doc.Pattern.CreaseMap.IsStale) && (_creasePts == null || _creasePts.Length == 0) && _view.Display != DisplaySource.Pieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos.Clear();
             if (_doc.Pattern != null) { _doc.Pattern.CreaseMap.Clear(); _doc.Pattern.PieceMap = null; }
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
-            _showPieces = false; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
+            _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
 
         // Identify pieces (face regions bounded by the crease selection + mesh boundaries) and stage a
@@ -949,7 +953,7 @@ namespace PieceSolver
         void RebuildPieces()
         {
             if (_session == null || _doc.Pattern == null)
-            { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+            { _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
             int nV = P.Vertices.Count, nF = P.Faces.Count;
 
@@ -958,7 +962,7 @@ namespace PieceSolver
             if (_doc.Pattern.PieceMap == null || _doc.Pattern.PieceMap.Length != nF) _doc.Pattern.Seed();
             var creaseMap = _doc.Pattern.CreaseMap.Value;   // Transient: derived from the now-ensured PieceMap
             if (creaseMap == null || creaseMap.Count == 0)
-            { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+            { _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
 
             double[] dp = null;   // proposed-preview removed -> live mesh coords
             Vector3 Pos(int v) => dp != null
@@ -1053,7 +1057,7 @@ namespace PieceSolver
                 }
             }
             _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
-            _pieceDirty = true; _showPieces = _piecePos.Length > 0;
+            _pieceDirty = true; _view.Display = _piecePos.Length > 0 ? DisplaySource.Pieces : DisplaySource.Authoring;
             _gl?.InvalidateVisual();
         }
 
@@ -1696,7 +1700,7 @@ namespace PieceSolver
         PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
         Pattern IEditorHost.Pattern => _doc.Pattern;
         Doc IEditorHost.Doc => _doc;
-        bool IEditorHost.ShowPieces => _showPieces;
+        bool IEditorHost.ShowPieces => _view.Display == DisplaySource.Pieces;
         void IEditorHost.RefreshPieces() => RebuildPieces();
         void IEditorHost.RefreshCreaseOverlay() => RebuildCreaseOverlay();
         void IEditorHost.ShowBrushPreview(System.Windows.Point screen) => UpdatePreview(screen);
@@ -1840,7 +1844,7 @@ namespace PieceSolver
                 _renderer.Sharpness = (float)_sim.Facet; _renderer.FacetExp = (float)_sim.FacetExp;   // Facet -> shader
                 _renderer.Shine = (float)_sim.Shine; _renderer.UseMatcap = _sim.UseMatcap;            // Shine shading
                 _renderer.ShowCreases = _creaseCount > 0;                                          // proposed-crease overlay
-                _renderer.ShowPieces = _showPieces; _renderer.InsetWidth = (float)_sim.InsetWidthFrac * Math.Max(1e-4f, _renderer.Radius);   // per-piece view; live inset width (world-relative)
+                _renderer.ShowPieces = _view.Display == DisplaySource.Pieces; _renderer.InsetWidth = (float)_sim.InsetWidthFrac * Math.Max(1e-4f, _renderer.Radius);   // per-piece view; live inset width (world-relative)
                 // Surface-LIC field (modulates the matcap). Recompute only when the mesh/mode changed.
                 _renderer.LicMode = _sim.ShowRuling ? 1 : 0;
                 if (_sim.ShowRuling && _renderer.HasMesh && _session != null && _rulingsDirty && !_baking)
