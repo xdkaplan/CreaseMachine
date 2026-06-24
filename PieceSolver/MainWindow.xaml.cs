@@ -89,8 +89,9 @@ namespace PieceSolver
         // bake reuses the same modal machinery (_baking / _bakeCts / BakeOverlay).
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
-        // TRANSIENT: settled (developed) geometry from the last Propose, per original vertex (nV*3), for the
-        // DISPLAY preview. PUSH (produced by the Propose bake, not regenerable on demand) — read via Peek.
+        // TRANSIENT (Supplied): settled (developed) geometry from the last Propose, per original vertex (nV*3).
+        // Retained for a future re-surfacing — the "preview proposed mesh" display path was removed; produced by
+        // the Propose bake, not regenerable on demand.
         readonly Transient<double[]> _proposedPos = new Transient<double[]>();
         // TRANSIENT (the Solver's): the developed mesh from the last Solve — a derived clone/unweld of the
         // authoring mesh, NOT the authoring mesh itself (which + its Pattern survive the bake). PUSH (produced
@@ -258,7 +259,6 @@ namespace PieceSolver
                 if (e.PropertyName == nameof(SimSettings.Facet) || e.PropertyName == nameof(SimSettings.FacetExp)
                     || e.PropertyName == nameof(SimSettings.Shine) || e.PropertyName == nameof(SimSettings.UseMatcap)
                     || e.PropertyName == nameof(SimSettings.InsetWidthFrac)) _gl?.InvalidateVisual();
-                else if (e.PropertyName == nameof(SimSettings.ShowProposedMesh)) { _meshDirty = true; RebuildCreaseOverlay(); RebuildPieces(); _gl?.InvalidateVisual(); }   // re-place creases + pieces on the new positions (keep edits)
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg))
                 {
@@ -701,7 +701,7 @@ namespace PieceSolver
                     OpenCreaseReview();   // camera-only modal: full patchwork + Crease angle slider + Accept/Cancel
                     _doc.Comment($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
-                if (_view != null) _view.Upload(_session.Mesh, ProposedPreviewPos());   // input mesh, or the proposed preview if toggled
+                if (_view != null) _view.Upload(_session.Mesh);   // input mesh, or the proposed preview if toggled
                 _meshDirty = false;
                 Title = "PieceSolver — " + (token.IsCancellationRequested ? "propose cancelled" : _creaseCount + " creases proposed");
                 _gl?.InvalidateVisual();
@@ -762,7 +762,7 @@ namespace PieceSolver
                 onCancel: () =>
                 {
                     ClearProposedCreases();   // discard the proposal entirely
-                    if (_view != null && _session != null) _view.Upload(_session.Mesh, ProposedPreviewPos());
+                    if (_view != null && _session != null) _view.Upload(_session.Mesh);
                     _gl?.InvalidateVisual();
                     _doc.Comment("crease proposal discarded");
                 });
@@ -857,7 +857,7 @@ namespace PieceSolver
             }
             PlanktonMesh P = _session.Mesh;
             int nV = P.Vertices.Count;
-            double[] src = ProposedPreviewPos();   // place creases on the previewed mesh when shown, else M0
+            double[] src = null;   // proposed-preview removed -> always place creases on the live mesh (M0)
             var pts = new System.Collections.Generic.List<float>();
             int n = 0;
             foreach (long key in creaseMap)
@@ -881,13 +881,6 @@ namespace PieceSolver
             _creasePts = pts.ToArray(); _creaseCount = n; _creaseDirty = true;
             _gl?.InvalidateVisual();
         }
-
-        // The positions to display for the main mesh: the cached proposed/developed geometry when the
-        // DISPLAY "preview proposed mesh" toggle is on (and valid for the current topology), else null
-        // (= use the live mesh's own coordinates).
-        double[] ProposedPreviewPos()
-            => (_sim.ShowProposedMesh && _proposedPos.Peek(out var pp) && _session != null
-                && pp.Length == _session.Mesh.Vertices.Count * 3) ? pp : null;
 
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
         // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
@@ -967,7 +960,7 @@ namespace PieceSolver
             if (creaseMap == null || creaseMap.Count == 0)
             { _showPieces = false; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
 
-            double[] dp = ProposedPreviewPos();
+            double[] dp = null;   // proposed-preview removed -> live mesh coords
             Vector3 Pos(int v) => dp != null
                 ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
@@ -1775,7 +1768,7 @@ namespace PieceSolver
             if (_meshDirty && !_baking && _session != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                _view.Upload(_session.Mesh, ProposedPreviewPos());
+                _view.Upload(_session.Mesh);
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;
