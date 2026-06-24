@@ -276,6 +276,7 @@ namespace PieceSolver
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { _activeEditor.Deselect(); e.Handled = true; }   // ESC = deselect (same as clicking empty canvas)
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
                 else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
+                else if (e.Key == Key.M && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryMerge(); e.Handled = true; }   // M = merge the selected pieces
                 else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1); UpdatePreview(_lastHover); e.Handled = true;
@@ -880,6 +881,20 @@ namespace PieceSolver
         // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
         // exactly what ClearProposedCreases would set them to anyway.
         void RebindPattern() { _pattern = new Pattern(_session?.Mesh); _doc.Rebind(_pattern); }   // Doc re-points + drops history/selection
+
+        // Merge the selected pieces into one (the min id) as a single undoable transaction. Adjacent-only:
+        // RegionsConnected gates it, so a non-adjacent selection is refused and the result is one connected piece.
+        void TryMerge()
+        {
+            if (_pattern == null) return;
+            var sel = _doc.Pieces;
+            if (sel.Count < 2) { Log("merge: select 2+ pieces first"); return; }
+            var ids = new System.Collections.Generic.HashSet<int>(); foreach (var p in sel.Items) ids.Add(p.Value);
+            if (!_pattern.RegionsConnected(ids)) { Log("merge: selected pieces aren't adjacent"); return; }
+            int keep = int.MaxValue; foreach (var id in ids) keep = Math.Min(keep, id);
+            _doc.Run(Commands.Merge(_pattern, ids, keep));
+            _doc.Pieces.Replace(new PieceId(keep));   // collapse the selection to the survivor
+        }
 
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh
         // mesh, or topology/geometry changed). Idempotent.
