@@ -423,35 +423,41 @@ namespace PieceSolver
 
         // ===================== queries (read-only) =====================
 
-        // True iff the union of the given regions' faces forms a SINGLE connected blob — flood through faces
-        // whose region is in `regions` and check every union face is reached. Each region is itself connected
-        // (the SplitDisconnected invariant), so this is exactly "the selected pieces are mutually adjacent."
-        // Merge's adjacency gate: only a connected selection may merge (so the result is one connected piece).
-        public bool RegionsConnected(HashSet<int> regions)
+        // Merge mapping for a selection: each selected piece -> the survivor of its CONNECTED COMPONENT among the
+        // selection (the min id reachable through adjacent selected pieces). A piece adjacent to no other selected
+        // piece maps to itself. So Merge fuses every adjacent cluster independently and leaves isolated pieces
+        // alone: select {A,B,C} with A|B sharing a border but C off on its own -> A,B -> min(A,B), C -> C. A piece
+        // that maps to a different id is one that will actually move. Read-only.
+        public Dictionary<int, int> MergeGroups(HashSet<int> selection)
         {
-            if (PieceMap == null || _mesh == null || regions == null || regions.Count == 0) return false;
+            var map = new Dictionary<int, int>();
+            if (PieceMap == null || _mesh == null || selection == null || selection.Count == 0) return map;
             var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
-            var adj = new List<int>[nF];
-            for (int h = 0; h < nH; h++)
+            var uf = new int[nF]; for (int i = 0; i < nF; i++) uf[i] = i;
+            int Find(int x) { while (uf[x] != x) { uf[x] = uf[uf[x]]; x = uf[x]; } return x; }
+            for (int h = 0; h < nH; h++)   // union faces of ADJACENT selected pieces -> components of the selection
             {
                 if (P.Halfedges[h].IsUnused) continue;
                 int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
                 int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
                 if (f1 < 0 || f2 < 0) continue;
-                (adj[f1] ??= new List<int>()).Add(f2);
-                (adj[f2] ??= new List<int>()).Add(f1);
+                if (selection.Contains(PieceMap[f1]) && selection.Contains(PieceMap[f2])) { int a = Find(f1), b = Find(f2); if (a != b) uf[a] = b; }
             }
-            int total = 0, start = -1;
+            var survivor = new Dictionary<int, int>();   // component root -> min selected piece id in it
             for (int f = 0; f < nF; f++)
-                if (!P.Faces[f].IsUnused && regions.Contains(PieceMap[f])) { total++; if (start < 0) start = f; }
-            if (total == 0) return false;
-            var seen = new bool[nF]; var q = new Queue<int>(); seen[start] = true; q.Enqueue(start); int reached = 1;
-            while (q.Count > 0)
             {
-                var nbrs = adj[q.Dequeue()]; if (nbrs == null) continue;
-                foreach (int nf in nbrs) if (!seen[nf] && regions.Contains(PieceMap[nf])) { seen[nf] = true; reached++; q.Enqueue(nf); }
+                if (P.Faces[f].IsUnused) continue;
+                int pid = PieceMap[f]; if (!selection.Contains(pid)) continue;
+                int r = Find(f);
+                if (!survivor.TryGetValue(r, out int mn) || pid < mn) survivor[r] = pid;
             }
-            return reached == total;
+            for (int f = 0; f < nF; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int pid = PieceMap[f]; if (!selection.Contains(pid) || map.ContainsKey(pid)) continue;
+                map[pid] = survivor[Find(f)];
+            }
+            return map;
         }
 
         // A fresh, unused region id (one past the current max), so Shift+paint introduces a NEW region rather

@@ -262,7 +262,8 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     (a list of Ops), and **`ITxAble`** (`Apply`/`Invert`).
   - **`Commands`** (`Commands.cs`) — pure functions that read Selection + Real state and **compute** an
     `IDelta` (never mutate; the Doc applies it). The user calls these **Tools**; we call them Commands.
-    First: `Merge` (relabel the selected pieces to the survivor; adjacent-only via `RegionsConnected`).
+    First: `Merge` (fuse each connected component of the selection into its survivor via
+    `Pattern.MergeGroups`; isolated selected pieces are left as-is).
   - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id (an **Element** id at the
     selection boundary). Ints stay dense in `PieceMap` (hot path).
   - **`Editor` / `Piecer`** — `Editor` is the abstract base (lifecycle + pointer hooks + a per-face

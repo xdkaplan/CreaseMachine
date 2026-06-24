@@ -883,18 +883,24 @@ namespace PieceSolver
         // exactly what ClearProposedCreases would set them to anyway.
         void RebindPattern() { _pattern = new Pattern(_session?.Mesh); _doc.Rebind(_pattern); }   // Doc re-points + drops history/selection
 
-        // Merge the selected pieces into one (the min id) as a single undoable transaction. Adjacent-only:
-        // RegionsConnected gates it, so a non-adjacent selection is refused and the result is one connected piece.
+        // Merge the selected pieces as a single undoable transaction. Each ADJACENT cluster fuses into one piece
+        // (survivor = min id); isolated selected pieces are left as-is. Refused only if no two selected pieces
+        // touch (nothing to merge). The selection collapses to the surviving pieces.
         void TryMerge()
         {
             if (_pattern == null) return;
             var sel = _doc.Pieces;
             if (sel.Count < 2) { Log("merge: select 2+ pieces first"); return; }
             var ids = new System.Collections.Generic.HashSet<int>(); foreach (var p in sel.Items) ids.Add(p.Value);
-            if (!_pattern.RegionsConnected(ids)) { Log("merge: selected pieces aren't adjacent"); return; }
-            int keep = int.MaxValue; foreach (var id in ids) keep = Math.Min(keep, id);
-            if (_doc.Run(Commands.Merge(_pattern, ids, keep)))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
-                _doc.Pieces.Replace(new PieceId(keep));          // collapse the selection to the survivor
+            var groups = _pattern.MergeGroups(ids);
+            var delta = Commands.Merge(_pattern, groups);
+            if (delta.Empty) { Log("merge: no adjacent pieces to merge"); return; }
+            if (_doc.Run(delta))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
+            {
+                var survivors = new System.Collections.Generic.HashSet<PieceId>();
+                foreach (var g in groups.Values) survivors.Add(new PieceId(g));   // merged survivors + untouched singletons
+                _doc.Pieces.Set(survivors);
+            }
             else Log("merge: busy — finish the current action first");
         }
 

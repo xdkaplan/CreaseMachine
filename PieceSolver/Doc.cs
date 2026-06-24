@@ -15,6 +15,7 @@ namespace PieceSolver
         public int Count => _set.Count;
         public IEnumerable<T> Items => _set;
         public void Replace(T x) { _set.Clear(); _set.Add(x); Changed?.Invoke(); }
+        public void Set(IEnumerable<T> items) { _set.Clear(); foreach (var x in items) _set.Add(x); Changed?.Invoke(); }
         public void Add(T x)     { if (_set.Add(x))    Changed?.Invoke(); }
         public void Remove(T x)  { if (_set.Remove(x)) Changed?.Invoke(); }
         public void Clear()      { if (_set.Count > 0) { _set.Clear(); Changed?.Invoke(); } }   // user deselect -> notify

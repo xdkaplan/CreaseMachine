@@ -171,27 +171,26 @@ A Command is pure: `(Real state, Selection) → IDelta`. Two equally valid ways 
   renumber into **one** Delta (one undo step). The undo stack still holds only the cheap diff.
 
 ```csharp
-// Merge: relabel every selected piece to the survivor (min id). Direct emit; no SplitDisconnected
-// (adjacent selections — the normal case — yield one connected piece). Returns an empty delta if <2.
-static PieceDelta Merge(Pattern p, Selection<PieceId> sel)
+// Merge: fuse each connected component of the selection into its survivor (min id). Pattern.MergeGroups
+// maps every selected piece -> its component survivor (isolated pieces map to themselves); the command
+// just diffs that into ops. Empty if nothing moves (all selected pieces isolated from each other).
+static PieceDelta Merge(Pattern p, Dictionary<int,int> groups)   // groups = p.MergeGroups(selection)
 {
-    var ops = new List<Op>();
-    if (sel.Count < 2) return new PieceDelta(ops);
-    int keep = int.MaxValue; foreach (var id in sel.Items) keep = Math.Min(keep, id.Value);
-    var map = p.PieceMap;
+    var ops = new List<Op>(); var map = p.PieceMap;
     for (int f = 0; f < map.Length; f++)
-        if (sel.Contains(new PieceId(map[f])) && map[f] != keep) ops.Add(new Op{Face=f, From=map[f], To=keep});
+        if (groups.TryGetValue(map[f], out int surv) && map[f] != surv) ops.Add(new Op{Face=f, From=map[f], To=surv});
     return new PieceDelta(ops);
 }
 ```
 
-Wiring: a keybind (`M`) / button handler does `var d = Merge(doc.Pattern, doc.Pieces); doc.Run(d);`
-then collapses the selection to `{keep}`. Undo/Redo on `Ctrl+Z` / `Ctrl+Y`.
+Wiring: `M` does `var g = pattern.MergeGroups(ids); var d = Merge(pattern, g); if (doc.Run(d)) doc.Pieces.Set(g.Values)`
+— the selection collapses to the survivors (merged clusters + untouched singletons). Undo/Redo on
+`Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`.
 
-**`CanRun` / availability** is a pure predicate over Selection + Real state (`Merge` ⇔ ≥2 pieces
-selected — see the *Merge adjacency* note in Risks). In v1 commands are **functions returning
-`IDelta`** plus a `CanRun`-style guard; a formal `ICommand { CanRun; Compute }` interface is
-deferred until chrome/buttons need uniform enablement (YAGNI).
+**`CanRun` / availability** is a pure predicate over Selection + Real state (`Merge` ⇔ ≥2 pieces selected
+**and** at least one adjacent pair — i.e. a non-empty delta). In v1 commands are **functions returning
+`IDelta`** plus a `CanRun`-style guard; a formal `ICommand { CanRun; Compute }` interface is deferred until
+chrome/buttons need uniform enablement (YAGNI).
 
 ## Transaction scope & the concurrency guard
 
@@ -221,9 +220,10 @@ opened and closed" is the seam where a clean ordering guard drops in.
 3. **The Command computes the delta; `Doc.Run(delta)` applies it.** `store.Apply` is the sole writer.
 4. **Real / Transient** is the undoable boundary. Transient (`CreaseMap`) regens after Apply/Invert.
 5. **Selection lives in the Doc, typed (`Selection<T>`), and is NOT undoable.** Nor is the view/camera.
-6. **Merge is adjacent-only.** `CanMerge` requires the selected pieces to form **one connected
-   group**; non-adjacent pieces are never merged. The result is therefore always one connected
-   piece (the survivor keeps the min id; no auto-split).
+6. **Merge fuses connected components.** Each adjacent cluster of selected pieces merges into one
+   (survivor = min id, via `Pattern.MergeGroups`); a selected piece adjacent to no other selected piece
+   is left as-is. Merge is refused only if no two selected pieces touch (nothing to merge). No auto-split
+   (each cluster is connected by construction). The selection collapses to the surviving pieces.
 7. **Minor id churn is acceptable** until stable ids land; the Doc recomputes the affected selection
    after a mutating op.
 8. **One transaction at a time, opened-and-closed.** Mutating entry points **self-reject** when the Doc
@@ -300,12 +300,12 @@ Merge undoable end-to-end; Step 5 converts the remaining piece ops; Step 6 revis
 - **Verification:** each step builds 0/0 and launches; Steps 3–5 are checked against the
   pre-refactor gesture behavior (select/add/remove, carve, grow, mint, delete) plus the new
   undo/redo. No engine/solver code is touched, so the bench checksums are unaffected.
-- **Merge adjacency (decision 6).** `CanMerge` requires the selected pieces to form **one
-  connected group**, checked by flooding faces through the *union* of selected pieces' faces from
-  one seed: if every union face is reached, the union is a single region ⇔ the pieces are mutually
-  adjacent. A non-adjacent selection **disables** Merge (the `M` key no-ops with a brief console
-  hint). Because the union is connected, the relabel needs **no** `SplitDisconnected` and a
-  disjoint-id piece is never created.
+- **Merge components (decision 6).** `Pattern.MergeGroups` union-finds the selection's faces across
+  shared borders, so each **connected component** of selected pieces gets one survivor (min id);
+  isolated selected pieces map to themselves. Merge fuses every adjacent cluster independently and
+  leaves singletons alone (`{A,B,C}`, A|B adjacent, C off on its own → A∪B, keep C). The `M` key no-ops
+  with a hint only when *no* two selected pieces touch (empty delta). Each cluster is connected by
+  construction, so the relabel needs **no** `SplitDisconnected` and never makes a disjoint-id piece.
 - **Selection staleness (decision 7).** Until stable `PieceId` GUIDs exist, an op that renumbers
   pieces leaves the selection pointing at stale ids; the Doc recomputes it post-op (Merge →
   `{keep}`; carve/grow → keep surviving ids, drop vanished). Accepted as minor churn.
