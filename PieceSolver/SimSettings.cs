@@ -125,9 +125,9 @@ namespace PieceSolver
         }
 
         // The canonical "100%" deCraze weight — the top of the 0-100% scale used by the deCraze
-        // slider (its Maximum maps to DeCrazeMax). Defined once here so the 0.04 isn't a magic number
-        // duplicated across the panel and the Run param round-trip.
-        public double DeCrazeMax => 0.04;
+        // slider (its Maximum maps to DeCrazeMax). Sourced from the engine constant so the 0.04 isn't
+        // a magic number duplicated across the panel, the Run param round-trip, and the engine.
+        public double DeCrazeMax => DevelopabilityEnergy.DeCrazeMax;
 
         // Shading facet (display): 0 = smooth (averaged normals), 1 = faceted (per-face normals). The
         // shader blends between them, so this is continuous and live. Default faceted.

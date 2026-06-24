@@ -31,6 +31,11 @@ namespace CreaseMachine
 
     public static class DevelopabilityEnergy
     {
+        // The canonical "100%" deCraze weight - the top of the 0-100% UI scale a deCraze slider
+        // maps onto (slider 1.0 -> deCraze = DeCrazeMax). One engine constant so the magic 0.04
+        // isn't duplicated across front-end view-models.
+        public const double DeCrazeMax = 0.04;
+
         // EXPERIMENTAL (default OFF -> shipping behavior is byte-identical): adaptive per-vertex
         // DetMix. When enabled, the lambda_min/det blend `a` is raised toward 1 at vertices whose
         // tangent eigenvalues are near-degenerate (lambda_min ~ lambda_max), where the picked
