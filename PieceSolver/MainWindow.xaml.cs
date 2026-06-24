@@ -374,6 +374,16 @@ namespace PieceSolver
             // is already the source of truth, so this sync is skipped (record:true -> no SyncControls).
             if (c.Kind == CmdKind.Solve && !record) SyncControls(c);
 
+            // Mid-bake guard (the #2 hazard): a Load / Subdivide / Revert during a Solve would reassign
+            // _session out from under the bake, whose `finally` then restores the STALE authoring mesh over
+            // your new one. Block the mesh-changers while _baking — the Solve owns the mesh until it finishes
+            // or is cancelled. (Replay is safe: it waits for the bake to clear before the next command.)
+            if (_baking && (c.Kind == CmdKind.Load || c.Kind == CmdKind.Subdivide || c.Kind == CmdKind.Revert))
+            {
+                Title = "PieceSolver — solving… cancel or wait before changing the mesh";
+                return;
+            }
+
             switch (c.Kind)
             {
                 case CmdKind.Load: ApplyLoad(c.Path); break;
