@@ -298,6 +298,10 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   acceptance** before introducing it; never coin or rename unilaterally. This whole vocabulary was settled
   exactly that way (propose → debate → accept), and that is the expected workflow for the next one.
 
+  **Definition of Done** (`docs/DEFINITION-OF-DONE.md`) — the terse bar: every command is **replayable**
+  from the journal, and the journal stays **human-readable & concise** (add a `#` comment only when the
+  user's action can't be inferred from the deltas alone).
+
   **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
   - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable
     (mutated only via a tx) and the *only* state written to file.
