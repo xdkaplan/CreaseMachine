@@ -87,7 +87,9 @@ namespace PieceSolver
         // bake reuses the same modal machinery (_baking / _bakeCts / BakeOverlay).
         double[] _creaseFold; int[] _creaseA, _creaseB;
         float[] _creasePts; bool _creaseDirty; int _creaseCount;
-        double[] _proposedPos;   // settled (developed) geometry from the last Propose, per original vertex (nV*3); for the DISPLAY preview
+        // TRANSIENT: settled (developed) geometry from the last Propose, per original vertex (nV*3), for the
+        // DISPLAY preview. PUSH (produced by the Propose bake, not regenerable on demand) — read via TryGet.
+        readonly Transient<double[]> _proposedPos = new Transient<double[]>();
         // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
         // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). Recreated when the mesh changes.
         Pattern _pattern;
@@ -677,8 +679,9 @@ namespace PieceSolver
                 // BEFORE restoring M0 (only on a completed propose — a cancel leaves the flow mid-way).
                 if (fold != null)
                 {
-                    _proposedPos = new double[nV * 3];
-                    for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; _proposedPos[v * 3] = pv.X; _proposedPos[v * 3 + 1] = pv.Y; _proposedPos[v * 3 + 2] = pv.Z; }
+                    var pp = new double[nV * 3];
+                    for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; pp[v * 3] = pv.X; pp[v * 3 + 1] = pv.Y; pp[v * 3 + 2] = pv.Z; }
+                    _proposedPos.Set(pp);
                 }
                 // Restore the original geometry + momentum: the live mesh returns to the input, and the
                 // cached fold labels reference exactly these (unrenumbered) vertices.
@@ -875,8 +878,8 @@ namespace PieceSolver
         // DISPLAY "preview proposed mesh" toggle is on (and valid for the current topology), else null
         // (= use the live mesh's own coordinates).
         double[] ProposedPreviewPos()
-            => (_sim.ShowProposedMesh && _proposedPos != null && _session != null
-                && _proposedPos.Length == _session.Mesh.Vertices.Count * 3) ? _proposedPos : null;
+            => (_sim.ShowProposedMesh && _proposedPos.TryGet(out var pp) && _session != null
+                && pp.Length == _session.Mesh.Vertices.Count * 3) ? pp : null;
 
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
         // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
@@ -908,8 +911,8 @@ namespace PieceSolver
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos == null && (_pattern == null || _pattern.CreaseMap == null) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
-            _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos = null;
+            if (_creaseFold == null && _proposedPos.IsStale && (_pattern == null || _pattern.CreaseMap == null) && (_creasePts == null || _creasePts.Length == 0) && !_showPieces) return;
+            _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos.Clear();
             if (_pattern != null) { _pattern.CreaseMap = null; _pattern.PieceMap = null; }
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
