@@ -367,7 +367,7 @@ namespace PieceSolver
                 // await, so the replay loop can wait on it). On a live user click this is the develop.
                 case CmdKind.Solve: _ = OnSolveAsync(); break;
             }
-            if (record) { _journal.Add(c); Log(c.Serialize()); }
+            if (record) { _journal.Add(c); Echo(c.Serialize()); }   // the recorded command echoes BARE (it's a replayable line, not a comment)
             else if (c.Kind != CmdKind.Solve) SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
                                     // LIVE run the controls are already the source of truth, and
                                     // re-writing them here round-trips params lossily (it collapsed the
@@ -1499,7 +1499,8 @@ namespace PieceSolver
         bool _replaySolvePending;   // a replayed Solve is in flight; log + advance once _baking clears
         string _replaySolveLine;    // the serialized Solve line, held for the deferred completion log
 
-        void Log(string msg) => _console?.AppendLine(msg);
+        void Echo(string line) => _console?.AppendLine(line);          // a bare op/command line (the replayable DSL)
+        void Log(string msg) => _console?.AppendLine("# " + msg);      // a comment line (narration) — '#'-prefixed so the Console is a valid journal
 
         void UpdateStatus()
         {

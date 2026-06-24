@@ -81,7 +81,9 @@ namespace PieceSolver
         {
             if (line == null) return null;
             line = line.Trim();
-            if (line.Length == 0 || line[0] == '#') return null;
+            if (line.Length == 0 || line[0] == '#') return null;                  // full-line comment / blank
+            int cm = line.IndexOf(" #"); if (cm >= 0) line = line.Substring(0, cm).TrimEnd();   // inline comment (space before '#'; paths with '#' survive)
+            if (line.Length == 0) return null;
             var tok = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
             switch (tok[0].ToLowerInvariant())
             {
