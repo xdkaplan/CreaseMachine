@@ -280,10 +280,20 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     picking / crease-review modal.
 
   **Shared vocabulary** (see `DOC-TX-REFACTOR.md`): **Doc** (orchestrator) · **Store** (`ITxAble`, holds
-  Real state) · **IDelta** / **Op** · **Command** (= the user's "Tool") · **Real vs Transient** (undoable
-  vs regen'd) · **Element** (Piece, Crease, … — was "entity") · **Selection<T>** · **regen** · **Chapter**
-  (reset boundary) · **tx** (one gesture = one transaction). Out of scope today: crease-identity /
-  reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs, journaling of piecing.
+  Real state) · **IDelta** / **Op** · **Command** (= the user's "Tool") · **Real / Transient / Ephemeral**
+  (defined below) · **Element** (Piece, Crease, … — was "entity") · **Selection<T>** · **regen** ·
+  **Chapter** (reset boundary) · **tx** (one gesture = one transaction). Out of scope today: crease-identity
+  / reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs, journaling of piecing.
+
+  **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
+  - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable
+    (mutated only via a tx) and the *only* state written to file.
+  - **Transient** — *derived* from Real (`CreaseMap`, the unwelded PieceMesh, developed geometry, overlays).
+    Not undoable, not saved: carries a derives-from dependency + dirty bit and is **regenerated** from Real
+    (eagerly if cheap, lazily if expensive). Computed-*from* Real, never a live alias of it.
+  - **Ephemeral** — computed once and thrown away when its scope ends: a **transaction** (a gesture's
+    preview accumulators) or an **editor** (the selection, cleared when the editor deactivates), plus view
+    state (camera). Not undoable, not saved, and *not* regenerated — just discarded.
 
 The brush-to-freeze-creases north star and the CreaseStudio consolidation plan live in the user's memory.
 
