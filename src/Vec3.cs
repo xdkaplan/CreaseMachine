@@ -54,14 +54,22 @@ namespace CreaseMachine
 
         public static double Dot(Vec3 a, Vec3 b) { return a.X * b.X + a.Y * b.Y + a.Z * b.Z; }
 
+        /// <summary>
+        /// <c>Math.Acos</c> with the argument clamped to [-1, 1], so floating-point round-off that
+        /// pushes a cosine just past ±1 doesn't return NaN. The single canonical clamp: Vec3.Angle,
+        /// MeshOps.EdgeDihedrals, and the developability energy's dihedral acos all route here.
+        /// </summary>
+        public static double SafeAcos(double cos)
+        {
+            return Math.Acos(Math.Max(-1.0, Math.Min(1.0, cos)));
+        }
+
         /// <summary>Unsigned angle between two vectors in [0, pi]; matches Rhino's Vector3d.VectorAngle.</summary>
         public static double Angle(Vec3 a, Vec3 b)
         {
             double la = a.Length, lb = b.Length;
             if (la < 1e-30 || lb < 1e-30) return 0.0;
-            double c = (a * b) / (la * lb);
-            if (c > 1.0) c = 1.0; else if (c < -1.0) c = -1.0;
-            return Math.Acos(c);
+            return SafeAcos((a * b) / (la * lb));
         }
     }
 }

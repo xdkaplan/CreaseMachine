@@ -328,7 +328,7 @@ namespace CreaseMachine
                 Vec3 u = ca - axis * (ca * axis), w = da - axis * (da * axis);   // components perpendicular to the edge
                 double ul = u.Length, wl = w.Length;
                 if (ul < 1e-12 || wl < 1e-12) continue;                  // sliver-adjacent -> no reliable fold
-                double interior = Math.Acos(Math.Max(-1.0, Math.Min(1.0, (u * w) / (ul * wl))));
+                double interior = Vec3.SafeAcos((u * w) / (ul * wl));
                 fold.Add(Math.PI - interior); ea.Add(a); eb.Add(b);
             }
             edgeA = ea.ToArray(); edgeB = eb.ToArray();

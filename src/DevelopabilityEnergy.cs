@@ -613,7 +613,7 @@ namespace CreaseMachine
 
                     if (1.0 + sinPhi == 1.0) { trig[fi].hasGeom = false; continue; }
 
-                    double phi = SafeAcos(cosPhi);
+                    double phi = Vec3.SafeAcos(cosPhi);
                     Vec3 nuf = NvxNf / sinPhi;
                     Vec3 muvf = Vec3.Cross(nuf, Nv);
                     Vec3 muff = Vec3.Cross(nuf, Nf);
@@ -1333,10 +1333,7 @@ namespace CreaseMachine
 
                     Vec3 NA = faceNormals[fA];
                     Vec3 NB = faceNormals[fB];
-                    double cosPhi = NA * NB;
-                    if (cosPhi > 1.0) cosPhi = 1.0;
-                    else if (cosPhi < -1.0) cosPhi = -1.0;
-                    double phi = Math.Acos(cosPhi);
+                    double phi = Vec3.SafeAcos(NA * NB);
 
                     int va = P.Halfedges[h].StartVertex;
                     int vb = P.Halfedges[h + 1].StartVertex;
@@ -1604,7 +1601,7 @@ namespace CreaseMachine
                 Vec3 NvxNf = Vec3.Cross(Nv, Nf);
                 double sinPhi = NvxNf.Length;
                 if (1.0 + sinPhi == 1.0) continue;
-                double phi = SafeAcos(Nv * Nf);
+                double phi = Vec3.SafeAcos(Nv * Nf);
                 Vec3 muvf = Vec3.Cross(NvxNf, Nv).Normalized();
                 Vec3 Nfw = muvf * phi;
                 m00 += theta * Nfw.X * Nfw.X; m01 += theta * Nfw.X * Nfw.Y; m02 += theta * Nfw.X * Nfw.Z;
@@ -1656,10 +1653,7 @@ namespace CreaseMachine
                     double dAB = crB.Length;
                     if (dAB < 1e-16) continue;
                     Vec3 NB = crB / dAB;
-                    double cosPhi = NA * NB;
-                    if (cosPhi > 1.0) cosPhi = 1.0;
-                    else if (cosPhi < -1.0) cosPhi = -1.0;
-                    l1 += CrazeHuberVal(Math.Acos(cosPhi));   // Huber-smoothed (CrazeBand) - matches analytic path
+                    l1 += CrazeHuberVal(Vec3.SafeAcos(NA * NB));   // Huber-smoothed (CrazeBand) - matches analytic path
                 }
                 weighted += 0.5 * cornerWeightVE * crazeWeight * l1;
             }
@@ -1863,11 +1857,6 @@ namespace CreaseMachine
         }
 
         // --- Helpers ---
-
-        private static double SafeAcos(double x)
-        {
-            return Math.Acos(Math.Max(-1.0, Math.Min(1.0, x)));
-        }
 
         // Smooth replacement for the binary corner guard. Returns 1 at zero defect (smooth or
         // hinge), 0.5 at defect = pi/4 (where the old hard guard cut over), and falls off as
