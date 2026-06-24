@@ -71,7 +71,7 @@ namespace PieceSolver
         readonly Stack<IDelta> _undo = new Stack<IDelta>();
         readonly Stack<IDelta> _redo = new Stack<IDelta>();
 
-        // Op-log emit: the Doc streams committed ops (`setpiece <face> <from> <to>`) + `#` comments to whoever
+        // Op-log emit: the Doc streams committed ops (`setpiece {faces} <from> <to>`) + `#` comments to whoever
         // listens (the Console renders them). The persisted journal is DERIVED on demand — OpLines (the undo
         // stack) + the StudioCommand log — not stored here. See docs/DOC-TX-REFACTOR.md (Revision: the op-log).
         public event Action<string> Recorded;                        // fired per emitted op/comment line
@@ -149,11 +149,21 @@ namespace PieceSolver
         void ApplyInternal(IDelta d)  { if (d is CompositeDelta c) { foreach (var p in c.Parts) ApplyInternal(p); } else Pattern?.Apply(d); }
         void InvertInternal(IDelta d) { if (d is CompositeDelta c) { for (int i = c.Parts.Count - 1; i >= 0; i--) InvertInternal(c.Parts[i]); } else Pattern?.Invert(d); }
 
-        // Serialize a delta's ops to op-lines (CLI-tokenized: `setpiece <face> <from> <to>`).
+        // Serialize a delta's ops to op-lines, grouping faces that share a transition so a merge/relabel reads as
+        // ONE line per `from -> to`: `setpiece {47,51,54,61,62} 2 0`. No spaces in the brace list (one CLI token).
         static void LinesFor(IDelta d, List<string> sink)
         {
-            if (d is CompositeDelta c) { foreach (var p in c.Parts) LinesFor(p, sink); }
-            else if (d is PieceDelta pd) { foreach (var o in pd.Ops) sink.Add($"setpiece {o.Face} {o.From} {o.To}"); }
+            if (d is CompositeDelta c) { foreach (var p in c.Parts) LinesFor(p, sink); return; }
+            if (!(d is PieceDelta pd)) return;
+            var order = new List<(int from, int to)>();                       // groups in first-seen order
+            var byKey = new Dictionary<(int, int), List<int>>();              // (from,to) -> faces
+            foreach (var o in pd.Ops)
+            {
+                var key = (o.From, o.To);
+                if (!byKey.TryGetValue(key, out var faces)) { faces = new List<int>(); byKey[key] = faces; order.Add(key); }
+                faces.Add(o.Face);
+            }
+            foreach (var k in order) sink.Add($"setpiece {{{string.Join(",", byKey[k])}}} {k.from} {k.to}");
         }
         void RecordOps(IDelta d) { var ls = new List<string>(); LinesFor(d, ls); foreach (var l in ls) Record(l); }
 
