@@ -34,4 +34,20 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+  <!-- Continuous version = the git short hash, generated into a BuildInfo.GitHash const at build.
+       Help > About reads it back. Meaningless without the repo — by design. -->
+  <Target Name="StampGitVersion" BeforeTargets="CoreCompile">
+    <Exec Command="git describe --always --dirty --abbrev=7" ConsoleToMSBuild="true" ContinueOnError="true"
+          StandardOutputImportance="low" StandardErrorImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitRev" />
+    </Exec>
+    <PropertyGroup>
+      <GitRev Condition="'$(GitRev)' == ''">unknown</GitRev>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)BuildInfo.g.cs" Overwrite="true" WriteOnlyWhenDifferent="true"
+      Lines="namespace PieceSolver { internal static class BuildInfo { public const string GitHash = &quot;$(GitRev)&quot;%3B } }" />
+    <ItemGroup>
+      <Compile Include="$(IntermediateOutputPath)BuildInfo.g.cs" />
+    </ItemGroup>
+  </Target>
 </Project>
