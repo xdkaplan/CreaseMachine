@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace PieceSolver
 {
@@ -20,11 +21,47 @@ namespace PieceSolver
         public void ClearSilent() { _set.Clear(); }   // programmatic reset (the caller drives its own rebuild)
     }
 
+    // Why the Doc is busy (only one reason at a time — single transaction at a time). Editing = a Tx is open;
+    // Calculating / Opening = a long op owns the Doc. Ready == None && no open Tx.
+    enum Busy { None, Calculating, Opening }
+
+    // An open transaction — the scope a tool brackets its edit with. ONE at a time (enforced by the Doc). While
+    // open it holds the lease (foreign Run/Undo/Redo self-reject); the tool composes its delta(s) and Apply()s
+    // them (live), then Commit() bundles the lot into one undo unit, or Cancel() rolls them back. Disposing an
+    // un-closed Tx warns + auto-cancels (so a leaked / ESC-mashed gesture can't strand the Doc). See
+    // docs/DOC-TX-REFACTOR.md.
+    sealed class Tx : IDisposable
+    {
+        readonly Doc _doc;
+        readonly bool _alive;                 // false = a refused tx (opened while busy) — all ops no-op
+        readonly List<IDelta> _parts = new List<IDelta>();
+        bool _closed;
+        internal Tx(Doc doc, bool alive) { _doc = doc; _alive = alive; }
+        internal List<IDelta> Parts => _parts;
+
+        // Apply a delta now (live, so the view updates) and record it in this transaction.
+        public void Apply(IDelta d)
+        {
+            if (!_alive || _closed || d == null) return;
+            if (d is PieceDelta { Empty: true } || d is CompositeDelta { Empty: true }) return;
+            _doc.ApplyLive(d);
+            _parts.Add(d);
+        }
+        public void Commit() { if (_closed) return; _closed = true; if (_alive) _doc.CloseTx(this, commit: true); }
+        public void Cancel() { if (_closed) return; _closed = true; if (_alive) _doc.CloseTx(this, commit: false); }
+        public void Dispose()
+        {
+            if (_closed) return;
+            Debug.WriteLine("Tx disposed without Commit/Cancel — auto-cancelling.");
+            Cancel();
+        }
+    }
+
     // The orchestrator: owns the Store(s) + Selection(s) + the undo/redo stacks, and gatekeeps all mutation
-    // through Run / Undo / Redo. (Short for Document; "Project" is reserved for a future on-disk workspace.)
-    //   Run(delta)  : Store.Apply -> push undo, clear redo -> fire Changed.   (the single persistent writer)
-    //   Undo/Redo   : move the delta between the two stacks, Invert / Apply.
-    // The Doc never inspects a delta (opaque IDelta); it owns the Store it routes to. See DOC-TX-REFACTOR.md.
+    // through Run / OpenTx / Undo / Redo. (Short for Document; "Project" is reserved for a future on-disk
+    // workspace.) Mutating entry points SELF-REJECT when !Ready, so callers never have to check — a rejected
+    // call is a clean no-op (each delta is all-or-nothing). One transaction at a time; every tx is opened and
+    // closed, which is what makes a future multithreaded ordering guard clean. See docs/DOC-TX-REFACTOR.md.
     sealed class Doc
     {
         public Pattern Pattern { get; private set; }                 // the (only, today) Store
@@ -32,33 +69,72 @@ namespace PieceSolver
 
         readonly Stack<IDelta> _undo = new Stack<IDelta>();
         readonly Stack<IDelta> _redo = new Stack<IDelta>();
+        Tx _open;                                                    // the single open transaction (null = none)
+        public Busy State { get; private set; } = Busy.None;         // a long op (Calculating / Opening) owns the Doc
 
-        public event Action Changed;                                 // Real/Transient changed (Run/Undo/Redo)
+        public event Action Changed;                                 // Real/Transient changed
+        public bool Ready => State == Busy.None && _open == null;    // is a NEW mutation/tx allowed right now
         public bool CanUndo => _undo.Count > 0;
         public bool CanRedo => _redo.Count > 0;
 
         // Re-point at a fresh Store (mesh load / subdivide / reset) and drop the now-meaningless history +
-        // selection — the deltas reference the old face indices, so they cannot survive a re-mesh.
-        public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); Pieces.ClearSilent(); }
+        // selection + any open tx — deltas reference old face indices, so they cannot survive a re-mesh.
+        public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); _open = null; Pieces.ClearSilent(); }
 
         // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
         // SAME mesh, so old deltas reference invalid region ids). Selection is cleared separately by the caller.
         public void ClearHistory() { _undo.Clear(); _redo.Clear(); }
 
-        public void Run(IDelta d)
+        // A long op (bake / open) takes/releases the Doc. While busy, Run/OpenTx/Undo/Redo self-reject.
+        public void EnterBusy(Busy reason) { State = reason; }
+        public void ExitBusy() { State = Busy.None; }
+
+        // Open the single transaction. One at a time: a stale open tx is a leak -> warn + cancel it; opening while
+        // a long op owns the Doc returns a refused (dead) tx whose Apply/Commit no-op.
+        public Tx OpenTx()
         {
-            if (d == null || (d is PieceDelta pd && pd.Empty) || Pattern == null) return;
-            Pattern.Apply(d); _undo.Push(d); _redo.Clear(); Changed?.Invoke();
+            if (_open != null) { Debug.WriteLine("OpenTx while a tx is open — cancelling the stale one."); _open.Cancel(); }
+            if (State != Busy.None) { Debug.WriteLine($"OpenTx during {State} — refused."); return new Tx(this, alive: false); }
+            _open = new Tx(this, alive: true);
+            return _open;
         }
-        public void Undo()
+
+        // One-shot mutation = open + apply + commit, atomically (for button commands like Merge — no gesture).
+        // Returns false if rejected (not Ready) or empty, so the caller can skip its follow-up (e.g. reselect).
+        public bool Run(IDelta d)
         {
-            if (_undo.Count == 0 || Pattern == null) return;
-            var d = _undo.Pop(); Pattern.Invert(d); _redo.Push(d); Changed?.Invoke();
+            if (!Ready || d == null || (d is PieceDelta { Empty: true }) || (d is CompositeDelta { Empty: true })) return false;
+            ApplyInternal(d); _undo.Push(d); _redo.Clear(); Changed?.Invoke();
+            return true;
         }
-        public void Redo()
+
+        public void Undo() { if (!Ready || _undo.Count == 0) return; var d = _undo.Pop(); InvertInternal(d); _redo.Push(d); Changed?.Invoke(); }
+        public void Redo() { if (!Ready || _redo.Count == 0) return; var d = _redo.Pop(); ApplyInternal(d); _undo.Push(d); Changed?.Invoke(); }
+
+        // ---- internals driven by an open Tx ----
+
+        internal void ApplyLive(IDelta d) { ApplyInternal(d); Changed?.Invoke(); }   // a tx part: apply now, repaint
+
+        internal void CloseTx(Tx tx, bool commit)
         {
-            if (_redo.Count == 0 || Pattern == null) return;
-            var d = _redo.Pop(); Pattern.Apply(d); _undo.Push(d); Changed?.Invoke();
+            if (!ReferenceEquals(tx, _open)) return;   // stale / already replaced
+            _open = null;
+            var parts = tx.Parts;
+            if (commit)
+            {
+                if (parts.Count == 1) { _undo.Push(parts[0]); _redo.Clear(); }                          // single delta -> push as-is
+                else if (parts.Count > 1) { _undo.Push(new CompositeDelta(new List<IDelta>(parts))); _redo.Clear(); }   // bundle into one undo unit
+                // 0 parts -> a lease-only tx (e.g. an empty/refused gesture): record nothing
+            }
+            else
+            {
+                for (int i = parts.Count - 1; i >= 0; i--) InvertInternal(parts[i]);   // roll back applied parts, newest first
+                if (parts.Count > 0) Changed?.Invoke();
+            }
         }
+
+        // Recurse composites; route leaf deltas to the (single, today) Store. Multi-store routing lands here later.
+        void ApplyInternal(IDelta d)  { if (d is CompositeDelta c) { foreach (var p in c.Parts) ApplyInternal(p); } else Pattern?.Apply(d); }
+        void InvertInternal(IDelta d) { if (d is CompositeDelta c) { for (int i = c.Parts.Count - 1; i >= 0; i--) InvertInternal(c.Parts[i]); } else Pattern?.Invert(d); }
     }
 }

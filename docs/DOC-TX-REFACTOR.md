@@ -117,19 +117,24 @@ public void Invert(IDelta d) { var pd=(PieceDelta)d; foreach (var o in pd.Ops) P
 ```csharp
 sealed class Doc
 {
-    public Pattern Pattern { get; }                         // the (only, today) Store
+    public Pattern Pattern { get; private set; }            // the (only, today) Store
     public Selection<PieceId> Pieces { get; } = new();      // typed selection — NOT undoable
     readonly Stack<IDelta> _undo = new(), _redo = new();
-    public event Action Changed;                            // Real/Transient changed → view + CanRun react
-    public bool CanUndo => _undo.Count > 0;
-    public bool CanRedo => _redo.Count > 0;
+    Tx _open;                                               // the single open transaction (null = none)
+    public Busy State { get; private set; } = Busy.None;    // a long op (Calculating/Opening) owns the Doc
+    public event Action Changed;
+    public bool Ready => State == Busy.None && _open == null;   // is a NEW mutation/tx allowed right now
 
-    public void Run(IDelta d) { if (d is PieceDelta { Empty: true }) return;
-                                Pattern.Apply(d); _undo.Push(d); _redo.Clear(); Changed?.Invoke(); }
-    public void Undo() { if (_undo.Count==0) return; var d=_undo.Pop(); Pattern.Invert(d); _redo.Push(d); Changed?.Invoke(); }
-    public void Redo() { if (_redo.Count==0) return; var d=_redo.Pop(); Pattern.Apply (d); _undo.Push(d); Changed?.Invoke(); }
+    public Tx OpenTx();                                     // open the one tx (lease); stale -> warn+cancel; busy -> dead tx
+    public bool Run(IDelta d);                              // one-shot = open+apply+commit; self-rejects if !Ready
+    public void Undo();  public void Redo();               // self-reject if !Ready
+    public void EnterBusy(Busy r); public void ExitBusy(); // a long op (bake/open) takes/releases the Doc
 }
 ```
+
+**Mutating entry points SELF-REJECT when `!Ready`** — the guard lives inside `Run`/`Undo`/`Redo`/`OpenTx`,
+not at the call sites, so callers never have to remember to check and a rejected call is a clean no-op
+(each delta is all-or-nothing). `Run` is one-shot sugar for `OpenTx → Apply → Commit`.
 
 `Selection<T>` (lives in the Doc; the Editor mutates it; **not** on the undo stack):
 
@@ -188,6 +193,27 @@ selected — see the *Merge adjacency* note in Risks). In v1 commands are **func
 `IDelta`** plus a `CanRun`-style guard; a formal `ICommand { CanRun; Compute }` interface is
 deferred until chrome/buttons need uniform enablement (YAGNI).
 
+## Transaction scope & the concurrency guard
+
+A gesture brackets its edit with an explicit **transaction scope** so an interleaved command can't corrupt
+an in-flight edit (e.g. `Ctrl+Z` mid-carve — plausible, since carve already holds `Ctrl`):
+
+- **`OpenTx()`** opens the **one** transaction (a lease). While it's open the Doc isn't `Ready`, so foreign
+  `Run`/`Undo`/`Redo`/`OpenTx` **self-reject**. The tool composes its delta privately during the drag
+  (Real state untouched — preview only), then at mouse-up `tx.Apply(delta)` (applies live) + `tx.Commit()`.
+- **One transaction at a time** — a stale open tx is a leak → debug-warn + auto-cancel; a `Tx` disposed
+  without Commit/Cancel auto-cancels. **ESC** mid-stroke → `tx.Cancel()` (rolls back any applied parts;
+  during a brush drag that's zero, since the brush applies only at commit) + disarm the gesture.
+- **A tx accumulates** — `Apply` may be called multiple times; `Commit` bundles them into one
+  `CompositeDelta` = **one undo unit** (invert runs the parts in reverse). The brush only ever commits one
+  delta, but the capability is there for future macro/multi-step tools (and is parallel-friendly).
+- **Long ops own the Doc too** — `EnterBusy(Calculating)` around the bake makes `Run`/`Undo`/`Redo`
+  self-reject while the worker owns the mesh. `Ready == State == None && no open tx`. (`Save` is an atomic
+  read on the UI thread and a gesture leaves Real state at a committed snapshot, so reads never block.)
+
+Single-threaded today, so one-tx-at-a-time costs nothing; when work goes multithreaded, "every tx is
+opened and closed" is the seam where a clean ordering guard drops in.
+
 ## Decisions locked
 
 1. **Recorded Deltas, not snapshots.** Cheaper on the undo stack; the Command produces the delta.
@@ -200,6 +226,9 @@ deferred until chrome/buttons need uniform enablement (YAGNI).
    piece (the survivor keeps the min id; no auto-split).
 7. **Minor id churn is acceptable** until stable ids land; the Doc recomputes the affected selection
    after a mutating op.
+8. **One transaction at a time, opened-and-closed.** Mutating entry points **self-reject** when the Doc
+   isn't `Ready` (open tx or a long op); a rejected call is a clean no-op. A tx **accumulates** and commits
+   as one undo unit. This is the concurrency guard (and the future multithread seam).
 
 ## Non-goals (explicitly out of scope here)
 

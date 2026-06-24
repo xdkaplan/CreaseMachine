@@ -24,6 +24,16 @@ namespace PieceSolver
         public bool Empty => Ops == null || Ops.Count == 0;
     }
 
+    // A bundle of deltas committed as ONE undo unit — the payload of a multi-delta transaction. Apply runs the
+    // parts in order; Invert runs them in REVERSE (handled by the Doc's recursive apply/invert). A brush commits
+    // a single PieceDelta and never produces one of these; macro/multi-step tools will.
+    sealed class CompositeDelta : IDelta
+    {
+        public readonly List<IDelta> Parts;
+        public CompositeDelta(List<IDelta> parts) { Parts = parts; }
+        public bool Empty => Parts == null || Parts.Count == 0;
+    }
+
     // The contract a Store wears to take part in transactions. Driven by the Doc; the Doc is not ITxAble.
     interface ITxAble
     {

@@ -40,6 +40,11 @@ namespace PieceSolver
         public virtual void Deactivate() { }
         public virtual void Deselect() { }   // clear any active selection (ESC / empty-canvas click); no-op by default
 
+        // A gesture is mid-composition (an open Doc transaction). ESC routes to CancelGesture instead of Deselect,
+        // and the host can gate competing actions. CancelGesture aborts the in-flight stroke + its tx. No-op by default.
+        public virtual bool GesturePending => false;
+        public virtual void CancelGesture() { }
+
         public virtual void OnPointerDown(Point screen, ModifierKeys mods) { }
         public virtual void OnPointerMove(Point screen) { }
         public virtual void OnPointerUp(Point screen) { }

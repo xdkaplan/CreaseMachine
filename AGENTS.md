@@ -239,10 +239,14 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   [`docs/DOC-TX-REFACTOR.md`](docs/DOC-TX-REFACTOR.md) (the Doc / undo-redo layer) for the models +
   glossary + roadmap. The vocabulary below is shared by both.
   - **`Doc`** (`Doc.cs`) — the **orchestrator**. Owns the Store(s), the typed `Selection<T>`(s), and the
-    undo/redo stacks, and gatekeeps every piece mutation through `Run` / `Undo` / `Redo` (`Run(delta)` =
-    `Store.Apply` → push undo, clear redo → fire `Changed`). Short for Document; "Project" is reserved for
-    a future on-disk workspace. `Selection<T>` is typed per Element, carries a `Changed` event, and is
-    **NOT** on the undo stack (nor is the view/camera).
+    undo/redo stacks, and gatekeeps every piece mutation through `Run` / `OpenTx` / `Undo` / `Redo`
+    (`Run(delta)` = open + `Store.Apply` + push undo + clear redo → `Changed`; it's one-shot sugar over a
+    transaction). A gesture brackets its edit with **`OpenTx()` … `Tx.Apply`/`Commit`/`Cancel`** — **one tx
+    at a time**, accumulating into one undo unit (`CompositeDelta`). Mutating entry points **self-reject when
+    `!Ready`** (a `Tx` is open, or a long op set `Busy` — e.g. the bake's `EnterBusy(Calculating)`), so a
+    competing `Ctrl+Z` mid-stroke is a clean no-op; ESC cancels an in-flight stroke (`Editor.CancelGesture`).
+    Short for Document; "Project" is reserved for a future on-disk workspace. `Selection<T>` is typed per
+    Element, carries a `Changed` event, and is **NOT** on the undo stack (nor is the view/camera).
   - **`Pattern`** — the (only, today) **Store**: a THIN companion over one `PlanktonMesh` (Plankton has no
     per-face attribute storage). Holds **Real** state — the authoritative **`PieceMap`** (`int[]`, per-face
     piece id) — and a **Transient**, derived **`CreaseMap`** (`HashSet<long>` packed edge keys, edges

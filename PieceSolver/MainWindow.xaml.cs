@@ -273,7 +273,7 @@ namespace PieceSolver
                 if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
-                else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { _activeEditor.Deselect(); e.Handled = true; }   // ESC = deselect (same as clicking empty canvas)
+                else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
                 else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { _doc.Redo(); e.Handled = true; }   // Ctrl+Shift+Z = redo
@@ -592,7 +592,7 @@ namespace PieceSolver
             _view?.Upload(_session.Mesh);          // show the reset mesh, then clear dirty so the bake's mutations aren't uploaded mid-flight
             _meshDirty = false;
 
-            _baking = true;
+            _baking = true; _doc.EnterBusy(Busy.Calculating);   // the Doc rejects Run/Undo/Redo while the worker owns the mesh
             _bakeCts = new CancellationTokenSource();
             _bakeToken = _bakeCts.Token;
             _bakeLog.Clear(); _bakeStrain = double.NaN; _bakeSummary = "";
@@ -608,7 +608,7 @@ namespace PieceSolver
             catch (Exception ex) { _bakeLog.Add("solve failed: " + ex.Message); }
             finally
             {
-                _baking = false;
+                _baking = false; _doc.ExitBusy();
                 BakeOverlay.Visibility = Visibility.Collapsed;
                 foreach (var line in _bakeLog) Log(line);
                 if (_view != null) _view.Upload(_session.Mesh);
@@ -640,7 +640,7 @@ namespace PieceSolver
             for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; sx[v] = pv.X; sy[v] = pv.Y; sz[v] = pv.Z; }
             Vec3[] savedVel = (Vec3[])_session.Vel.Clone();
 
-            _baking = true;
+            _baking = true; _doc.EnterBusy(Busy.Calculating);   // the Doc rejects Run/Undo/Redo while the worker owns the mesh
             _bakeCts = new CancellationTokenSource();
             _bakeToken = _bakeCts.Token;
             BakeBar.Value = 0; BakeStatus.Text = "Proposing creases…"; BakeOverlay.Visibility = Visibility.Visible;
@@ -684,7 +684,7 @@ namespace PieceSolver
                 // cached fold labels reference exactly these (unrenumbered) vertices.
                 for (int v = 0; v < nV; v++) P.Vertices.SetVertex(v, sx[v], sy[v], sz[v]);
                 _session.Vel = savedVel;
-                _baking = false;
+                _baking = false; _doc.ExitBusy();
                 BakeOverlay.Visibility = Visibility.Collapsed;
                 if (fold != null)
                 {
@@ -893,8 +893,9 @@ namespace PieceSolver
             var ids = new System.Collections.Generic.HashSet<int>(); foreach (var p in sel.Items) ids.Add(p.Value);
             if (!_pattern.RegionsConnected(ids)) { Log("merge: selected pieces aren't adjacent"); return; }
             int keep = int.MaxValue; foreach (var id in ids) keep = Math.Min(keep, id);
-            _doc.Run(Commands.Merge(_pattern, ids, keep));
-            _doc.Pieces.Replace(new PieceId(keep));   // collapse the selection to the survivor
+            if (_doc.Run(Commands.Merge(_pattern, ids, keep)))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
+                _doc.Pieces.Replace(new PieceId(keep));          // collapse the selection to the survivor
+            else Log("merge: busy — finish the current action first");
         }
 
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh

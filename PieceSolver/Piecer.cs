@@ -50,6 +50,7 @@ namespace PieceSolver
         HashSet<int> _growTouched;  // candidates the brush passed over (faces not already in the selection)
         HashSet<int> _growConnected;// of _growTouched, the subset that will be added (Green 5); the rest preview Green 2
         Dictionary<int, int> _growAssign;  // grow: face -> selected piece its front reached (null for a mint)
+        Tx _tx;                     // the open Doc transaction for the live brush stroke (lease + commit vehicle)
 
         double _dabAccum;           // screen-px travelled since the last dab (path-spacing accumulator)
         Point _lastPointer;         // previous pointer position, the start of the current stroke segment
@@ -115,6 +116,7 @@ namespace PieceSolver
         void BeginBrush()
         {
             _dragging = true;
+            _tx = _host.Doc.OpenTx();   // hold the lease for the whole stroke — foreign Run/Undo/Redo now self-reject
             _lastPointer = _downScreen; _dabAccum = 0;
             if ((_downMods & ModifierKeys.Control) != 0)
             {
@@ -158,10 +160,11 @@ namespace PieceSolver
                 var touched = _touched;
                 delta = _host.Pattern.ComputeDelta(() => { log = _host.Pattern.Delete(touched); });
             }
+            bool empty = delta.Empty;
             _removing = false; _carve = false; _touched = null;          // drop preview state before the rebuild
             if (log != null) _host.Log(log);
-            _host.Doc.Run(delta);                                        // applies + fires Changed -> view rebuilds (if non-empty)
-            if (delta.Empty && _host.ShowPieces) _host.RefreshPieces();  // refused / no-op: still drop the red preview
+            _tx?.Apply(delta); _tx?.Commit(); _tx = null;               // apply (fires Changed -> rebuild) + close the stroke's tx
+            if (empty && _host.ShowPieces) _host.RefreshPieces();        // refused / no-op: no Changed fired -> drop the red preview
         }
 
         void CommitGrow()
@@ -193,10 +196,11 @@ namespace PieceSolver
                     _host.Pattern.SplitDisconnected();
                 });
             }
+            bool empty = delta.Empty;
             _growActive = false; _growMint = false; _growTouched = null; _growConnected = null; _growAssign = null;
-            _host.Doc.Run(delta);
-            if (didMint && !delta.Empty) Sel.Replace(minted);            // mint -> the new piece becomes the selection
-            else if (delta.Empty && _host.ShowPieces) _host.RefreshPieces();   // no-op: drop the green preview
+            _tx?.Apply(delta); _tx?.Commit(); _tx = null;               // apply (fires Changed -> rebuild) + close the stroke's tx
+            if (didMint && !empty) Sel.Replace(minted);                  // mint -> the new piece becomes the selection
+            else if (empty && _host.ShowPieces) _host.RefreshPieces();   // no-op: drop the green preview
         }
 
         // ===================== brush stroke (path-length spaced dabs) =====================
@@ -315,6 +319,22 @@ namespace PieceSolver
             // Every selected piece -> the active highlight.
             if (Selected(region)) return ActiveRegionColor;
             return null;   // caller defaults to white
+        }
+
+        // ---- gesture lifecycle ----
+        // A brush stroke is mid-composition iff its tx lease is open. ESC routes here instead of to Deselect.
+        public override bool GesturePending => _tx != null;
+
+        // Abort the in-flight stroke (ESC): cancel the tx (nothing was applied during the drag, so it rolls back
+        // zero parts) and disarm so the pending mouse-up does nothing; drop the provisional preview.
+        public override void CancelGesture()
+        {
+            _tx?.Cancel(); _tx = null;
+            bool wasBrush = _removing || _growActive;
+            _removing = false; _carve = false; _touched = null;
+            _growActive = false; _growMint = false; _growTouched = null; _growConnected = null; _growAssign = null;
+            _armed = false; _dragging = false;
+            if (wasBrush && _host.ShowPieces) _host.RefreshPieces();
         }
 
         // ---- selection lifecycle ----
