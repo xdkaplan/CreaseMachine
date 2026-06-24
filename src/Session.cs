@@ -114,7 +114,7 @@ namespace CreaseMachine
             if (_bx == null || _bx.Length != nV) { _bx = new double[nV]; _by = new double[nV]; _bz = new double[nV]; }
             double[] bx = _bx, by = _by, bz = _bz;
 
-            double L = RepEdge(P);
+            double L = MeshOps.RepresentativeEdge(P);
             double t = p.Step * L * L;
             double capLen = L;
             double beta = Math.Max(0.0, Math.Min(0.95, p.Momentum));
@@ -196,21 +196,6 @@ namespace CreaseMachine
                 MeshOps.ProjectedTangentialRelax(P, grad, p.Stabilize, 0.25);
 
             return maxG;
-        }
-
-        // First non-degenerate edge length; the scale that makes Step*L^2 scale/subdivision-invariant.
-        private static double RepEdge(PlanktonMesh P)
-        {
-            for (int i = 0; i < P.Halfedges.Count; i += 2)
-            {
-                if (P.Halfedges[i].IsUnused) continue;
-                PlanktonVertex a = P.Vertices[P.Halfedges[i].StartVertex];
-                PlanktonVertex b = P.Vertices[P.Halfedges[i + 1].StartVertex];
-                double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-                double len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (len > 0) return len;
-            }
-            return 1.0;
         }
     }
 }

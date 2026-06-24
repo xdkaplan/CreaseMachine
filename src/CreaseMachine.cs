@@ -480,7 +480,7 @@ namespace CreaseMachine
                 if (nV == 0) return;
                 if (brushWeights == null || brushWeights.Length != nV) brushWeights = new double[nV];
 
-                double L = RepresentativeEdge(P);
+                double L = MeshOps.RepresentativeEdge(P);
                 double radius = BRUSH_RADIUS_EDGES * L;
                 double radius2 = radius * radius;
 
@@ -613,21 +613,6 @@ namespace CreaseMachine
             if (context == GH_DocumentContext.Close || context == GH_DocumentContext.Unloaded)
                 StopWorker();
             base.DocumentContextChanged(document, context);
-        }
-
-        /// <summary>First real edge length, used to make Step scale-invariant.</summary>
-        private static double RepresentativeEdge(PlanktonMesh P)
-        {
-            for (int i = 0; i < P.Halfedges.Count; i += 2)
-            {
-                if (P.Halfedges[i].IsUnused) continue;
-                PlanktonVertex a = P.Vertices[P.Halfedges[i].StartVertex];
-                PlanktonVertex b = P.Vertices[P.Halfedges[i + 1].StartVertex];
-                double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-                double L = Math.Sqrt(dx * dx + dy * dy + dz * dz);
-                if (L > 0) return L;
-            }
-            return 1.0;
         }
 
         public override GH_Exposure Exposure { get { return GH_Exposure.primary; } }

@@ -193,6 +193,26 @@ namespace CreaseMachine
             return collapsed;
         }
 
+        /// <summary>
+        /// First non-degenerate edge length — the scale that makes the flow's <c>Step·L²</c>
+        /// invariant to mesh scale and to subdivision. Walks even halfedges, skips unused, returns
+        /// the first positive length (else 1.0). The single canonical copy: the GH component, the
+        /// FlowSession step, and the energy's finite-difference probe all route here.
+        /// </summary>
+        public static double RepresentativeEdge(PlanktonMesh P)
+        {
+            for (int i = 0; i < P.Halfedges.Count; i += 2)
+            {
+                if (P.Halfedges[i].IsUnused) continue;
+                PlanktonVertex a = P.Vertices[P.Halfedges[i].StartVertex];
+                PlanktonVertex b = P.Vertices[P.Halfedges[i + 1].StartVertex];
+                double dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
+                double len = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (len > 0) return len;
+            }
+            return 1.0;
+        }
+
         private static double EdgeLength2(PlanktonMesh P, int a, int b)
         {
             double dx = P.Vertices[a].X - P.Vertices[b].X;

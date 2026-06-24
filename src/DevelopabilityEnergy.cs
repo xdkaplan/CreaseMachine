@@ -1435,7 +1435,7 @@ namespace CreaseMachine
             for (int u = 0; u < nV; u++)
                 energy[u] = VertexEnergy(P, u, branchWeight, consolidateWeight, useMaxCov, sharpness, crazeWeight);
 
-            double eps = 1e-4 * RepresentativeEdge(P);
+            double eps = 1e-4 * MeshOps.RepresentativeEdge(P);
             if (eps <= 0) eps = 1e-4;
 
             for (int v = 0; v < nV; v++)
@@ -1860,19 +1860,6 @@ namespace CreaseMachine
             double my = m01 * w.X + m11 * w.Y + m12 * w.Z;
             double mz = m02 * w.X + m12 * w.Y + m22 * w.Z;
             return u.X * mx + u.Y * my + u.Z * mz;
-        }
-
-        private static double RepresentativeEdge(PlanktonMesh P)
-        {
-            for (int i = 0; i < P.Halfedges.Count; i += 2)
-            {
-                if (P.Halfedges[i].IsUnused) continue;
-                Vec3 a = Pos(P.Vertices[P.Halfedges[i].StartVertex]);
-                Vec3 b = Pos(P.Vertices[P.Halfedges[i + 1].StartVertex]);
-                double L = (b - a).Length;
-                if (L > 0) return L;
-            }
-            return 1.0;
         }
 
         // --- Helpers ---
