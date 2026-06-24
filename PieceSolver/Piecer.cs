@@ -229,7 +229,7 @@ namespace PieceSolver
         // Selection only (Ephemeral): no delta, no tx.
         void CommitSelect()
         {
-            var fully = _host.Pattern.FullyMarked(_selTouched);   // pieces whose every face was painted
+            var fully = _host.Pattern.MostlyMarked(_selTouched);   // pieces whose every face was painted
             _selecting = false; _selTouched = null;               // drop preview state before the rebuild
             var sel = new HashSet<PieceId>();
             foreach (int r in fully) sel.Add(new PieceId(r));
@@ -350,7 +350,7 @@ namespace PieceSolver
 
         // ===================== per-face FILL tint (the non-modal piece colouring) =====================
 
-        // Precomputed once per buffer build so FaceFill is O(1) per face (FullyMarked is O(F)).
+        // Precomputed once per buffer build so FaceFill is O(1) per face (MostlyMarked is O(F)).
         HashSet<int> _marked;        // the delete-gesture marked set (null when not removing)
         HashSet<int> _fullyMarked;   // regions wholly marked -> will be deleted (dark red)
         HashSet<int> _selFully;      // plain-select: regions wholly painted -> read the active colour (will be selected)
@@ -360,8 +360,8 @@ namespace PieceSolver
             _marked = (_removing && _touched != null && _touched.Count > 0) ? _touched : null;
             // "fully-marked piece -> dark red" only applies to the no-selection DELETE preview; a carve marks
             // faces (not whole pieces), so a marked selected-piece face is the delete colour.
-            _fullyMarked = (_marked != null && !_carve) ? _host.Pattern.FullyMarked(_touched) : null;
-            _selFully = (_selecting && _selTouched != null && _selTouched.Count > 0) ? _host.Pattern.FullyMarked(_selTouched) : null;
+            _fullyMarked = (_marked != null && !_carve) ? _host.Pattern.MostlyMarked(_touched) : null;
+            _selFully = (_selecting && _selTouched != null && _selTouched.Count > 0) ? _host.Pattern.MostlyMarked(_selTouched) : null;
         }
 
         public override Vector3? FaceFill(int face, int region)

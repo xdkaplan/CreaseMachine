@@ -64,7 +64,7 @@ namespace PieceSolver
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null) return null;
             int nF = P.Faces.Count;
-            var remove = FullyMarked(touched);
+            var remove = MostlyMarked(touched);
             if (remove.Count == 0) return null;
             bool IsRemoved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && remove.Contains(PieceMap[f]);
 
@@ -421,7 +421,7 @@ namespace PieceSolver
         // The set of regions at least ~90% marked (a big piece needn't be 100% covered to read as intended — the
         // unmarked sliver is treated as part of it; tiny pieces still need ~all of it). O(F). Used by the no-selection
         // "kill & donate" delete and the plain multi-select (both act on whole pieces; carving never removes whole pieces).
-        public HashSet<int> FullyMarked(HashSet<int> touched)
+        public HashSet<int> MostlyMarked(HashSet<int> touched)
         {
             var result = new HashSet<int>();
             if (touched == null || touched.Count == 0 || PieceMap == null || _mesh == null) return result;
