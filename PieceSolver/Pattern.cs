@@ -418,8 +418,9 @@ namespace PieceSolver
             return new PieceId(mx + 1);
         }
 
-        // The set of regions whose faces are ALL marked (so they read dark red and will be removed). O(F).
-        // Used only by the no-selection "kill & donate" remove path (carving never removes whole pieces).
+        // The set of regions at least ~90% marked (a big piece needn't be 100% covered to read as intended — the
+        // unmarked sliver is treated as part of it; tiny pieces still need ~all of it). O(F). Used by the no-selection
+        // "kill & donate" delete and the plain multi-select (both act on whole pieces; carving never removes whole pieces).
         public HashSet<int> FullyMarked(HashSet<int> touched)
         {
             var result = new HashSet<int>();
@@ -434,7 +435,8 @@ namespace PieceSolver
                 total[r] = DictGet(total, r) + 1;
                 if (touched.Contains(f)) hit[r] = DictGet(hit, r) + 1;
             }
-            foreach (var kv in total) if (DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
+            // >= 90% of the piece's faces marked (integer-safe: hit/total >= 9/10).
+            foreach (var kv in total) if (DictGet(hit, kv.Key) * 10 >= kv.Value * 9) result.Add(kv.Key);
             return result;
         }
 
