@@ -9,7 +9,7 @@ namespace PieceSolver
     // (CreaseMap) + the ops that mutate them. NOT a mesh — it stores no geometry, only the per-face
     // piece labels index-coupled to the held mesh. (Plankton has no per-face attribute storage, so the
     // labels have nowhere to live ON the mesh — they live here.) See docs/PIECER-REFACTOR.md.
-    sealed class Pattern
+    sealed class Pattern : ITxAble
     {
         readonly PlanktonMesh _mesh;
 
@@ -389,7 +389,55 @@ namespace PieceSolver
             }
         }
 
+        // ===================== transactions (ITxAble) =====================
+
+        // Apply / Invert a PieceDelta to the Real state (PieceMap), then regen the Transient view (CreaseMap).
+        // The single persistent writer of PieceMap (driven only by Doc.Run / Redo / Undo). See DOC-TX-REFACTOR.md.
+        public void Apply(IDelta d)
+        {
+            if (PieceMap == null || !(d is PieceDelta pd)) return;
+            foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.To;
+            RegenCrease();
+        }
+        public void Invert(IDelta d)
+        {
+            if (PieceMap == null || !(d is PieceDelta pd)) return;
+            foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.From;
+            RegenCrease();
+        }
+
         // ===================== queries (read-only) =====================
+
+        // True iff the union of the given regions' faces forms a SINGLE connected blob — flood through faces
+        // whose region is in `regions` and check every union face is reached. Each region is itself connected
+        // (the SplitDisconnected invariant), so this is exactly "the selected pieces are mutually adjacent."
+        // Merge's adjacency gate: only a connected selection may merge (so the result is one connected piece).
+        public bool RegionsConnected(HashSet<int> regions)
+        {
+            if (PieceMap == null || _mesh == null || regions == null || regions.Count == 0) return false;
+            var P = _mesh; int nF = P.Faces.Count, nH = P.Halfedges.Count;
+            var adj = new List<int>[nF];
+            for (int h = 0; h < nH; h++)
+            {
+                if (P.Halfedges[h].IsUnused) continue;
+                int pr = P.Halfedges.GetPairHalfedge(h); if (pr < 0 || pr < h) continue;
+                int f1 = P.Halfedges[h].AdjacentFace, f2 = P.Halfedges[pr].AdjacentFace;
+                if (f1 < 0 || f2 < 0) continue;
+                (adj[f1] ??= new List<int>()).Add(f2);
+                (adj[f2] ??= new List<int>()).Add(f1);
+            }
+            int total = 0, start = -1;
+            for (int f = 0; f < nF; f++)
+                if (!P.Faces[f].IsUnused && regions.Contains(PieceMap[f])) { total++; if (start < 0) start = f; }
+            if (total == 0) return false;
+            var seen = new bool[nF]; var q = new Queue<int>(); seen[start] = true; q.Enqueue(start); int reached = 1;
+            while (q.Count > 0)
+            {
+                var nbrs = adj[q.Dequeue()]; if (nbrs == null) continue;
+                foreach (int nf in nbrs) if (!seen[nf] && regions.Contains(PieceMap[nf])) { seen[nf] = true; reached++; q.Enqueue(nf); }
+            }
+            return reached == total;
+        }
 
         // A fresh, unused region id (one past the current max), so Shift+paint introduces a NEW region rather
         // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten regions are fine.

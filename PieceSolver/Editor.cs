@@ -11,7 +11,8 @@ namespace PieceSolver
     interface IEditorHost
     {
         PlanktonMesh Mesh { get; }            // the live mesh the Pattern is index-coupled to (= _session.Mesh)
-        Pattern Pattern { get; }              // the partition + crease companion the editor mutates
+        Pattern Pattern { get; }              // the partition + crease companion (the Doc's Store)
+        Doc Doc { get; }                      // the orchestrator: typed Selection + Run/Undo/Redo (tx gate)
         bool ShowPieces { get; }              // is the per-piece split view currently shown (gates live re-pieces)
 
         bool PickFace(Point screen, out int face, out Vector3 hit);   // nearest hit face + point

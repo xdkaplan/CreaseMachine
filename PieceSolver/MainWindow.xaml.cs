@@ -91,6 +91,10 @@ namespace PieceSolver
         // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
         // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). Recreated when the mesh changes.
         Pattern _pattern;
+        // The Doc — the orchestrator that owns the Pattern Store, the typed Selection, and the undo/redo stacks,
+        // and gatekeeps all piece mutation through Run/Undo/Redo. Re-pointed at the new Pattern on every rebind.
+        // See docs/DOC-TX-REFACTOR.md.
+        readonly Doc _doc = new Doc();
         // EDITOR: the active interaction. Non-null == a proposal has been accepted and the Crease brush owns the
         // left-button + hover paths. Set in OpenCreaseReview's onAccept, cleared in ClearProposedCreases (mesh
         // change / review-cancel / load / reset / subdivide / run / solve). The Piecer instance is retained so
@@ -117,6 +121,11 @@ namespace PieceSolver
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
             _piecer = new Piecer(this);   // the Piecing editor; activated after Propose -> Accept (see OpenCreaseReview)
+
+            // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
+            // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
+            _doc.Pieces.Changed += () => { if (_showPieces) RebuildPieces(); };
+            _doc.Changed += () => { RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
             // hidden by default. Created now so Log() works from startup; its Owner is set lazily on
@@ -867,7 +876,7 @@ namespace PieceSolver
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
         // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
         // exactly what ClearProposedCreases would set them to anyway.
-        void RebindPattern() { _pattern = new Pattern(_session?.Mesh); }
+        void RebindPattern() { _pattern = new Pattern(_session?.Mesh); _doc.Rebind(_pattern); }   // Doc re-points + drops history/selection
 
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh
         // mesh, or topology/geometry changed). Idempotent.
@@ -1676,6 +1685,7 @@ namespace PieceSolver
 
         PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
         Pattern IEditorHost.Pattern => _pattern;
+        Doc IEditorHost.Doc => _doc;
         bool IEditorHost.ShowPieces => _showPieces;
         void IEditorHost.RefreshPieces() => RebuildPieces();
         void IEditorHost.RefreshCreaseOverlay() => RebuildCreaseOverlay();
