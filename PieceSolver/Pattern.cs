@@ -60,23 +60,6 @@ namespace PieceSolver
             PieceMap = region;
         }
 
-        // One paint dab: paint REGION MEMBERSHIP. Every face whose centroid falls within the brush radius of
-        // `center` is reassigned to the active region. Brushing across a boundary therefore GROWS the active
-        // region into its neighbour — the crease (a region boundary) follows the brush. Re-derives the crease
-        // set; the caller re-pieces. No geometry moves. Returns true if it changed any face.
-        public bool Paint(Vector3 center, double radius, PieceId active)
-        {
-            if (PieceMap == null || active.Value < 0 || _mesh == null) return false;
-            bool changed = false;
-            foreach (int f in FacesUnderBrush(center, radius))
-            {
-                if (PieceMap[f] == active.Value) continue;
-                PieceMap[f] = active.Value; changed = true;
-            }
-            if (changed) RegenCrease();
-            return changed;
-        }
-
         // Remove the wholly-marked pieces and HEAL the gap by merging their faces into the dominant surviving
         // neighbour (most shared border). Connected removed pieces heal together as one blob; a blob with no
         // surviving neighbour is left as-is. This is the "kill & donate" Ctrl gesture, used when NO piece is
