@@ -218,7 +218,7 @@ namespace PieceSolver
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
-            MenuImport.Click += (s, e) => ImportMesh();   // File > Import (STL / FBX / OBJ; also Ctrl+O)
+            MenuImport.Click += (s, e) => ImportMesh();   // File > Import (STL / FBX / OBJ) — no shortcut; Ctrl+O reserved for Open
             MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
@@ -279,7 +279,6 @@ namespace PieceSolver
             PreviewKeyDown += (s, e) =>
             {
                 if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
-                else if (e.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control) { ImportMesh(); e.Handled = true; }   // Ctrl+O = File > Import
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
@@ -1490,7 +1489,8 @@ namespace PieceSolver
             catch (Exception ex) { Log("save failed: " + ex.Message); }
         }
 
-        // File > Import (Ctrl+O): pick an STL / FBX / OBJ and load it — same path as the startup/mesh-set load,
+        // File > Import (no shortcut — Ctrl+O is reserved for the future File > Open): pick an STL / FBX / OBJ
+        // and load it — same path as the startup/mesh-set load,
         // journaled as a `load` op. FBX preserves Rhino's unwelded seam topology (one component per brep face).
         void ImportMesh()
         {
