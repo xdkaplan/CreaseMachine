@@ -600,7 +600,24 @@ namespace PieceSolver
             // is kept as the Solver Transient _developed and shown). Phase C unwelds-by-CreaseMap instead of
             // cloning when the mesh is pieced. Develop-state is reset for the clone exactly as Revert used to.
             var authoring = _session;
-            _session = new FlowSession(TopologyClone(authoring.Mesh));
+            // The derived develop mesh: when the mesh is PIECED (>1 painted region), UNWELD along the creases so
+            // each piece is its own connected component — the per-component bake (RunBakeMulti) then develops the
+            // painted pieces. Otherwise a plain clone (single-patch develop). The authoring mesh is untouched.
+            var pieceMap = _pattern?.PieceMap;
+            bool pieced = false;
+            if (pieceMap != null && pieceMap.Length == authoring.Mesh.Faces.Count)
+            {
+                int first = -1;
+                for (int f = 0; f < pieceMap.Length; f++)
+                {
+                    if (authoring.Mesh.Faces[f].IsUnused) continue;
+                    if (first < 0) first = pieceMap[f]; else if (pieceMap[f] != first) { pieced = true; break; }
+                }
+            }
+            var developMesh = pieced
+                ? CreaseMachine.MeshOps.UnweldByRegion(authoring.Mesh, pieceMap, out _)
+                : TopologyClone(authoring.Mesh);
+            _session = new FlowSession(developMesh);
             _totalIters = 0; _hasFlat = false; _flat = null; _M0 = null;
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0; _bffNeeded = true;
             _meshDirty = false;
