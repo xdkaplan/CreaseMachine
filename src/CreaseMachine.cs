@@ -389,7 +389,7 @@ namespace CreaseMachine
 
             if (subdivRequest)
             {
-                P = UniformSubdivide(P);
+                P = MeshOps.UniformSubdivide(P);
                 vel = new Vec3[P.Vertices.Count];
                 brushWeights = new double[P.Vertices.Count];   // indices renumbered - blank paint
             }
@@ -628,59 +628,6 @@ namespace CreaseMachine
                 if (L > 0) return L;
             }
             return 1.0;
-        }
-
-        /// <summary>
-        /// Uniform 1->4 (midpoint) subdivision. Keeps every original vertex in place, inserts
-        /// one shared midpoint per edge, and replaces each triangle with 4. Geometry-preserving,
-        /// so existing creases survive exactly - the paper's recipe for refining after the flow.
-        /// </summary>
-        private static PlanktonMesh UniformSubdivide(PlanktonMesh Pin)
-        {
-            var S = new PlanktonMesh();
-            int nV = Pin.Vertices.Count;
-            int nE = Pin.Halfedges.Count / 2;
-            int nF = Pin.Faces.Count;
-
-            // copy original vertices (indices preserved)
-            for (int v = 0; v < nV; v++)
-            {
-                var pv = Pin.Vertices[v];
-                S.Vertices.Add(pv.X, pv.Y, pv.Z);
-            }
-
-            // one shared midpoint vertex per edge
-            int[] edgeMid = new int[nE];
-            for (int e = 0; e < nE; e++)
-            {
-                if (Pin.Halfedges[2 * e].IsUnused) { edgeMid[e] = -1; continue; }
-                int a = Pin.Halfedges[2 * e].StartVertex;
-                int b = Pin.Halfedges[2 * e + 1].StartVertex;
-                var pa = Pin.Vertices[a];
-                var pb = Pin.Vertices[b];
-                edgeMid[e] = S.Vertices.Add(0.5f * (pa.X + pb.X), 0.5f * (pa.Y + pb.Y), 0.5f * (pa.Z + pb.Z));
-            }
-
-            // each triangle -> 3 corner triangles + 1 central, preserving winding
-            for (int f = 0; f < nF; f++)
-            {
-                if (Pin.Faces[f].IsUnused) continue;
-                int[] hes = Pin.Faces.GetHalfedges(f);
-                if (hes.Length != 3) continue; // only subdivide triangles
-                int v0 = Pin.Halfedges[hes[0]].StartVertex;
-                int v1 = Pin.Halfedges[hes[1]].StartVertex;
-                int v2 = Pin.Halfedges[hes[2]].StartVertex;
-                int m0 = edgeMid[hes[0] / 2]; // edge v0-v1
-                int m1 = edgeMid[hes[1] / 2]; // edge v1-v2
-                int m2 = edgeMid[hes[2] / 2]; // edge v2-v0
-                if (m0 < 0 || m1 < 0 || m2 < 0) continue;
-                S.Faces.AddFace(v0, m0, m2);
-                S.Faces.AddFace(m0, v1, m1);
-                S.Faces.AddFace(m2, m1, v2);
-                S.Faces.AddFace(m0, m1, m2);
-            }
-
-            return S;
         }
 
         public override GH_Exposure Exposure { get { return GH_Exposure.primary; } }
