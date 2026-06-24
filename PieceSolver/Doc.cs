@@ -71,10 +71,13 @@ namespace PieceSolver
         readonly Stack<IDelta> _undo = new Stack<IDelta>();
         readonly Stack<IDelta> _redo = new Stack<IDelta>();
 
-        // Op-log emit: the Doc streams committed ops (`setpiece {faces} <from> <to>`) + `#` comments to whoever
-        // listens (the Console renders them). The persisted journal is DERIVED on demand — OpLines (the undo
-        // stack) + the StudioCommand log — not stored here. See docs/DOC-TX-REFACTOR.md (Revision: the op-log).
-        public event Action<string> Recorded;                        // fired per emitted op/comment line
+        // The session EVENT LOG: every committed op (`setpiece {faces} <from> <to>`), `undo` / `redo`, and app
+        // command (load/revert/…) in order, as bare REPLAYABLE lines + `#` comment narration. THIS is the journal
+        // — Save serializes it, and replaying it re-executes each line to faithfully reproduce the session (incl.
+        // the undo/redo dance). The Console renders each line via Recorded. See docs/DOC-TX-REFACTOR.md.
+        readonly List<string> _log = new List<string>();
+        public IReadOnlyList<string> EventLog => _log;
+        public event Action<string> Recorded;                        // fired per emitted line (the Console renders it)
 
         Tx _open;                                                    // the single open transaction (null = none)
         public Busy State { get; private set; } = Busy.None;         // a long op (Calculating / Opening) owns the Doc
@@ -96,9 +99,11 @@ namespace PieceSolver
         public void EnterBusy(Busy reason) { State = reason; }
         public void ExitBusy() { State = Busy.None; }
 
-        // Emit a bare op/command line, or a `#` comment, to the op-log listeners (the Console).
-        public void Record(string line) => Recorded?.Invoke(line);
+        // Append a line to the event log + emit it to listeners (the Console). Record = a bare REPLAYABLE line
+        // (op / command / undo / redo); Comment = a `#` narration line (skipped on replay).
+        public void Record(string line) { _log.Add(line); Recorded?.Invoke(line); }
         public void Comment(string text) => Record("# " + text);
+        public void ClearLog() => _log.Clear();   // the Console's Clear empties the event log
 
         // Open the single transaction. One at a time: a stale open tx is a leak -> warn + cancel it; opening while
         // a long op owns the Doc returns a refused (dead) tx whose Apply/Commit no-op.
@@ -119,8 +124,8 @@ namespace PieceSolver
             return true;
         }
 
-        public void Undo() { if (!Ready || _undo.Count == 0) return; var d = _undo.Pop(); InvertInternal(d); _redo.Push(d); Changed?.Invoke(); }
-        public void Redo() { if (!Ready || _redo.Count == 0) return; var d = _redo.Pop(); ApplyInternal(d); _undo.Push(d); Changed?.Invoke(); }
+        public void Undo() { if (!Ready || _undo.Count == 0) return; var d = _undo.Pop(); InvertInternal(d); _redo.Push(d); Record("undo"); Changed?.Invoke(); }
+        public void Redo() { if (!Ready || _redo.Count == 0) return; var d = _redo.Pop(); ApplyInternal(d); _undo.Push(d); Record("redo"); Changed?.Invoke(); }
 
         // ---- internals driven by an open Tx ----
 
@@ -166,14 +171,5 @@ namespace PieceSolver
             foreach (var k in order) sink.Add($"setpiece {{{string.Join(",", byKey[k])}}} {k.from} {k.to}");
         }
         void RecordOps(IDelta d) { var ls = new List<string>(); LinesFor(d, ls); foreach (var l in ls) Record(l); }
-
-        // The in-effect piece ops as op-lines (the undo stack, oldest first) — the piece half of a saved session.
-        // Read-only and reflects undo BY CONSTRUCTION: undone deltas aren't on the stack, so they aren't emitted.
-        public List<string> OpLines()
-        {
-            var lines = new List<string>(); var arr = _undo.ToArray();      // Stack.ToArray = top..bottom
-            for (int i = arr.Length - 1; i >= 0; i--) LinesFor(arr[i], lines);   // walk bottom..top = oldest first
-            return lines;
-        }
     }
 }

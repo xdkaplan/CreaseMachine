@@ -269,7 +269,7 @@ namespace PieceSolver
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
             _console.SaveButton.Click += (s, e) => SaveSession();
             _console.ReplayButton.Click += (s, e) => OpenAndReplay();
-            _console.ClearButton.Click += (s, e) => { _journal.Clear(); _console.ClearLog(); Log("journal cleared"); };
+            _console.ClearButton.Click += (s, e) => { _journal.Clear(); _doc.ClearLog(); _console.ClearLog(); Log("journal cleared"); };
 
             // Menu bar + keyboard shortcuts (Ctrl+Shift+J = toggle Console). Session-saving lives on the Console's
             // Save button; Ctrl+S is intentionally NOT bound here — it's reserved for the future real save.
@@ -375,12 +375,8 @@ namespace PieceSolver
             }
             if (record)
             {
-                _journal.Add(c);
-                // Load / Revert are coarse ops -> the Doc op-log (Console + journal, as bare replayable lines). The
-                // rest echo to the Console only for now; run/subdivide/matcap/solve get op-ified later (solve stays
-                // off-limits while the solver is being refactored).
-                if (c.Kind == CmdKind.Load || c.Kind == CmdKind.Revert) _doc.Record(c.Serialize());
-                else Echo(c.Serialize());
+                _journal.Add(c);                  // typed list — drives the replay queue
+                _doc.Record(c.Serialize());       // every command is a bare REPLAYABLE line in the event log (+ Console via Recorded)
             }
             else if (c.Kind != CmdKind.Solve) SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
                                     // LIVE run the controls are already the source of truth, and
@@ -1417,10 +1413,8 @@ namespace PieceSolver
             { Filter = "Journal (*.journal)|*.journal|All files (*.*)|*.*", FileName = "session.journal", InitialDirectory = @"C:\Temp" };
             if (dlg.ShowDialog() != true) return;
             var lines = new System.Collections.Generic.List<string> { "# PieceSolver session journal" };
-            foreach (var c in _journal) lines.Add(c.Serialize());
-            var ops = _doc.OpLines();                                   // the in-effect piece edits (the undo stack — reflects undo by construction)
-            if (ops.Count > 0) { lines.Add("# pieces"); lines.AddRange(ops); }
-            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands + " + ops.Count + " ops -> " + System.IO.Path.GetFileName(dlg.FileName)); }
+            lines.AddRange(_doc.EventLog);                              // the full ordered event log: commands + setpiece + undo/redo
+            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _doc.EventLog.Count + " events -> " + System.IO.Path.GetFileName(dlg.FileName)); }
             catch (Exception ex) { Log("save failed: " + ex.Message); }
         }
 
