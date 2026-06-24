@@ -17,5 +17,20 @@ namespace PieceSolver
                 if (groups.TryGetValue(map[f], out int surv) && map[f] != surv) ops.Add(new Op(f, map[f], surv));
             return new PieceDelta(ops);
         }
+
+        // DelPiece: delete the selected pieces, healing each into its dominant surviving neighbour — the
+        // "kill & donate" op, i.e. the same Pattern.Delete a Ctrl-drag runs with nothing selected, but driven
+        // from the selection instead of a brush footprint. touched = every face of the selected pieces, so
+        // Delete's FullyMarked returns exactly the selection; ComputeDelta captures the heal as one rolled-back
+        // delta for Doc.Run. Empty when a selected blob has no surviving neighbour (e.g. the whole mesh
+        // selected) — there's nothing to donate to, so nothing moves.
+        public static PieceDelta DelPiece(Pattern p, HashSet<int> selection)
+        {
+            var map = p?.PieceMap;
+            if (map == null || selection == null || selection.Count == 0) return new PieceDelta(new List<Op>());
+            var touched = new HashSet<int>();
+            for (int f = 0; f < map.Length; f++) if (selection.Contains(map[f])) touched.Add(f);
+            return p.ComputeDelta(() => p.Delete(touched));
+        }
     }
 }

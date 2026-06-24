@@ -271,8 +271,10 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     (a list of Ops), and **`ITxAble`** (`Apply`/`Invert`).
   - **`Commands`** (`Commands.cs`) — pure functions that read Selection + Real state and **compute** an
     `IDelta` (never mutate; the Doc applies it). The user calls these **Tools**; we call them Commands.
-    First: `Merge` (fuse each connected component of the selection into its survivor via
-    `Pattern.MergeGroups`; isolated selected pieces are left as-is).
+    `Merge` (fuse each connected component of the selection into its survivor via
+    `Pattern.MergeGroups`; isolated selected pieces are left as-is) and `DelPiece` (delete the selected
+    pieces, donating each to its dominant surviving neighbour via `Pattern.Delete` — the Ctrl-drag "kill &
+    donate" op driven from the selection rather than a brush footprint).
   - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id (an **Element** id at the
     selection boundary). Ints stay dense in `PieceMap` (hot path).
   - **`Editor` / `Piecer`** — `Editor` is the abstract base (lifecycle + pointer hooks + a per-face
@@ -280,7 +282,8 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     selection is a **set** of pieces (in `Doc.Pieces`); each modifier splits at a ~10px threshold into a
     **tap** and a **drag** — plain tap = replace selection; Shift tap = add, Shift drag = grow (mint when
     empty); Ctrl tap = remove from selection, Ctrl drag = carve (delete whole pieces when empty). `M`
-    merges; `Ctrl+Z` / `Ctrl+Y` undo/redo. Every committing gesture is one `Doc.Run` transaction; the
+    merges; `Del` / `Backspace` deletes the selected pieces (donating each to its neighbour); `Ctrl+Z` /
+    `Ctrl+Y` undo/redo. Every committing gesture is one `Doc.Run` transaction; the
     Piecer computes deltas, no geometry moves.
   - **`IEditorHost`** — the narrow interface `MainWindow` implements so an editor talks to its host (mesh,
     `Pattern`, **`Doc`**, picking, brush footprint, view-refresh hooks) rather than the whole window — the

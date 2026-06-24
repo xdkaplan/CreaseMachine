@@ -284,6 +284,7 @@ namespace PieceSolver
                 else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { _doc.Redo(); e.Handled = true; }   // Ctrl+Shift+Z = redo
                 else if (e.Key == Key.M && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryMerge(); e.Handled = true; }   // M = merge the selected pieces
+                else if ((e.Key == Key.Delete || e.Key == Key.Back) && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryDelPiece(); e.Handled = true; }   // Del / Backspace = delete the selected pieces (donate to neighbour)
                 else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1); UpdatePreview(_lastHover); e.Handled = true;
@@ -912,6 +913,24 @@ namespace PieceSolver
                 _doc.Pieces.Set(survivors);
             }
             else _doc.Comment("merge: busy — finish the current action first");
+        }
+
+        // Delete the selected pieces as one undoable transaction: each is healed into its dominant surviving
+        // neighbour (the "kill & donate" op — same as a Ctrl-drag with nothing selected, but driven from the
+        // selection). Refused when nothing's selected, or when no selected blob has a surviving neighbour to
+        // donate to (empty delta — e.g. the whole mesh selected). The selection clears (the pieces are gone).
+        void TryDelPiece()
+        {
+            if (_doc.Pattern == null) return;
+            var sel = _doc.Pieces;
+            if (sel.Count < 1) { _doc.Comment("delpiece: select a piece first"); return; }
+            var ids = new System.Collections.Generic.HashSet<int>(); foreach (var p in sel.Items) ids.Add(p.Value);
+            var delta = Commands.DelPiece(_doc.Pattern, ids);
+            if (delta.Empty) { _doc.Comment("delpiece: nothing to delete (no surviving neighbour)"); return; }
+            _doc.Comment($"delpiece {ids.Count} pieces, {delta.Ops.Count} faces");   // label the otherwise-opaque setpiece block
+            if (_doc.Run(delta))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
+                _doc.Pieces.Clear();   // the pieces are gone -> clear the selection
+            else _doc.Comment("delpiece: busy — finish the current action first");
         }
 
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh
