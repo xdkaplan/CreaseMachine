@@ -11,7 +11,7 @@ using CreaseMachine;
 
 namespace PieceSolver
 {
-    public partial class MainWindow : Window, IEditorHost
+    public partial class MainWindow : Window
     {
         GLWpfControl _gl;
         MeshView _renderer;
@@ -131,7 +131,6 @@ namespace PieceSolver
         {
             InitializeComponent();
             DataContext = _sim;   // right-panel sliders + the run-button caption bind to this
-            _piecer = new Piecer(this);   // the Piecing editor; activated after Propose -> Accept (see OpenCreaseReview)
 
             // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
@@ -148,7 +147,12 @@ namespace PieceSolver
             Closing += (s, e) => _shuttingDown = true;
 
             _gl = new GLWpfControl();
-            _view = new View(_doc, _gl, () => _session?.Mesh);   // the viewport: display + camera + picking on the GL surface
+            // The viewport IS the editor's host (IEditorHost): display + camera + picking + brush footprint live on
+            // it; the render rebuilds + preview dot are wired in as shell hooks until the render-loop drains.
+            _view = new View(_doc, _gl, () => _session?.Mesh, () => _sim.BrushSize,
+                             RebuildPieces, RebuildCreaseOverlay, UpdatePreview,
+                             () => _previewDot.Visibility = Visibility.Collapsed);
+            _piecer = new Piecer(_view);   // the Piecing editor now talks to the View, not the window
             CenterHost.Children.Add(_gl);   // GL viewport lives in the center cell of the docked layout
             _gl.Start(new GLWpfControlSettings
             {
@@ -1642,54 +1646,21 @@ namespace PieceSolver
         // [ / ] grow / shrink the brush (the same VM param the BRUSH Size slider binds to).
         void ResizeBrush(int delta) => _sim.BrushSize = Math.Clamp(_sim.BrushSize + delta, 1.0, 10.0);   // [ / ] step one notch
 
-        // Dab spacing ~ half the brush's on-screen radius, so spacing scales with the brush and zoom.
-        public double BrushSpacingPx(System.Windows.Point screen)
-        {
-            if (_view.PickSurface(screen, out var hit)) return Math.Max(1.0, 0.5 * ScreenRadiusPx(hit));
-            return 8.0;
-        }
-
-        // Picking (PickRay / PickSurface / PickFace) now lives on the View — it owns the camera, the GL surface, and the mesh accessor.
+        // Picking + the brush footprint (PickFace/PickSurface, BrushWorldRadius/ScreenRadiusPx/BrushSpacingPx)
+        // now live on the View (IEditorHost).
 
         void UpdatePreview(System.Windows.Point cursor)
         {
             if (!EditorActive || !_view.PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
-            double rpx = ScreenRadiusPx(hit);
+            double rpx = _view.ScreenRadiusPx(hit);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;
             _previewDot.Margin = new Thickness(cursor.X - rpx, cursor.Y - rpx, 0, 0);
             _previewDot.Visibility = Visibility.Visible;
         }
 
-        // ===================== IEditorHost (the wall the active editor talks through) =====================
-
-        PlanktonMesh IEditorHost.Mesh => _session?.Mesh;
-        bool IEditorHost.PickFace(System.Windows.Point screen, out int face, out Vector3 hit) => _view.PickFace(screen, out face, out hit);
-        bool IEditorHost.PickSurface(System.Windows.Point screen, out Vector3 hit) => _view.PickSurface(screen, out hit);
-        Pattern IEditorHost.Pattern => _doc.Pattern;
-        Doc IEditorHost.Doc => _doc;
-        bool IEditorHost.ShowPieces => _view.Display == DisplaySource.Pieces;
-        void IEditorHost.RefreshPieces() => RebuildPieces();
-        void IEditorHost.RefreshCreaseOverlay() => RebuildCreaseOverlay();
-        void IEditorHost.ShowBrushPreview(System.Windows.Point screen) => UpdatePreview(screen);
-        void IEditorHost.HideBrushPreview() => _previewDot.Visibility = Visibility.Collapsed;
-        void IEditorHost.Invalidate() => InvalidateView();
-
-        // World-space brush radius. Used by BOTH the paint footprint and the screen preview, so they always agree.
-        // Brush Size is a 1..10 notch indexing a Fibonacci table of world radii (fine low end, fast growth up top).
-        static readonly double[] BrushRadii = { 0.1, 0.2, 0.3, 0.5, 0.8, 1.3, 2.1, 3.4, 5.5, 8.9 };
-        public double BrushWorldRadius => BrushRadii[Math.Clamp((int)Math.Round(_sim.BrushSize), 1, 10) - 1];
-
-        // The brush's world radius projected to screen pixels at the given surface point's depth.
-        public double ScreenRadiusPx(Vector3 hit)
-        {
-            Vector3 dir = _view.Camera.Dir;
-            Vector3 eye = _view.Camera.Eye;
-            double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
-            double h = Math.Max(1, _gl.ActualHeight);
-            double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
-            return BrushWorldRadius * h / (2.0 * dist * tanH);
-        }
+        // The View is now the editor's host (IEditorHost) — see PieceSolver/View.cs. MainWindow keeps only the
+        // render rebuilds (RebuildPieces / RebuildCreaseOverlay) + the preview dot, wired into the View as hooks.
 
         void InvalidateView() { _gl?.InvalidateVisual(); }
 
