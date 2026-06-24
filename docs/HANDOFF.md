@@ -77,6 +77,18 @@ set `Busy` — the bake calls `EnterBusy(Calculating)`), so a competing `Ctrl+Z`
 tools can). One tx at a time, always opened-and-closed — the seam for a future multithreaded ordering guard.
 Full spec + plan + glossary: `docs/DOC-TX-REFACTOR.md`.
 
+**Solver phase — the painted pieces now drive Solve (unweld handoff).** Solve develops a **derived** mesh,
+never the authoring mesh: `OnSolveAsync` no longer calls `Revert`; it bakes a clone/unweld on a temporary
+`FlowSession` and keeps the result as the `_developed` **Transient** the view shows, so the authoring mesh +
+`Pattern` **survive** a Solve. When the mesh is **pieced** (>1 painted region) the derived mesh is
+`MeshOps.UnweldByRegion(mesh, PieceMap)` — each painted piece becomes its own connected component, so the
+existing `RunBakeMulti` develops the painted pieces (per-piece BFF + frozen seams); single/unpieced → a
+plain clone. `ApplyReset → Revert` (standalone global op). **v1-split:** the Piecer↔Solver round-trip stays
+deliberately messy (the brush still targets the now-hidden authoring mesh; the Solve finally hand-flips
+`_showPieces`/overlays) — the formal representation swap + Doc-owns-mesh is deferred. **Known limitation:**
+fully-frozen per-piece boundaries over-constrain painted pieces → wrinkly panels; loosening seams is the
+named seam-relaxation follow-up. Full spec + plan: `docs/SOLVER-PHASE.md`.
+
 ## 2. Orientation
 
 | File | Role | Rhino types? |
@@ -100,7 +112,7 @@ Full spec + plan + glossary: `docs/DOC-TX-REFACTOR.md`.
 | `PieceSolver/Bff.cs` | Boundary First Flattening wrapper (drives external `bff-command-line.exe`), per patch. | **no** |
 | `src/FbxIO.cs` | Binary-FBX reader; preserves Rhino's *unwelded* seam topology → one component per face. | **no** |
 | `src/BSpline.cs` | Low-DOF periodic cubic "bent wire" seam fit + sampling. | **no** |
-| `src/MeshOps.cs` (+) | also `BoundaryLoops` / `SplitComponents` for the multi-piece flatten/solve. | **no** |
+| `src/MeshOps.cs` (+) | also `BoundaryLoops` / `ComponentCount` / `SplitComponents` for the multi-piece flatten/solve, `EdgeDihedrals` (crease proposer), and **`UnweldByRegion`** (rebuild so each painted piece is a connected component — the Solve unweld handoff). | **no** |
 
 The three core engine files are deliberately **Rhino-free** so the bench
 compiles them directly without Rhino. **Keep it that way** — Rhino types belong

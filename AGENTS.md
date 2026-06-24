@@ -199,10 +199,17 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 - **Solve** is an **async, cancelable, modal bake** (a background worker behind a progress + cancel
   overlay; it is the *single* develop path — the old hold-Space live-step and the SubD button were
   removed). It develops to the selected **Accuracy** (allowable in-plane strain %, by material) and then,
-  per **Subdivision level**, subdivides + re-develops. A single open patch develops directly; a
-  multi-component mesh (an FBX solid) is split into per-face patches (`MeshOps.SplitComponents`), each
-  BFF-flattened + isometric-developed with its boundary **frozen (Dirichlet)** so the solid stays joined
-  at the seams, then reassembled — flat panels laid out beside the model, with a worst-panel-strain GO gate.
+  per **Subdivision level**, subdivides + re-develops. **Solve develops a *derived* mesh, never the
+  authoring mesh** (so the authoring mesh + its `Pattern` survive — `OnSolveAsync` no longer calls
+  `Revert`; it bakes a clone/unweld on a temporary session and keeps the result as the `_developed`
+  Transient the view shows; see [`docs/SOLVER-PHASE.md`](docs/SOLVER-PHASE.md)). The derived mesh: a
+  **pieced** mesh (>1 painted region) is **unwelded along its creases** (`MeshOps.UnweldByRegion`) so each
+  painted piece is its own connected component; an FBX solid arrives multi-component already; a single open
+  patch is a plain clone. The multi-component path then splits (`MeshOps.SplitComponents`), BFF-flattens +
+  isometric-develops each piece with its boundary **frozen (Dirichlet)**, and reassembles — flat panels
+  laid out beside the model, worst-panel-strain GO gate. *(Known limitation: a fully-frozen per-piece
+  boundary over-constrains painted pieces → wrinkly panels; loosening seams to a soft constraint is the
+  named seam-relaxation follow-up, not built.)*
 - **Develop solver:** `PieceSolver/IsometricLM.cs` — Levenberg–Marquardt + matrix-free Jacobi-
   preconditioned CG, co-refining M (3-D) and its flat image M′ toward isometry (= developability). The
   paper's developability solver, NOT the covariance flow. Perf-tuned (preconditioner, per-edge
