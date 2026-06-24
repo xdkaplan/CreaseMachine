@@ -35,7 +35,7 @@ namespace PieceSolver
         GroundGrid _grid;            // subtle dot grid on the world Z=0 plane (10-unit spacing)
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
-        string _meshPath;            // source mesh path, so Reset can reload the input from disk
+        string _meshPath;            // source mesh path, so Revert can reload the input from disk
         bool _glInit, _meshDirty, _reframe, _rulingsDirty;   // _reframe: re-fit camera next upload; _rulingsDirty: recompute ruling overlay
         long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
@@ -212,7 +212,7 @@ namespace PieceSolver
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
-            MenuReset.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);   // File > Reset (also Ctrl+R)
+            MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
             PresetAButton.Click += (s, e) => _sim.ApplyPreset('A');
@@ -272,7 +272,7 @@ namespace PieceSolver
             PreviewKeyDown += (s, e) =>
             {
                 if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
-                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
+                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
                 else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
@@ -362,13 +362,21 @@ namespace PieceSolver
                 case CmdKind.Load: ApplyLoad(c.Path); break;
                 case CmdKind.Run: ApplyRun(c.N, c.P); break;
                 case CmdKind.Subdivide: ApplySubdivide(); break;
-                case CmdKind.Reset: ApplyReset(); break;
+                case CmdKind.Revert: ApplyReset(); break;   // handler keeps its internal name (ApplyReset) — Revert is the CAD-facing term
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
                 // Launch the async bake (fire-and-forget; _baking flips synchronously before the first
                 // await, so the replay loop can wait on it). On a live user click this is the develop.
                 case CmdKind.Solve: _ = OnSolveAsync(); break;
             }
-            if (record) { _journal.Add(c); Echo(c.Serialize()); }   // the recorded command echoes BARE (it's a replayable line, not a comment)
+            if (record)
+            {
+                _journal.Add(c);
+                // Load / Revert are coarse ops -> the Doc op-log (Console + journal, as bare replayable lines). The
+                // rest echo to the Console only for now; run/subdivide/matcap/solve get op-ified later (solve stays
+                // off-limits while the solver is being refactored).
+                if (c.Kind == CmdKind.Load || c.Kind == CmdKind.Revert) _doc.Record(c.Serialize());
+                else Echo(c.Serialize());
+            }
             else if (c.Kind != CmdKind.Solve) SyncControls(c);   // replay only: reflect the replayed command in the controls. On a
                                     // LIVE run the controls are already the source of truth, and
                                     // re-writing them here round-trips params lossily (it collapsed the

@@ -59,7 +59,7 @@
         <!-- MENU bar (Windows-style). Shortcuts shown via InputGestureText are bound in code-behind. -->
         <Menu x:Name="MenuBar" Grid.Row="0" Background="#2D2D30" Foreground="#C8C8C8" Padding="2,1">
             <MenuItem Header="_File">
-                <MenuItem x:Name="MenuReset" Header="_Reset" InputGestureText="Ctrl+R" />
+                <MenuItem x:Name="MenuRevert" Header="_Revert" InputGestureText="Ctrl+R" />
             </MenuItem>
             <MenuItem Header="_Window">
                 <MenuItem x:Name="MenuConsole" Header="_Console" IsCheckable="True" InputGestureText="Ctrl+Shift+J" />
@@ -75,7 +75,7 @@
                 <TextBlock DockPanel.Dock="Left" Text="PieceSolver" Foreground="#C8C8C8"
                            VerticalAlignment="Center" FontSize="12" />
                 <!-- Right-docked: first declared sits rightmost. Layout L->R: Propose | Solve.
-                     (Reset moved to File > Reset. Subdivision is folded into Solve via its slider — no separate button.) -->
+                     (Revert moved to File > Revert. Subdivision is folded into Solve via its slider — no separate button.) -->
                 <Button x:Name="SolveButton" DockPanel.Dock="Right" Content="Solve"
                         Padding="16,2" Margin="4,0,0,0" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
                         ToolTip="Bake: develop to the selected Accuracy, then for each Subdivision level subdivide and re-develop. Runs on a worker with a progress + cancel modal, then shows the result." />
