@@ -30,14 +30,13 @@ namespace PieceSolver
         bool _hasFlat;               // true after a successful Flatten; cleared on load/reset (stale M')
         bool _bffNeeded = true;      // true => BFF hasn't run for the CURRENT mesh yet. Set on every
                                      // load/reset; cleared the first time BFF flattens this mesh
-                                     // (via the Flatten button OR the first PatchStep). The lazy gate.
+                                     // (via EnsureFlat or the Solve bake's FlattenPure). The lazy gate.
         bool _meshSwitching;         // re-entrancy guard while MeshIndex programmatically resets the app
         GroundGrid _grid;            // subtle dot grid on the world Z=0 plane (10-unit spacing)
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         string _meshPath;            // source mesh path, so Revert can reload the input from disk
         bool _glInit, _meshDirty, _reframe, _rulingsDirty;   // _reframe: re-fit camera next upload; _rulingsDirty: recompute ruling overlay
-        long _totalIters;
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
         // Display state (render-only). Facet (smooth<->faceted) is a shader uniform from _sim.Facet.
@@ -57,7 +56,7 @@ namespace PieceSolver
         System.Windows.Threading.DispatcherTimer _replayTimer;
         System.Collections.Generic.List<StudioCommand> _replayQueue;
         int _replayPos;
-        double _lastRunMs, _lastUploadMs;           // perf readout (engine flow time / GL upload time)
+        double _lastUploadMs;                       // perf readout (GL upload time)
 
         ConsoleWindow _console;                     // non-modal log window (Window > Console / Ctrl+Shift+J)
         AboutWindow _about;                         // non-modal about window (Help > About)
@@ -295,7 +294,7 @@ namespace PieceSolver
                 }
             };
             // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
-            // a progress+cancel modal. ApplyRun/PatchStep remain only for journal replay of legacy Run(N).)
+            // a progress+cancel modal.)
         }
 
         // ===================== window menu: Console + About (both non-modal) =====================
@@ -367,7 +366,6 @@ namespace PieceSolver
             switch (c.Kind)
             {
                 case CmdKind.Load: ApplyLoad(c.Path); break;
-                case CmdKind.Run: ApplyRun(c.N, c.P); break;
                 case CmdKind.Subdivide: ApplySubdivide(); break;
                 case CmdKind.Revert: Revert(); break;   // unified at merge: command (branch's CmdKind.Revert) + method (master's Revert()) are both the CAD term
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
@@ -400,14 +398,6 @@ namespace PieceSolver
             {
                 if (c.Kind == CmdKind.Matcap && c.N >= 0 && c.N < MatcapList.Items.Count) MatcapList.SelectedIndex = c.N;
                 else if (c.Kind == CmdKind.Solve) _sim.ApplyBakeParams(c.B);   // restore the recorded bake settings before the replayed bake runs
-                else if (c.Kind == CmdKind.Run)
-                {
-                    // show the replayed run's parameters on the sliders (cosmetic; the run used c.P).
-                    _sim.IterPerRun = c.N; _sim.Step = c.P.Step; _sim.Momentum = c.P.Momentum;
-                    _sim.DeCraze = c.P.deCraze / _sim.DeCrazeMax;   // weight -> fraction (inverse of ToFlowParams)
-                    _sim.CrazeBandDeg = c.P.CrazeBand * 180.0 / Math.PI;
-                    _sim.Sharpness = c.P.Sharpness; _sim.DetMix = c.P.DetMix; _sim.MomFix = c.P.MomFix;
-                }
             }
             finally { _suppressUi = false; }
         }
@@ -420,7 +410,6 @@ namespace PieceSolver
             try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
             catch (Exception ex) { Title = "PieceSolver — load failed: " + ex.Message; return; }
             RebindPattern();          // the partition companion now wraps the new mesh
-            _totalIters = 0;
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
             ClearProposedCreases();   // labels reference the prior mesh's vertices
@@ -469,38 +458,6 @@ namespace PieceSolver
                 else Title = "PieceSolver — (no mesh at " + path + ")";
             }
             finally { _meshSwitching = false; }
-        }
-
-        // Run n PieceSolver steps in-process (on the UI thread). This is the PieceSolver paradigm —
-        // it does NOT touch the Stein/DetMix developability flow (NesterovStep & friends). The
-        // FlowParams `p` is intentionally ignored (kept only so the journal/Run plumbing is untouched
-        // this pass). Times the loop for the perf-drift readout.
-        void ApplyRun(int n, FlowParams p)
-        {
-            if (_session == null || n <= 0) return;
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            PatchStep(n);                  // BFF gate (once) + n LM iterations in a single Solve (topology built once)
-            sw.Stop();
-            _lastRunMs = sw.Elapsed.TotalMilliseconds;
-            _totalIters += n;
-            _meshDirty = true; _rulingsDirty = true;                    // OnRender re-uploads M (_view) once (+ recompute rulings)
-            ClearProposedCreases();                                     // geometry moved -> proposal is stale
-            if (_hasFlat && _flatView != null) _flatView.Upload(_flat); // re-upload M' once per batch, not per step
-            if (_hasFlat && _flat != null) _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;   // live developability readout (Accuracy gate)
-            Title = "PieceSolver — iter " + _totalIters + "  (" + _session.Mesh.Vertices.Count + " verts)";
-            UpdateStatus();
-            _gl?.InvalidateVisual();
-        }
-
-        // One PieceSolver step. Lazy-BFF gate: the first step for a given mesh runs Boundary First
-        // Flattening (once), uploads the flat map M' beside M, and arms the sim. Subsequent steps (and
-        // any step after a manual Flatten already ran for this mesh) skip straight to IsometricStep.
-        // Returns false if BFF was needed but failed (caller should stop the run).
-        bool PatchStep(int lmIters)
-        {
-            if (!EnsureFlat()) return false;   // lazy BFF gate (shared with Solve)
-            IsometricStep(lmIters);
-            return true;
         }
 
         // ---- fixed B-spline seam edges (bent-wire pins) ----
@@ -627,7 +584,7 @@ namespace PieceSolver
                 ? CreaseMachine.MeshOps.UnweldByRegion(authoring.Mesh, pieceMap, out _)
                 : TopologyClone(authoring.Mesh);
             _session = new FlowSession(developMesh);
-            _totalIters = 0; _hasFlat = false; _flat = null; _M0 = null;
+            _hasFlat = false; _flat = null; _M0 = null;
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0; _bffNeeded = true;
             _meshDirty = false;
 
@@ -1230,28 +1187,6 @@ namespace PieceSolver
             }
         }
 
-        // `lmIters` Levenberg-Marquardt iterations co-refining M (3D) and its flat image M' toward
-        // isometry (= developability) over the index-aligned M <-> M' correspondence. LM solves a damped
-        // normal-equation system each iteration (matrix-free CG), so it computes the step direction AND
-        // size (no Step knob) and auto-adapts its damping (trust region) — driving relErr -> 0 and staying
-        // robust to weight scale where the explicit Jacobi step diverged. The weights are the objective:
-        // Iso (developability) vs Anchor (faithfulness) vs Fair (smoothness). lambda persists across calls.
-        // No GPU re-upload here — ApplyRun re-uploads M and M' ONCE after the batch.
-        void IsometricStep(int lmIters)
-        {
-            if (_session == null || _flat == null || _M0 == null) return;
-            _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
-                          _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight, _sim.DiffFair, _sim.BendWeight, _sim.BendDiff,
-                          lmIters, LmCgIters, ref _lmLambda, _sim.FixBSplineEdges ? _pinned : null);
-            // optional non-shrinking smoother (strain distributor / de-buckler) after the LM step
-            var sm = (IsometricSmoothers.Kind)_sim.SmoothKind;
-            if (sm != IsometricSmoothers.Kind.None)
-            {
-                IsometricSmoothers.Apply(sm, _session.Mesh, _sim.SmoothStrength, 2, false);
-                IsometricSmoothers.Apply(sm, _flat, _sim.SmoothStrength, 2, true);
-            }
-        }
-
         // One 1->4 subdivision of the live mesh. Geometry-preserving (midpoints are linear). When a
         // flat map exists we refine M, M' AND the anchor M0 with the SAME deterministic midpoint
         // scheme on the SAME connectivity, so (a) the M'[i]==M[i] index alignment the solver depends
@@ -1323,7 +1258,6 @@ namespace PieceSolver
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
             catch (Exception ex) { Title = "PieceSolver — reset failed: " + ex.Message; return; }
             RebindPattern();          // the partition companion now wraps the reloaded mesh
-            _totalIters = 0;
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
@@ -1375,7 +1309,8 @@ namespace PieceSolver
         // an OBJ already on the XY plane (z=0) with the SAME vertex/face count + ordering as the input,
         // so M'[i] corresponds to M[i]. We offset M' in +X so it sits on the ground plane next to M.
         // BFF gate: run Boundary First Flattening once for the current mesh (lazy), show M', arm the solver.
-        // Returns true once a usable flat map + anchor exist. Shared by spacebar (PatchStep) and Solve.
+        // Returns true once a usable flat map + anchor exist. (Solve's worker-thread bake uses FlattenPure,
+        // the GL-free twin of this; this UI-thread variant is the interactive flatten entry point.)
         bool EnsureFlat()
         {
             if (_session == null) return false;
@@ -1391,7 +1326,7 @@ namespace PieceSolver
         }
 
         // Upload the BFF flat map M' and place it beside M on the z=0 plane (to +X of M by both radii
-        // plus a gap). Shared by the Flatten button and PatchStep's lazy first flatten. Sets _hasFlat.
+        // plus a gap). Driven by EnsureFlat's lazy first flatten. Sets _hasFlat.
         void ShowFlat(PlanktonMesh flat)
         {
             if (_view == null || _flatView == null) return;   // GL views not built yet (pre-first-render)
@@ -1407,7 +1342,7 @@ namespace PieceSolver
         }
 
         // Place the flat map M' beside M on the z=0 plane (to +X of M by both radii plus a gap). Called
-        // from ShowFlat (first flatten) and IsometricStep (after M' deforms) so M' tracks alongside M.
+        // from ShowFlat (first flatten) so M' sits alongside M.
         void PlaceFlat()
         {
             if (_view == null || _flatView == null) return;
@@ -1564,15 +1499,8 @@ namespace PieceSolver
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Execute(c, record: false);
             sw.Stop();
-            string extra = "";
-            if (c.Kind == CmdKind.Run && _session != null)
-            {
-                var m = FlowMetrics.Compute(_session.Mesh, c.P.CrazeBand, c.P.UseMaxCov, c.P.Sharpness);
-                extra = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                    "  sumE={0:0.000} panels={1} maxDih={2:0.0}", m.SumE, m.Panels, m.MaxDihDeg);
-            }
             Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "{0,3}/{1}  {2}  [{3:0.0} ms]{4}", _replayPos, _replayQueue.Count, c.Serialize(), sw.Elapsed.TotalMilliseconds, extra));
+                "{0,3}/{1}  {2}  [{3:0.0} ms]", _replayPos, _replayQueue.Count, c.Serialize(), sw.Elapsed.TotalMilliseconds));
         }
         bool _replaySolvePending;   // a replayed Solve is in flight; log + advance once _baking clears
         string _replaySolveLine;    // the serialized Solve line, held for the deferred completion log
@@ -1588,7 +1516,7 @@ namespace PieceSolver
                 ? "  ·  E_iso " + _lastEIso.ToString("0.###e+0", System.Globalization.CultureInfo.InvariantCulture)
                 : "";
             StatusText.Text = string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "flow {0:0.0} ms · upload {1:0.0} ms · {2} verts{3}", _lastRunMs, _lastUploadMs, v, eIso);
+                "upload {0:0.0} ms · {1} verts{2}", _lastUploadMs, v, eIso);
         }
 
         static byte[] DecodeMatcapBgra(string path, out int w, out int h)
