@@ -134,7 +134,7 @@ namespace PieceSolver
             _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
-            // hidden by default. Created now so Log() works from startup; its Owner is set lazily on
+            // hidden by default. Created now so logging works from startup; its Owner is set lazily on
             // first show (a Window's Owner must already be shown). Closing hides it (the instance is
             // reused) unless the app itself is shutting down.
             _console = new ConsoleWindow();
@@ -269,7 +269,7 @@ namespace PieceSolver
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
             _console.SaveButton.Click += (s, e) => SaveSession();
             _console.ReplayButton.Click += (s, e) => OpenAndReplay();
-            _console.ClearButton.Click += (s, e) => { _journal.Clear(); _doc.ClearLog(); _console.ClearLog(); Log("journal cleared"); };
+            _console.ClearButton.Click += (s, e) => { _journal.Clear(); _doc.ClearLog(); _console.ClearLog(); _doc.Comment("journal cleared"); };
 
             // Menu bar + keyboard shortcuts (Ctrl+Shift+J = toggle Console). Session-saving lives on the Console's
             // Save button; Ctrl+S is intentionally NOT bound here — it's reserved for the future real save.
@@ -602,7 +602,7 @@ namespace PieceSolver
             {
                 _baking = false; _doc.ExitBusy();
                 BakeOverlay.Visibility = Visibility.Collapsed;
-                foreach (var line in _bakeLog) Log(line);
+                foreach (var line in _bakeLog) _doc.Comment(line);
                 bool developed = !_bakeToken.IsCancellationRequested;
                 if (developed)
                 {
@@ -673,7 +673,7 @@ namespace PieceSolver
                 });
             }
             catch (OperationCanceledException) { fold = null; }
-            catch (Exception ex) { Log("propose failed: " + ex.Message); }
+            catch (Exception ex) { _doc.Comment("propose failed: " + ex.Message); }
             finally
             {
                 // Capture the settled (developable, "crease-proposed") geometry for the DISPLAY preview
@@ -695,7 +695,7 @@ namespace PieceSolver
                     _creaseFold = fold; _creaseA = ea; _creaseB = eb;
                     RelabelCreases();
                     OpenCreaseReview();   // camera-only modal: full patchwork + Crease angle slider + Accept/Cancel
-                    Log($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
+                    _doc.Comment($"crease proposer: scanned {fold.Length} interior edges, {_creaseCount} proposed at >= {_sim.CreaseAngleDeg:0.#} deg");
                 }
                 if (_view != null) _view.Upload(_session.Mesh, ProposedPreviewPos());   // input mesh, or the proposed preview if toggled
                 _meshDirty = false;
@@ -752,7 +752,7 @@ namespace PieceSolver
                 {
                     _activeEditor = _piecer;   // proposal accepted -> the Crease brush goes live (was: _faceRegion != null)
                     RebuildPieces();   // _camModal now false -> recolour to neutral (via the editor's FaceFill); creases stay committed
-                    Log($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
+                    _doc.Comment($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
                     Title = "PieceSolver — " + _creaseCount + " creases committed";
                 },
                 onCancel: () =>
@@ -760,7 +760,7 @@ namespace PieceSolver
                     ClearProposedCreases();   // discard the proposal entirely
                     if (_view != null && _session != null) _view.Upload(_session.Mesh, ProposedPreviewPos());
                     _gl?.InvalidateVisual();
-                    Log("crease proposal discarded");
+                    _doc.Comment("crease proposal discarded");
                 });
             RebuildPieces();   // _camModal == true -> full rainbow patchwork
         }
@@ -897,11 +897,11 @@ namespace PieceSolver
         {
             if (_pattern == null) return;
             var sel = _doc.Pieces;
-            if (sel.Count < 2) { Log("merge: select 2+ pieces first"); return; }
+            if (sel.Count < 2) { _doc.Comment("merge: select 2+ pieces first"); return; }
             var ids = new System.Collections.Generic.HashSet<int>(); foreach (var p in sel.Items) ids.Add(p.Value);
             var groups = _pattern.MergeGroups(ids);
             var delta = Commands.Merge(_pattern, groups);
-            if (delta.Empty) { Log("merge: no adjacent pieces to merge"); return; }
+            if (delta.Empty) { _doc.Comment("merge: no adjacent pieces to merge"); return; }
             var involved = new System.Collections.Generic.HashSet<int>();              // pieces touched (from ∪ to)
             foreach (var o in delta.Ops) { involved.Add(o.From); involved.Add(o.To); }
             _doc.Comment($"merge {involved.Count} pieces, {delta.Ops.Count} faces");   // label the otherwise-opaque setpiece block
@@ -911,7 +911,7 @@ namespace PieceSolver
                 foreach (var g in groups.Values) survivors.Add(new PieceId(g));   // merged survivors + untouched singletons
                 _doc.Pieces.Set(survivors);
             }
-            else Log("merge: busy — finish the current action first");
+            else _doc.Comment("merge: busy — finish the current action first");
         }
 
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh
@@ -1316,7 +1316,7 @@ namespace PieceSolver
             if (_bffNeeded)
             {
                 bool ok = Bff.TryFlatten(_session.Mesh, out var flat, out var log);
-                if (!string.IsNullOrWhiteSpace(log)) Log(log.TrimEnd());
+                if (!string.IsNullOrWhiteSpace(log)) _doc.Comment(log.TrimEnd());
                 if (!ok || flat == null) return false;   // failure logged; don't start the sim
                 ShowFlat(flat);
                 _bffNeeded = false;
@@ -1417,8 +1417,8 @@ namespace PieceSolver
             if (dlg.ShowDialog() != true) return;
             var lines = new System.Collections.Generic.List<string> { "# PieceSolver session journal" };
             lines.AddRange(_doc.EventLog);                              // the full ordered event log: commands + setpiece + undo/redo
-            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _doc.EventLog.Count + " events -> " + System.IO.Path.GetFileName(dlg.FileName)); }
-            catch (Exception ex) { Log("save failed: " + ex.Message); }
+            try { System.IO.File.WriteAllLines(dlg.FileName, lines); _doc.Comment("saved " + _doc.EventLog.Count + " events -> " + System.IO.Path.GetFileName(dlg.FileName)); }
+            catch (Exception ex) { _doc.Comment("save failed: " + ex.Message); }
         }
 
         // File > Import (no shortcut — Ctrl+O is reserved for the future File > Open): pick an STL / FBX / OBJ
@@ -1441,7 +1441,7 @@ namespace PieceSolver
             if (dlg.ShowDialog() != true) return;
             var cmds = new System.Collections.Generic.List<StudioCommand>();
             try { foreach (var ln in System.IO.File.ReadAllLines(dlg.FileName)) { var c = StudioCommand.Parse(ln); if (c != null) cmds.Add(c); } }
-            catch (Exception ex) { Log("load failed: " + ex.Message); return; }
+            catch (Exception ex) { _doc.Comment("load failed: " + ex.Message); return; }
             ReplayJournal(cmds);
         }
 
@@ -1450,9 +1450,9 @@ namespace PieceSolver
         // directly comparable to the CLI baseline - the soft perf/value drift signal across commits.
         void ReplayJournal(System.Collections.Generic.List<StudioCommand> cmds)
         {
-            if (cmds == null || cmds.Count == 0) { Log("nothing to replay"); return; }
+            if (cmds == null || cmds.Count == 0) { _doc.Comment("nothing to replay"); return; }
             _replayQueue = cmds; _replayPos = 0;
-            Log("--- replay: " + cmds.Count + " commands ---");
+            _doc.Comment("--- replay: " + cmds.Count + " commands ---");
             if (_replayTimer == null)
             {
                 _replayTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
@@ -1480,10 +1480,10 @@ namespace PieceSolver
                     ex = string.Format(System.Globalization.CultureInfo.InvariantCulture,
                         "  sumE={0:0.000} panels={1} maxDih={2:0.0}  strain={3:0.###}%", mm.SumE, mm.Panels, mm.MaxDihDeg, _sim.StrainPct);
                 }
-                Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                _doc.Comment(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                     "{0,3}/{1}  {2}  [{3:0.0} ms]{4}", _replayPos, _replayQueue.Count, _replaySolveLine, ms, ex));
             }
-            if (_replayQueue == null || _replayPos >= _replayQueue.Count) { _replayTimer.Stop(); Log("--- replay done ---"); return; }
+            if (_replayQueue == null || _replayPos >= _replayQueue.Count) { _replayTimer.Stop(); _doc.Comment("--- replay done ---"); return; }
             var c = _replayQueue[_replayPos++];
             // A Solve sets _baking synchronously inside Execute; defer its log line until the bake completes
             // (a subsequent tick, once _baking clears) so the timing + metrics reflect the finished bake.
@@ -1496,14 +1496,13 @@ namespace PieceSolver
             var sw = System.Diagnostics.Stopwatch.StartNew();
             Execute(c, record: false);
             sw.Stop();
-            Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+            _doc.Comment(string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "{0,3}/{1}  {2}  [{3:0.0} ms]", _replayPos, _replayQueue.Count, c.Serialize(), sw.Elapsed.TotalMilliseconds));
         }
         bool _replaySolvePending;   // a replayed Solve is in flight; log + advance once _baking clears
         string _replaySolveLine;    // the serialized Solve line, held for the deferred completion log
 
         void Echo(string line) => _console?.AppendLine(line);          // the Console sink for every Doc-recorded line (op/command OR '#' comment)
-        void Log(string msg) => _doc.Comment(msg);                     // narration -> the event log (canonical) -> Recorded -> Echo -> Console
 
         void UpdateStatus()
         {
