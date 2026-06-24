@@ -197,7 +197,7 @@ reads must `Peek`), because you can't refresh past a not-yet-produced ancestor.
 **Transient (DAG)** — derived node; dependency DAG hanging off the Reals; fresh/stale (§3).
 **Parent / Child** — *contains* in the Real-tree, *derives-from* in the Transient-DAG; rot walks the DAG's down-edges (§3, §5).
 **Consumer** — anything that projects a Real (the View → its geometry Transient; a panel → its values) (§3).
-**Element** — *retired.* No Element class; at most casual shorthand for "a Real you interact with in the scene."
+**Element** — *gone; it's just `Real`.* No Element class, facet, or term — what you'd have called an element is a `Real` (with geometry).
 **Grown / Supplied** — the flavor axis: on-demand-self vs prepared-in-advance (§6).
 **`.Value` / `Peek`** — assertive vs tentative read (§7).
 **Single-writer rule** — graph state on one thread; work off-thread, re-enters via `Supply` (§8).
