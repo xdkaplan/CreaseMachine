@@ -78,7 +78,7 @@ namespace PieceSolver
         // neighbour (most shared border). Connected removed pieces heal together as one blob; a blob with no
         // surviving neighbour is left as-is. This is the "kill & donate" Ctrl gesture, used when NO piece is
         // selected. Returns a human-readable summary of what was removed (for the Console), or null if nothing.
-        public string Remove(HashSet<int> touched)
+        public string Delete(HashSet<int> touched)
         {
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null) return null;
@@ -404,6 +404,21 @@ namespace PieceSolver
             if (PieceMap == null || !(d is PieceDelta pd)) return;
             foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.From;
             RegenCrease();
+        }
+
+        // Run an in-place mutator, capture the net PieceMap change as a delta, then ROLL BACK — leaving Real and
+        // Transient unchanged. The returned delta is what Doc.Run applies for real. Lets the intricate in-place
+        // ops (Delete / Carve / Grow / Mint + SplitDisconnected) be reused verbatim as delta-producing Commands.
+        public PieceDelta ComputeDelta(Action mutate)
+        {
+            if (PieceMap == null) { mutate(); return new PieceDelta(new List<Op>()); }
+            var before = (int[])PieceMap.Clone();
+            mutate();                                       // existing logic mutates PieceMap (+ RegenCrease)
+            var ops = new List<Op>();
+            int n = Math.Min(before.Length, PieceMap.Length);
+            for (int f = 0; f < n; f++) if (PieceMap[f] != before[f]) ops.Add(new Op(f, before[f], PieceMap[f]));
+            PieceMap = before; RegenCrease();               // roll Real + Transient back; Doc.Run re-applies the delta
+            return new PieceDelta(ops);
         }
 
         // ===================== queries (read-only) =====================

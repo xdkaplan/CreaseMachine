@@ -274,6 +274,8 @@ namespace PieceSolver
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { _activeEditor.Deselect(); e.Handled = true; }   // ESC = deselect (same as clicking empty canvas)
+                else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
+                else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
                 else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1); UpdatePreview(_lastHover); e.Handled = true;
@@ -811,6 +813,7 @@ namespace PieceSolver
         {
             SeedCreaseEdges();          // provisional crease set into _pattern.CreaseMap
             _piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
+            _doc.ClearHistory();        // Chapter reset: the re-partition invalidates the undo/redo deltas
             _pattern?.Seed();           // flood-fill the regions across non-crease edges
             _pattern?.RegenCrease();    // overwrite CreaseMap with the real region-boundary creases
             RebuildCreaseOverlay();

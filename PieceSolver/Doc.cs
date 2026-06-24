@@ -40,6 +40,10 @@ namespace PieceSolver
         // selection — the deltas reference the old face indices, so they cannot survive a re-mesh.
         public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); Pieces.Clear(); }
 
+        // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
+        // SAME mesh, so old deltas reference invalid region ids). Selection is cleared separately by the caller.
+        public void ClearHistory() { _undo.Clear(); _redo.Clear(); }
+
         public void Run(IDelta d)
         {
             if (d == null || (d is PieceDelta pd && pd.Empty) || Pattern == null) return;
