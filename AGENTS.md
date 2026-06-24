@@ -255,7 +255,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     `!Ready`** (a `Tx` is open, or a long op set `Busy` — e.g. the bake's `EnterBusy(Calculating)`), so a
     competing `Ctrl+Z` mid-stroke is a clean no-op; ESC cancels an in-flight stroke (`Editor.CancelGesture`).
     Short for Document; "Project" is reserved for a future on-disk workspace. `Selection<T>` is typed per
-    Element, carries a `Changed` event, and is **NOT** on the undo stack (nor is the view/camera).
+    Real type, carries a `Changed` event, and is **NOT** on the undo stack (nor is the view/camera).
   - **`Pattern`** — the (only, today) **Store**: a THIN companion over one `PlanktonMesh` (Plankton has no
     per-face attribute storage). Holds **Real** state — the authoritative **`PieceMap`** (`int[]`, per-face
     piece id) — and a **Transient**, derived **`CreaseMap`** (`HashSet<long>` packed edge keys, edges
@@ -275,7 +275,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     `Pattern.MergeGroups`; isolated selected pieces are left as-is) and `DelPiece` (delete the selected
     pieces, donating each to its dominant surviving neighbour via `Pattern.Delete` — the Ctrl-drag "kill &
     donate" op driven from the selection rather than a brush footprint).
-  - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id (an **Element** id at the
+  - **`PieceId`** — a zero-cost `readonly struct` handle over the int piece id (a **Real** id at the
     selection boundary). Ints stay dense in `PieceMap` (hot path).
   - **`Editor` / `Piecer`** — `Editor` is the abstract base (lifecycle + pointer hooks + a per-face
     `FaceFill` tint). **`Piecer : Editor`** is the editor active during Piecing (after Propose → Accept):
@@ -294,7 +294,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 
   **Shared vocabulary** (see `DOC-TX-REFACTOR.md`): **Doc** (orchestrator) · **Store** (`ITxAble`, holds
   Real state) · **IDelta** / **Op** · **Command** (= the user's "Tool") · **Real / Transient / Ephemeral**
-  (defined below) · **Element** (Piece, Crease, … — was "entity") · **Selection<T>** · **regen** ·
+  (defined below; **Reals** are the authored nodes — Piece, Crease, …, the retired "Element"/"entity") · **Selection<T>** · **regen** ·
   **Chapter** (reset boundary) · **tx** (one gesture = one transaction). Out of scope today: crease-identity
   / reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs, journaling of piecing.
 

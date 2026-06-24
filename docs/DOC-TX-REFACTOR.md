@@ -28,7 +28,7 @@ Piecing ops mutate `Pattern.PieceMap` in place with no record, so there is no un
 existing `Journal` / `StudioCommand` sink covers only coarse app commands (load/run/solve) as a
 **forward** record/replay log — it is not a reverse-delta undo, and piecing bypasses it entirely.
 Merge wants undo; "proper CAD editability" wants undo for everything. So we need the spine before
-the entity zoo (creases-with-identity, joins, tabs, cone tips) lands on top of it.
+the Real zoo (creases-with-identity, joins, tabs, cone tips) lands on top of it.
 
 ## Vocabulary (locked)
 
@@ -62,9 +62,10 @@ These supersede / extend the [`PIECER-REFACTOR.md`](archive/PIECER-REFACTOR.md) 
 - **refresh** (this doc's older "regen") — re-derive a Transient from Real. `Apply`/`Invert`
   **rot** the Transient (`RegenCrease`); a *Grown* transient like `CreaseMap` then re-derives
   lazily on read. Never recorded. Full freshness model: [docs/specs/DOC-SPEC.md](specs/DOC-SPEC.md).
-- **Element** — any selectable/editable thing with identity: **Piece**, **Crease**, and later
-  **Join** / **Tab** / **Cone tip** / **Control point**. (Was "entity".)
-- **`Selection<T>`** — a typed selection set, one per Element type, living in the Doc, carrying a
+- **Real** — an authored node with identity: **Piece**, **Crease**, and later **Join** / **Tab** /
+  **Cone tip** / **Control point**. (Retired names: "Element", "entity". The full node model — Reals in
+  an ownership tree, Transients in a dependency DAG — is in [docs/specs/DOC-SPEC.md](specs/DOC-SPEC.md).)
+- **`Selection<T>`** — a typed selection set, one per Real type, living in the Doc, carrying a
   **Changed** event. **Not** `ITxAble` — selection is **not** on the undo stack (nor is the view
   / camera).
 - **Editor** — a tool's gesture **grammar** + view preview (`Piecer`, future `Creaser`). Produces
@@ -167,7 +168,7 @@ sealed class Selection<T>
 
 - **`PieceMap` = Real.** Its changes are the Ops in a `PieceDelta`. Undoable.
 - **`CreaseMap` = Transient.** Never in a Delta; **regen'd** inside `Apply`/`Invert`. (When creases
-  become Real Elements with identity — a *later* spec — regen becomes *reconcile*. Out of scope here.)
+  become Reals with identity — a *later* spec — regen becomes *reconcile*. Out of scope here.)
 - **Selection = neither.** Lives in the Doc, fires `Changed`, is **not** undoable (decided).
 
 ## Commands — Merge (worked example)
@@ -244,7 +245,7 @@ opened and closed" is the seam where a clean ordering guard drops in.
 
 ## Non-goals (explicitly out of scope here)
 
-Crease-with-identity / reconcile-regen · the generalized Element store · the `Creaser` editor ·
+Crease-with-identity / reconcile-regen · the generalized Real store · the `Creaser` editor ·
 Joins / Tabs / Cone tips / Control points · stable `PieceId` GUIDs · composite multi-Store deltas
 (the `IDelta` interface is forward-compatible, but only the single-Store `PieceDelta` ships). Each
 is its own later spec; this one is just the spine. *(Journaling of piecing was here too; it is now
@@ -303,9 +304,9 @@ Merge undoable end-to-end; Step 5 converts the remaining piece ops; Step 6 revis
 
 ### Step 6 — revise the project docs *(closing step)*
 - Update **`AGENTS.md`** (the Doc/tx layer + the new vocabulary: Doc, Store, `ITxAble`, `IDelta`,
-  Op, Command/Tool, Run/Undo/Redo, Real/Transient, Element, `Selection<T>`), **`docs/HANDOFF.md`**,
+  Op, Command/Tool, Run/Undo/Redo, Real/Transient, `Selection<T>`), **`docs/HANDOFF.md`**,
   and cross-link this doc from **`PIECER-REFACTOR.md`** (its sequel). Note `Remove → Delete` and
-  `entity → Element` renames. Leave README as-is unless a user-facing line changed.
+  `entity`/`Element` → `Real` renames. Leave README as-is unless a user-facing line changed.
 - Refresh the **memory** index entry for the piecing architecture.
 
 ## Verification & risks

@@ -34,6 +34,11 @@ save, and concurrency** at once.
   accumulators, an editor's selection, the camera. Not saved, not undoable, and **not even
   refreshed** — just thrown away.
 
+**Durability scale** (safe → dragons): **Real** (on disk, undoable, never stale) → **Transient**
+(recoverable — lose it, refresh it) → **Ephemeral** (raw memory bytes — not saved, not undoable,
+not refreshed; lose it and it's gone). So Ephemeral is *only* for the genuinely disposable
+(selection, camera, preview) — putting real state there is the trap.
+
 ## 3. The graphs — Real tree + Transient DAG  ○ designed
 
 There are **two** node kinds and **two** relationships — the whole point is *not* to conflate them:
