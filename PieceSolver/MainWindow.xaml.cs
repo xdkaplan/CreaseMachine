@@ -364,7 +364,7 @@ namespace PieceSolver
                 case CmdKind.Load: ApplyLoad(c.Path); break;
                 case CmdKind.Run: ApplyRun(c.N, c.P); break;
                 case CmdKind.Subdivide: ApplySubdivide(); break;
-                case CmdKind.Reset: ApplyReset(); break;
+                case CmdKind.Reset: Revert(); break;
                 case CmdKind.Matcap: ApplyMatcap(c.N); break;
                 // Launch the async bake (fire-and-forget; _baking flips synchronously before the first
                 // await, so the replay loop can wait on it). On a live user click this is the develop.
@@ -590,7 +590,7 @@ namespace PieceSolver
         async Task OnSolveAsync()
         {
             if (_baking || _session == null || _meshPath == null) return;
-            ApplyReset();                          // UI thread: reload the input mesh + reset flags
+            Revert();                              // UI thread: reload the input mesh + reset flags (Phase A will remove this — develop a clone)
             _view?.Upload(_session.Mesh);          // show the reset mesh, then clear dirty so the bake's mutations aren't uploaded mid-flight
             _meshDirty = false;
 
@@ -1268,7 +1268,10 @@ namespace PieceSolver
         }
 
         // Reload the current mesh from disk and reset the flow. Same bounds -> camera kept (no reframe).
-        void ApplyReset()
+        // A true Revert: discard all work and reload the document from the file on disk. The standalone global
+        // op behind the Reset button / Ctrl+R / the journal's Reset command. (Solve must NOT call this — it
+        // develops a derived clone instead, so the authoring mesh + Pattern survive. See docs/SOLVER-PHASE.md.)
+        void Revert()
         {
             if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
