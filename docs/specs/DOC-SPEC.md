@@ -1,12 +1,16 @@
-# Doc Spec — the dependency graph (Real / Transient / Ephemeral + freshness)
+# Doc Spec — the node model: Reals (ownership tree) + Transients (dependency DAG)
 
 **Status:** *design / target doc.* Most of this is not built yet — it's the agreed model
-for how the `Doc` owns derived state. Each section marks **✓ built** vs **○ designed**.
+for how the `Doc` owns authored + derived state. Each section marks **✓ built** vs **○ designed**.
 The one thing built today is `Transient<T>` (a freshness bool) plus a single hand-wired
-edge (`Pattern → CreaseMap`). Everything about the *graph* (edges, cascade, flavors,
+edge (`Pattern → CreaseMap`). Everything about the *graphs* (edges, cascade, flavors,
 threading rule) is designed-not-built. See [DOC-TX-REFACTOR.md](../DOC-TX-REFACTOR.md) for the
 undo/transaction layer this sits beside, and [AGENTS.md](../../AGENTS.md) for the as-built
 Real/Transient/Ephemeral glossary.
+
+**Model update (2026-06-24):** there is **no `Element` class** — "Element" dissolves into
+**`Real`**. A Real is the one authored-node type (the things you'd call "elements" are just
+Reals with geometry); "viewable" is just "has a geometry Transient." See §3.
 
 ## 1. Purpose
 
@@ -17,9 +21,12 @@ save, and concurrency** at once.
 
 ## 2. The three kinds of state  ✓ built (as a distinction; see AGENTS.md)
 
-- **Real** — authored source-of-truth (mesh, `Pattern`/`PieceMap`, params). Undoable
-  (mutated only via a tx), saved to file, and **never stale** — *"the Doc is never Dirty."*
-  Real sits at the roots of the graph.
+- **Real** — authored source-of-truth (mesh, `Pattern`/`PieceMap`, params, future
+  Pieces / Creases / Splines / Control-points). The **one authored-node class**: Reals form an
+  **ownership tree** (§3), hold property values, and own **optional geometry-Transient children**.
+  Undoable (mutated only via a tx, through their Store), saved to file, **never stale** —
+  *"the Doc is never Dirty."* *There is no separate "Element" — the things you'd call elements
+  are just Reals (with geometry); a Real with nothing to draw simply renders nothing.*
 - **Transient** — *derived from* Real. Cached with a freshness flag; **refreshed** from
   Real; not saved, not undoable. (`CreaseMap`, `_developed`, the future `SolvedPiece`.)
   Computed-*from* Real, never a live alias of it.
@@ -27,14 +34,31 @@ save, and concurrency** at once.
   accumulators, an editor's selection, the camera. Not saved, not undoable, and **not even
   refreshed** — just thrown away.
 
-## 3. The graph  ○ designed
+## 3. The graphs — Real tree + Transient DAG  ○ designed
 
-- **Element** — a node: a Piece, a Crease, and the transients hanging off them.
-- **Parent / Child** — a transient's **parents** are what it derives *from* (its inputs);
-  its **children** are what derive *from* it. Edges point both ways conceptually, but the
-  machinery needs **down-edges**: a node knows its children so a rot can walk the subtree.
-- Real nodes are roots (parents of transients, never children, never stale).
-- *Today:* exactly one edge exists, hand-wired — `Pattern.Apply/Invert` rots `CreaseMap`.
+There are **two** node kinds and **two** relationships — the whole point is *not* to conflate them:
+
+- **`Real` — an ownership TREE.** Reals are *authored*, so they never derive from each other;
+  a Real's only edge to another Real is **composition / ownership** (a Control-point belongs to
+  one Spline; a Crease/Piece belongs to the partition). Single-parent ⇒ strictly branching ⇒
+  **tree**. The roots of everything; never stale. *Relationships* (a crease borders two pieces,
+  adjacency) are **not** tree edges — keep them as references or derived, or the tree silently
+  becomes a DAG.
+- **`Transient` — a dependency DAG.** Transients *derive*, and one can derive from **several**
+  parents (a panel-layout from many Pieces + params), acyclically ⇒ **directed acyclic graph**.
+  Fresh/stale. The DAG **hangs off** the Real-tree: Reals are the sources, Transients are
+  everything computed from them.
+- **"Parent / Child" means different things per graph:** in the Real-tree it's *contains*; in
+  the Transient-DAG it's *derives-from*. The freshness machinery (§5) needs the DAG's
+  **down-edges** — a Transient knows its children so a rot can walk the subtree.
+
+**Consumers project a Real.** A Real is never gated "viewable / not" — any consumer takes what
+it can. The **3D View** pulls a Real's geometry Transient and draws it (type-dispatching on
+mesh / lines / points), or no-ops when there's none. The **property / Settings panel** pulls the
+*same* Real's values and shows them. Same Real, many projections; the viewport and the panels
+are **peer consumers** of one Real-tree, not a privileged "viewable" hierarchy.
+
+*Today:* exactly one edge exists, hand-wired — `Pattern.Apply/Invert` rots `CreaseMap`.
 
 ## 4. Freshness  ✓ built (the bool) / ○ the invariant
 
@@ -73,8 +97,10 @@ Transient.Supply(v)  → _value=v; IsFresh=true; rotChildren(self)   // push: fr
 rotChildren(n): foreach child c: c.Rot()   // and c.Rot() recurses → whole subtree
 ```
 
-Because `Rot` itself calls `rotChildren`, one `Rot()` at the top floods the subtree — no
-separate "rot everything below" step. Only **Real.mutate** and **Supply** *originate* a rot
+Because `Rot` itself calls `rotChildren`, one `Rot()` at the top floods everything reachable
+below — no separate "rot everything below" step. (In the DAG a node with several parents can be
+reached by more than one path; `Rot` is an idempotent bool-flip, so re-visiting it is harmless —
+it floods the reachable **sub-DAG**, not a strict subtree.) Only **Real.mutate** and **Supply** *originate* a rot
 wave (the two genuine value-changes); rule 2 is just propagation. There is deliberately **no
 "Grow rots children"** rule: by the time a Grown transient grows, its children were already
 rotted when *it* was rotted.
@@ -167,8 +193,11 @@ reads must `Peek`), because you can't refresh past a not-yet-produced ancestor.
 **Refresh** — Stale→Fresh; umbrella for **Grow | Supply** (§5).
 **Grow** — a Grown transient rebuilds itself on read (the self door).
 **Supply** — a producer feeds a Supplied transient (the push door; method `Set` today).
-**Parent / Child** — derives-from edges; rot walks parent→children (§3).
-**Element** — a node in the graph (§3).
+**Real (tree)** — the one authored-node class; ownership tree; never stale; undo via its Store (§2, §3).
+**Transient (DAG)** — derived node; dependency DAG hanging off the Reals; fresh/stale (§3).
+**Parent / Child** — *contains* in the Real-tree, *derives-from* in the Transient-DAG; rot walks the DAG's down-edges (§3, §5).
+**Consumer** — anything that projects a Real (the View → its geometry Transient; a panel → its values) (§3).
+**Element** — *retired.* No Element class; at most casual shorthand for "a Real you interact with in the scene."
 **Grown / Supplied** — the flavor axis: on-demand-self vs prepared-in-advance (§6).
 **`.Value` / `Peek`** — assertive vs tentative read (§7).
 **Single-writer rule** — graph state on one thread; work off-thread, re-enters via `Supply` (§8).
@@ -180,3 +209,7 @@ reads must `Peek`), because you can't refresh past a not-yet-produced ancestor.
 - ✓ **Closed** the [CODE-REVIEW.md](../CODE-REVIEW.md) Tier-4 "dirty bit" / "derives-from dependency"
   drift: AGENTS.md's Transient definition (+ DOC-TX-REFACTOR + DoD) now use the Fresh/Stale + Grow/Supply
   model — no "dirty bit".
+- **"Element" retired → "Real."** This spec drops the Element class (a Real is the node; geometry is a
+  Transient child; "viewable" = "has a geometry Transient"). The `AGENTS.md` (~:297) and
+  `DOC-TX-REFACTOR.md` (:65-66) glossary lines that still define *"Element (Piece, Crease — was entity)"*
+  should be reframed to **"the viewable/selectable Reals → just Reals"** — *pending sign-off* (locked vocab).
