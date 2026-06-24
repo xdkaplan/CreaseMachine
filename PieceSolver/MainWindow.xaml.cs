@@ -606,7 +606,7 @@ namespace PieceSolver
                 bool developed = !_bakeToken.IsCancellationRequested;
                 if (developed)
                 {
-                    _developed.Set(_session.Mesh);   // the Solver's Transient = the developed clone
+                    _developed.Supply(_session.Mesh);   // the Solver's Transient = the developed clone
                     // Flip to the Solver view: the piece view (ShowPieces) REPLACES the matcap mesh, so the
                     // developed mesh stays hidden behind it unless the Piecer-view decorations come off. Drop the
                     // piece colours + crease wires — DISPLAY only; the Pattern / CreaseMap data survive.
@@ -682,7 +682,7 @@ namespace PieceSolver
                 {
                     var pp = new double[nV * 3];
                     for (int v = 0; v < nV; v++) { var pv = P.Vertices[v]; pp[v * 3] = pv.X; pp[v * 3 + 1] = pv.Y; pp[v * 3 + 2] = pv.Z; }
-                    _proposedPos.Set(pp);
+                    _proposedPos.Supply(pp);
                 }
                 // Restore the original geometry + momentum: the live mesh returns to the input, and the
                 // cached fold labels reference exactly these (unrenumbered) vertices.
@@ -837,7 +837,7 @@ namespace PieceSolver
                 for (int i = 0; i < _creaseFold.Length; i++)
                     if (_creaseFold[i] >= thr) set.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
             }
-            _pattern.CreaseMap.Set(set);   // PUSH the provisional set; Seed peeks it, then RegenCrease marks it stale
+            _pattern.CreaseMap.Supply(set);   // Supply the provisional set; Seed peeks it, then RegenCrease marks it stale
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the
