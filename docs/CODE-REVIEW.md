@@ -20,9 +20,9 @@ the *target* as if *built* (Tier 4).
 - **Tier 1 — 1 of 5 done** (#1 shadow `_pattern` consolidated 2026-06-24); 4 hazards still open.
 - **Tier 2 — `studio/` deleted ✓, `Picker` extracted ✓**; engine library,
   `DisplaySource`, `BakeRunner` still open.
-- **Tier 4 — partly closed**: the "dirty bit" / vocab drift is fixed (AGENTS.md +
-  DOC-TX-REFACTOR + DoD aligned to the DOC-SPEC vocabulary); "journaling out-of-scope" + the
-  rest still open.
+- **Tier 4 — partly closed**: "dirty bit" killed + the Real/Transient/Ephemeral vocabulary now
+  aligned across AGENTS.md / DOC-TX-REFACTOR / DoD / DOC-SPEC; "journaling out-of-scope", the
+  DOC-TX self-contradiction, and the naming items still open.
 
 ## Tier 1 — real hazards (small fixes, worth doing soon)
 
@@ -100,6 +100,7 @@ but never downgraded to as-built.
   supersedes Parts 1–2" claim fights its own Shortcomings list (the op-log did
   *not* collapse the undo stacks; two journals remain). → reframe Revision as
   *target*, Parts 1–2 + Shortcomings as *as-built*. *(Agent E#1 — top doc fix)*
+  — *sidework revised Part 3 + Shortcomings (`8627c65`); re-check whether the contradiction is fully resolved.*
 - [x] **"dirty bit" in AGENTS.md** — the banned word, in the canonical glossary.
   *(Agent E#2)* — **done 2026-06-24:** the AGENTS.md Transient definition now uses the
   Fresh/Stale + Grow/Supply model (no "dirty bit" / "derives-from dependency"); cross-refs
@@ -112,7 +113,8 @@ but never downgraded to as-built.
   — *AGENTS.md now reads correctly (Pattern owns those engines); re-check
   `DOC-TX-REFACTOR.md`.*
 - [ ] **stale `Transient<T>` merge-debt note.** *(Agent E#6)*
-- [ ] **Real/Transient/Ephemeral redefined in 4 docs** with drift. *(Agent E#3,#12)*
+- [~] **Real/Transient/Ephemeral redefined in 4 docs** with drift. *(Agent E#3,#12)*
+  — *AGENTS.md / DOC-TX-REFACTOR / DoD / DOC-SPEC aligned to one vocabulary 2026-06-24; re-check HANDOFF.md.*
 - [ ] **Naming:** `region` vs `piece` (in `PieceMap`/`NewRegionId` vs the locked
   "piece"); `StudioCommand`/`CmdKind` in an app named PieceSolver; `Rot()` vs
   stale/regen vocabulary; the Reset/Revert split undocumented; three senses of
