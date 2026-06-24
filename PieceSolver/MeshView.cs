@@ -56,9 +56,6 @@ namespace PieceSolver
         public bool HasMesh => _ready;   // true once a mesh has been uploaded
         public bool ShowEdges = false;   // overlay the triangle edges (used for the flat map M', which is otherwise a featureless flat blob)
         public Vector3 EdgeColor = OpenColor.Gray4;   // open-color Gray 4 (#ced4da)
-        public bool ShowRulings = false;                                  // overlay per-vertex ruling segments
-        public Vector3 RulingColor = new Vector3(1.0f, 0.82f, 0.18f);     // gold
-        int _rulVao, _rulVbo, _rulCount;                                  // GL_LINES buffer for rulings (positions only)
         public bool ShowSeams = false;                                    // overlay fixed B-spline seam wires
         public Vector3 SeamColor = new Vector3(0.30f, 0.85f, 1.0f);       // cyan: the smooth degree-3 curve
         public Vector3 SeamCtrlColor = new Vector3(1.0f, 0.65f, 0.20f);   // amber: control polygon + control points
@@ -523,21 +520,6 @@ void main() {
             GL.BindTexture(TextureTarget.Texture3D, 0);
         }
 
-        // Upload ruling line segments (positions only, GL_LINES) computed externally from the live mesh.
-        // posF = [x0,y0,z0, x1,y1,z1, ...]; drawn flat-coloured via the shader's uEdge path.
-        public void SetRulings(float[] posF)
-        {
-            EnsureProgram();
-            _rulCount = posF.Length / 3;
-            if (_rulVao == 0) { _rulVao = GL.GenVertexArray(); _rulVbo = GL.GenBuffer(); }
-            GL.BindVertexArray(_rulVao);
-            GL.BindBuffer(BufferTarget.ArrayBuffer, _rulVbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, posF.Length * sizeof(float), posF, BufferUsageHint.DynamicDraw);
-            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
-            GL.EnableVertexAttribArray(0);
-            GL.BindVertexArray(0);
-        }
-
         // Upload the fitted seam curve (GL_LINES position pairs), same flat-coloured path as rulings.
         public void SetSeams(float[] posF)
         {
@@ -649,17 +631,6 @@ void main() {
                     GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
                 }
             }
-            // Ruling overlay: GL_LINES from a separate position-only buffer, flat-coloured (uEdge=1). Lifted
-            // off the surface in the field computation, so a normal depth test gives a clean on-surface look.
-            if (ShowRulings && _rulCount > 0)
-            {
-                GL.BindVertexArray(_rulVao);
-                GL.Uniform1(_uEdge, 1);
-                GL.Uniform3(_uEdgeColor, RulingColor.X, RulingColor.Y, RulingColor.Z);
-                GL.LineWidth(1.5f);
-                GL.DrawArrays(PrimitiveType.Lines, 0, _rulCount);
-                GL.LineWidth(1f);
-            }
             // Fixed B-spline seam wires: the smooth degree-3 curve (cyan) ...
             if (ShowSeams && _seamCount > 0)
             {
@@ -732,7 +703,6 @@ void main() {
             if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vboPos); GL.DeleteBuffer(_vboNrm); GL.DeleteBuffer(_ebo); }
             if (_vboField != 0) GL.DeleteBuffer(_vboField);
             if (_noiseTex != 0) GL.DeleteTexture(_noiseTex);
-            if (_rulVao != 0) { GL.DeleteVertexArray(_rulVao); GL.DeleteBuffer(_rulVbo); }
             if (_seamVao != 0) { GL.DeleteVertexArray(_seamVao); GL.DeleteBuffer(_seamVbo); }
             if (_seamCtrlVao != 0) { GL.DeleteVertexArray(_seamCtrlVao); GL.DeleteBuffer(_seamCtrlVbo); }
             if (_creaseVao != 0) { GL.DeleteVertexArray(_creaseVao); GL.DeleteBuffer(_creaseVbo); }
