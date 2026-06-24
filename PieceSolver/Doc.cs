@@ -151,11 +151,21 @@ namespace PieceSolver
         void ApplyInternal(IDelta d)  { if (d is CompositeDelta c) { foreach (var p in c.Parts) ApplyInternal(p); } else Pattern?.Apply(d); }
         void InvertInternal(IDelta d) { if (d is CompositeDelta c) { for (int i = c.Parts.Count - 1; i >= 0; i--) InvertInternal(c.Parts[i]); } else Pattern?.Invert(d); }
 
-        // Serialize a committed delta's ops into the op-log (CLI-tokenized: `setpiece <face> <from> <to>`).
-        void RecordOps(IDelta d)
+        // Serialize a delta's ops to op-lines (CLI-tokenized: `setpiece <face> <from> <to>`).
+        static void LinesFor(IDelta d, List<string> sink)
         {
-            if (d is CompositeDelta c) { foreach (var p in c.Parts) RecordOps(p); }
-            else if (d is PieceDelta pd) { foreach (var o in pd.Ops) Record($"setpiece {o.Face} {o.From} {o.To}"); }
+            if (d is CompositeDelta c) { foreach (var p in c.Parts) LinesFor(p, sink); }
+            else if (d is PieceDelta pd) { foreach (var o in pd.Ops) sink.Add($"setpiece {o.Face} {o.From} {o.To}"); }
+        }
+        void RecordOps(IDelta d) { var ls = new List<string>(); LinesFor(d, ls); foreach (var l in ls) Record(l); }
+
+        // The in-effect piece ops as op-lines (the undo stack, oldest first) — the piece half of a saved session.
+        // Read-only and reflects undo BY CONSTRUCTION: undone deltas aren't on the stack, so they aren't emitted.
+        public List<string> OpLines()
+        {
+            var lines = new List<string>(); var arr = _undo.ToArray();      // Stack.ToArray = top..bottom
+            for (int i = arr.Length - 1; i >= 0; i--) LinesFor(arr[i], lines);   // walk bottom..top = oldest first
+            return lines;
         }
     }
 }

@@ -1430,7 +1430,9 @@ namespace PieceSolver
             if (dlg.ShowDialog() != true) return;
             var lines = new System.Collections.Generic.List<string> { "# PieceSolver session journal" };
             foreach (var c in _journal) lines.Add(c.Serialize());
-            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands -> " + System.IO.Path.GetFileName(dlg.FileName)); }
+            var ops = _doc.OpLines();                                   // the in-effect piece edits (the undo stack — reflects undo by construction)
+            if (ops.Count > 0) { lines.Add("# pieces"); lines.AddRange(ops); }
+            try { System.IO.File.WriteAllLines(dlg.FileName, lines); Log("saved " + _journal.Count + " commands + " + ops.Count + " ops -> " + System.IO.Path.GetFileName(dlg.FileName)); }
             catch (Exception ex) { Log("save failed: " + ex.Message); }
         }
 
