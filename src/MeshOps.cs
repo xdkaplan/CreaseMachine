@@ -366,6 +366,45 @@ namespace CreaseMachine
         }
 
         /// <summary>
+        /// Unweld a mesh along its piece boundaries: rebuild it so each region in <paramref name="pieceMap"/>
+        /// (per-face id) becomes its own connected component. Vertices are duplicated by (original vertex,
+        /// piece): faces in the SAME piece sharing a vertex keep one shared copy (welded inside the piece);
+        /// faces in DIFFERENT pieces sharing a vertex get coincident separate copies (unwelded along the
+        /// crease). Geometry is identical (coincident seam verts); faces stay 1:1. <paramref name="vertexMap"/>
+        /// maps each new vertex back to its source vertex (like SplitComponents). The Solve handoff: develop the
+        /// painted pieces by feeding this to the per-component bake. See docs/SOLVER-PHASE.md.
+        /// </summary>
+        public static PlanktonMesh UnweldByRegion(PlanktonMesh M, int[] pieceMap, out int[] vertexMap)
+        {
+            var outMesh = new PlanktonMesh();
+            var localOf = new Dictionary<long, int>();   // (vertex, piece) packed -> new vertex index
+            var vmap = new List<int>();
+            int nF = M.Faces.Count;
+            for (int f = 0; f < nF; f++)
+            {
+                if (M.Faces[f].IsUnused) continue;
+                int piece = (pieceMap != null && f < pieceMap.Length) ? pieceMap[f] : 0;
+                int[] fv = M.Faces.GetFaceVertices(f);
+                var lf = new int[fv.Length];
+                for (int k = 0; k < fv.Length; k++)
+                {
+                    int gv = fv[k];
+                    long key = ((long)gv << 32) | (uint)piece;
+                    if (!localOf.TryGetValue(key, out int lv))
+                    {
+                        var p = M.Vertices[gv];
+                        lv = outMesh.Vertices.Add(p.X, p.Y, p.Z);
+                        localOf[key] = lv; vmap.Add(gv);
+                    }
+                    lf[k] = lv;
+                }
+                outMesh.Faces.AddFace(lf);
+            }
+            vertexMap = vmap.ToArray();
+            return outMesh;
+        }
+
+        /// <summary>
         /// Projected tangential relaxation - the vertex-slippage stabilizer. Pulls each interior
         /// vertex a fraction <paramref name="weight"/> of the way toward its 1-ring centroid
         /// (a uniform Laplacian), but FIRST removes the component of that pull lying along the

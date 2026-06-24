@@ -91,6 +91,9 @@ class Program
         AnalyzeDevFunc("deCraze=0.5 ", craze, P);
 
         Console.WriteLine();
+        UnweldTest();
+
+        Console.WriteLine();
         // Perf bench: time CHA in each config on realistic-sized meshes so we can SEE what's
         // actually slow vs guessing. Three bunnies span the range; bumpy grid (49 verts) is
         // too small to register past noise.
@@ -699,6 +702,53 @@ class Program
                 P.Faces.AddFace(vidx[0], vidx[1], vidx[2]);
         }
         return P;
+    }
+
+    // UnweldByRegion: split a grid into two halves (one straight crease down the middle), unweld, and
+    // confirm each piece became its own connected component, faces are 1:1, the seam vertices were
+    // duplicated (verts touched by both halves), and vertexMap maps back to coincident source verts.
+    static void UnweldTest()
+    {
+        Console.WriteLine("=== UnweldByRegion (piece -> connected component) ===");
+        PlanktonMesh P = BuildBumpyGrid(7);
+        int nF = P.Faces.Count, nV = P.Vertices.Count;
+
+        double minx = double.MaxValue, maxx = double.MinValue;
+        for (int v = 0; v < nV; v++) { double x = P.Vertices[v].X; if (x < minx) minx = x; if (x > maxx) maxx = x; }
+        double mid = 0.5 * (minx + maxx);
+        var pieceMap = new int[nF];
+        var seen0 = new bool[nV]; var seen1 = new bool[nV];
+        int p0 = 0, p1 = 0;
+        for (int f = 0; f < nF; f++)
+        {
+            int[] fv = P.Faces.GetFaceVertices(f);
+            double cx = 0; foreach (int v in fv) cx += P.Vertices[v].X; cx /= fv.Length;
+            int piece = cx < mid ? 0 : 1; pieceMap[f] = piece;
+            if (piece == 0) p0++; else p1++;
+            foreach (int v in fv) { if (piece == 0) seen0[v] = true; else seen1[v] = true; }
+        }
+        int seam = 0; for (int v = 0; v < nV; v++) if (seen0[v] && seen1[v]) seam++;
+
+        var M = MeshOps.UnweldByRegion(P, pieceMap, out int[] vmap);
+        int comps = MeshOps.ComponentCount(M);
+
+        bool facesOk = M.Faces.Count == nF;
+        bool compsOk = comps == 2;
+        bool vertsOk = M.Vertices.Count == nV + seam;          // each seam vert duplicated once
+        bool mapOk = vmap.Length == M.Vertices.Count;
+        bool coincident = true;
+        for (int v = 0; v < M.Vertices.Count; v++)
+        {
+            int gv = vmap[v];
+            if (gv < 0 || gv >= nV) { coincident = false; break; }
+            var a = M.Vertices[v]; var b = P.Vertices[gv];
+            if (Math.Abs(a.X - b.X) + Math.Abs(a.Y - b.Y) + Math.Abs(a.Z - b.Z) > 1e-12) { coincident = false; break; }
+        }
+        Console.WriteLine("  pieces=" + p0 + "/" + p1 + "  faces " + nF + "->" + M.Faces.Count + " (" + facesOk + ")"
+            + "  comps=" + comps + " (" + compsOk + ")"
+            + "  verts " + nV + "->" + M.Vertices.Count + " expect " + (nV + seam) + " (" + vertsOk + ")"
+            + "  map=" + mapOk + "  coincident=" + coincident);
+        Console.WriteLine("  RESULT: " + ((facesOk && compsOk && vertsOk && mapOk && coincident) ? "PASS" : "FAIL"));
     }
 
     // Make a short edge, then confirm the simple collapse removes it and the result is a valid
