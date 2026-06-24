@@ -286,11 +286,13 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     right-click pops a context menu (count header · Merge · Delete); `Ctrl+Z` / `Ctrl+Y` undo/redo. Every
     committing gesture is one `Doc.Run` transaction; the
     Piecer computes deltas, no geometry moves.
-  - **`IEditorHost`** — the narrow interface `MainWindow` implements so an editor talks to its host (mesh,
-    `Pattern`, **`Doc`**, picking, brush footprint, view-refresh hooks) rather than the whole window — the
-    wall that keeps the god-file from regrowing. `MainWindow` owns the `Doc` (which owns the `Pattern`) +
-    the active `Editor`, reacts to `Doc.Changed` / `Pieces.Changed`, and keeps the render loop / camera /
-    picking / crease-review modal.
+  - **`IEditorHost`** — the narrow interface an editor talks to its host through (mesh, `Pattern`, **`Doc`**,
+    picking, brush footprint, view-refresh hooks) rather than the whole window. **The `View`
+    (`PieceSolver/View.cs`) now implements it** (`new Piecer(_view)`), having drained display state, the orbit
+    `Camera` (`Camera.cs`), picking, and the brush footprint out of `MainWindow`. `MainWindow` is now the WPF
+    **chrome shell + render loop** (menus, the `GLWpfControl`, `OnRender`, the bake modal); it owns the `Doc`
+    + the active `Editor`, reacts to `Doc.Changed` / `Pieces.Changed`, and wires the View's render/preview
+    hooks. See the `project_view_abstraction` memory + `docs/specs/DOC-SPEC.md`.
 
   **Shared vocabulary** (see `DOC-TX-REFACTOR.md`): **Doc** (orchestrator) · **Store** (`ITxAble`, holds
   Real state) · **IDelta** / **Op** · **Command** (= the user's "Tool") · **Real / Transient / Ephemeral**

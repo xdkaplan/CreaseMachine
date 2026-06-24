@@ -17,7 +17,7 @@ the *target* as if *built* (Tier 4).
   (`f147074`→`8547b8c`, value-identical — bench `sumE` bit-identical, FD
   classifications identical pre/post). The three dead-code removals (#10) done
   earlier this session.
-- **Tier 1 — 1 of 5 done** (#1 shadow `_pattern` consolidated 2026-06-24); 4 hazards still open.
+- **Tier 1 — 2 of 5 done** (#1 shadow `_pattern`, #2 `_session` mid-bake guard); 3 hazards still open.
 - **Tier 2 — `studio/` ✓, `Picker` ✓, `DisplaySource` ✓ (View standup), + the whole View drain
   (camera/picking/IEditorHost → `View`) landed 2026-06-24**; `CreaseEngine` library + `BakeRunner`
   + reset-state dedup still open.
@@ -33,11 +33,12 @@ the *target* as if *built* (Tier 4).
   — **done 2026-06-24:** field deleted; all reads + `IEditorHost.Pattern` route
   through `_doc.Pattern`; `RebindPattern` goes through `_doc.Rebind`. `_doc.Pattern`
   is now the single authority (0 `_pattern` refs).
-- [ ] **2. Unguarded `_session` swap during bake** — `OnSolveAsync` swaps
+- [x] **2. Unguarded `_session` swap during bake** — `OnSolveAsync` swaps
   `_session` to a clone and restores in `finally`, but the mesh-index slider /
   `ApplyLoad` aren't gated on `_baking`; a mid-bake load overwrites `_session`,
-  then `finally` restores the *stale* authoring mesh. → gate all
-  `_session`-reassigning entry points on `!_baking`. *(Agent B#3 — latent bug)*
+  then `finally` restores the *stale* authoring mesh. *(Agent B#3 — latent bug)*
+  — **done 2026-06-24:** one guard at the `Execute` chokepoint rejects Load/Subdivide/Revert
+  while `_baking` (replay-safe). All mesh-changers route through there.
 - [ ] **3. `Doc.Run` duplicates the commit path** — it reimplements
   apply+push+RecordOps instead of being `OpenTx→Apply→Commit` sugar (which the
   doc *claims* it is). → make Run actual sugar. *(Agent A#2)*
