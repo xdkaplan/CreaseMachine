@@ -2,7 +2,7 @@
 
 Stand up the **Doc** orchestrator and a **transaction layer** so piecing edits are
 undoable / redoable, and route every mutation through one gate. This is the sequel to
-[`PIECER-REFACTOR.md`](PIECER-REFACTOR.md): that pass extracted the Piecer / Pattern / Editor
+[`PIECER-REFACTOR.md`](archive/PIECER-REFACTOR.md): that pass extracted the Piecer / Pattern / Editor
 units; this one gives them a spine — a single mutation chokepoint that records reversible
 **Deltas** on an undo/redo stack. **Merge** is the first command built on it (the payoff of
 multi-select), and the forcing function that proves the machine.
@@ -32,7 +32,7 @@ the entity zoo (creases-with-identity, joins, tabs, cone tips) lands on top of i
 
 ## Vocabulary (locked)
 
-These supersede / extend the [`PIECER-REFACTOR.md`](PIECER-REFACTOR.md) glossary.
+These supersede / extend the [`PIECER-REFACTOR.md`](archive/PIECER-REFACTOR.md) glossary.
 
 - **Doc** — the **orchestrator**. Owns the Stores, the Selections, and the undo/redo stacks;
   gatekeeps all mutation through `Run` / `Undo` / `Redo`. (Short for Document. "Project" is
@@ -415,74 +415,79 @@ not ops and are never journaled or replayed. For our goals that's a feature, not
 # Part 3 — Journaling (op-log) implementation plan
 
 Same cadence (build 0/0 + launch + one commit per slice). Builds on the shipped tx layer.
+**Status (revised 2026-06-24, post master-merge):** Slice A shipped; Slice C shipped *differently* (one
+unified `EventLog` drives Save, but the `_undo` / `_redo` stacks were kept rather than replaced by a
+cursor); Slice B is parked for the solver-refactor agent.
 
-### Slice A — Doc owns the journal; piece edits journal as ops; Console = the op-log
-- Move the journal store from `MainWindow` into the **Doc**. On `tx.Commit` (and `Run`), append the
-  committed delta's **ops** (serialized) to the Doc's op-log; `Cancel`/`Undo`/`Redo` keep the log and
-  the in-effect cursor in sync.
-- **`#`-comment split:** `Log(msg)` becomes the comment channel (auto-`#`); op/command echoes are
-  bare. Add inline-comment stripping to `Parse`.
-- App `load`/`solve` are still recorded as today's command-lines (routed *through* the Doc), not yet
-  op-ified — Slice B does that.
-- The Console window renders the Doc's op-log (ops highlighted, `#` comments dimmed).
-- Build 0/0, launch — piece edits show up as ops + `#` labels in the Console; replay of a
-  piece-only session reproduces it.
+### Slice A — Doc owns the journal; piece edits journal as ops; Console = the op-log — **DONE**
+- The **Doc** owns the op-log (`_log` / `EventLog` / `Record` / `Comment`). On `Run` / `tx.Commit` the
+  committed delta's ops serialize to `setpiece {faces} from to` (grouped by `from→to` transition) and
+  stream into the log via `Record`.
+- **`#`-comment split:** `Doc.Comment` is the comment channel (auto-`#`); op/command echoes are bare.
+  `Parse` strips inline comments (from the first ` #`).
+- The Console renders the log via the Doc's `Recorded` event → `Echo` → `ConsoleWindow.AppendLine`
+  (ops highlighted, `#` comments dimmed, ISO timestamps). Piece edits show as `setpiece` ops with
+  `# merge N pieces, M faces` labels. *(Replaying those lines back is still unwired — Shortcoming 1.)*
 
-### Slice B — `load` / `solve` become coarse ops
+### Slice B — `load` / `solve` become coarse ops — **PENDING** (parked for the solver-refactor agent)
 - `LoadOp` (Real: swap mesh; cheap re-apply) and `SolveOp` (**stores its result geometry** — with the
-  FP-determinism comment). Their serialization stays `load …` / `solve …` (CLI parity).
-- Replay applies the stored result instead of re-running the non-deterministic bake.
-- Build 0/0, launch — a full load→solve→piece session round-trips through save + replay.
+  FP-determinism comment). Serialization stays `load …` / `solve …` (CLI parity); replay applies the
+  stored result instead of re-running the non-deterministic bake.
+- **Not built:** `solve` / `SolveOp` belong to the solver-refactor agent (AGENTS carve-out). `load` /
+  `revert` are recorded as coarse command-lines through the Doc today, but neither is yet a reversible op.
 
-### Slice C — collapse undo/redo + journal into one op-log + cursor
-- Replace `_undo` / `_redo` stacks with the single **op-log + cursor**; undo/redo move the cursor;
-  save serializes `log[0..cursor]`; replay applies it. The undo stack *is* the journal now.
-- Build 0/0, launch — undo/redo and journal stay in lockstep (undo trims the Console's tail).
+### Slice C — collapse undo/redo + journal into one op-log — **DONE (differently)**
+- **Shipped:** every command routes through `Doc.Record`; undo/redo append **bare `undo` / `redo`
+  verbs** into the single `_log`; **Save serializes the whole `EventLog`**. One journal now drives Save
+  + Console, in lockstep with undo (the Console shows `undo` / `redo` lines; Console == saved journal).
+- **Not done as literally specced:** the `_undo` / `_redo` stacks were **kept** (not replaced by a
+  log + cursor). They already act as the op-log + cursor, so the rewrite was judged needless churn; the
+  user-visible goal — one unified journal — is met.
 
-### Closing — docs
-- Fold this revision into `AGENTS.md` + `HANDOFF.md` + the memory entry once Slice C lands (the
-  op-log is the architecture of record; `Op` / `Command` / `Journal` definitions updated).
+### Closing — docs — **PARTIAL**
+- `AGENTS.md` carries the Doc/tx vocabulary + the op-log model; this doc's Revision + Part 3 are the
+  record; `HANDOFF.md` and the memory entry are updated. The remaining fold-in (`Op` / `Command` /
+  `Journal` as the architecture of record) is complete except where Slice B (solve-as-op) is pending.
 
 ---
 
-# Shortcomings / known gaps (journaling op-log, as built 2026-06-24)
+# Shortcomings / known gaps (journaling op-log)
 
-What shipped on `ux/menu-cleanup`: the `#`-comment split, the Doc op-log (committed piece ops stream as
-`setpiece <face> <from> <to>`), `load`/`revert` as coarse ops (`Reset`→`Revert`), **Save** of the
-in-effect piece ops, and a syntax-highlighted Console. Honest gaps in that, roughly worst-first:
+Updated 2026-06-24 (post master-merge). The op-log shipped: every command routes through the Doc's single
+`EventLog` (`load` / `revert` / `run` / `subdivide` / `matcap` command-lines + `setpiece` piece ops + bare
+`undo` / `redo` verbs + `#` comment labels), the Console renders it with ISO timestamps + syntax
+highlighting, and **Save = the `EventLog`**. Remaining gaps, roughly worst-first:
 
 1. **Piece-op replay is not wired (the big one).** A saved journal's `setpiece` lines can't be replayed
    back. Two reasons: **(a) Propose isn't journaled** (it's a button, not a `StudioCommand`), so a bare
-   journal can't rebuild the *seeded partition* the ops apply to; and **(b)** only `OpLines` (serialize for
-   Save) exists — there's no parse-and-apply path, so `OpenAndReplay` handles app-commands only. So Save is
-   a one-way trip today.
-2. **`solve` / `SolveOp` deferred** (parked for the solver-refactor agent). Solve isn't an op, so a baked
-   result isn't a reversible op and a journal's `solve` line re-runs the (non-deterministic) bake rather than
-   restoring a stored result. The **Solve-stores-result** design (Real geometry, FP-determinism) is unbuilt.
-3. **The journal isn't fully unified.** Two stores remain: the `StudioCommand` `_journal` (load/run/revert/
-   solve/matcap) and the Doc's piece-op stream. Save *concatenates* them (`# pieces` block of `setpiece`
-   lines after the command lines) — it is not one op-log. Only `load`/`revert` route into the Doc op-log;
-   `run`/`subdivide`/`matcap`/`solve` still echo via the `StudioCommand` path.
-4. **The Console doesn't reflect undo.** It's a forward append-log: an undone op's `setpiece` lines stay on
-   screen (no trim, no `# undo` marker). Only the *saved* journal reflects undo (Save reads the undo stack,
-   not the Console). So Console ≠ saved journal after an undo.
-5. **Saved ops carry no labels.** Op-summary / intent comments (`# carved 5 faces`, `# merge …`) go to the
-   Console only; `OpLines` emits bare `setpiece` ops. A saved journal is valid + (future-)replayable but
-   unlabeled. Relatedly, gesture ops get a label only incidentally (the existing op-summary `Log`); there's
-   no first-class "command label precedes its ops" wiring.
-6. **Ops are face-index + piece-id based, hence session-local.** `setpiece <face> <from> <to>` uses dense
+   journal can't rebuild the *seeded partition* the ops apply to; and **(b)** ops serialize into the log
+   (`Doc.LinesFor` / `RecordOps`) but there's no parse-and-apply path — `StudioCommand.Parse` has no
+   `setpiece` case, so `OpenAndReplay` handles app-commands only. Save is a one-way trip today.
+2. **`solve` / `SolveOp` deferred** (parked for the solver-refactor agent). Solve isn't an op, so a
+   journal's `solve` line re-runs the (non-deterministic) bake rather than restoring a stored result. The
+   **Solve-stores-result** design (Real geometry, FP-determinism) is unbuilt.
+3. **Ops are face-index + piece-id based, hence session-local.** `setpiece <face> <from> <to>` uses dense
    face indices + piece ids that renumber (`SplitDisconnected`). A journal is only valid for the *same
    mesh/session*; cross-session / post-remesh replay needs **stable ids** (deferred GUID work). `from` is
    informational (Apply uses only `to`).
-7. **CLI parity broken for the new verbs.** PieceSolver now emits `revert` and `setpiece`; the headless CLI
+4. **CLI parity broken for the new verbs.** PieceSolver emits `revert` and `setpiece`; the headless CLI
    (`crease.exe`) knows neither (it has `reset`, no piecing). A modern journal won't round-trip through the
    CLI. (`Parse` accepts `reset` as a legacy alias, so the reverse direction still works.) Inline-comment
    stripping is also simplistic (strips from the first ` #`; a `#` with no leading space, or a path
    containing ` #`, is mishandled).
-8. **No test coverage.** The bench / `GradCheck` + CLI checksums don't touch the piecing/journaling layer
+5. **No test coverage.** The bench / `GradCheck` + CLI checksums don't touch the piecing/journaling layer
    (the CLI is a flow-only fossil). None of this is regression-guarded — verification was build-0/0 +
-   manual launch only.
-9. **Merge debt.** This branch sits ~13 commits behind master; in particular both branches renamed
-   `Reset`→`Revert` *differently* (master renamed the method `ApplyReset`→`Revert`; here the command surface
-   was renamed and `ApplyReset` kept), and the op-log is built on the pre-`Transient<T>` Pattern/Doc. The
-   reconcile is manual (deliberately deferred — "whoever merges handles it").
+   manual launch only. (This is what makes the DoD's "test-protected" aspirational for this layer.)
+
+## Resolved since the first cut (2026-06-24)
+
+- **Journal unified** (was gaps 3 & 4). Every command now routes through `_doc.Record`, and **Save is
+  `_doc.EventLog`** — not a concatenation of a separate `StudioCommand` store and a piece-op stream.
+  Undo/redo emit bare `undo` / `redo` verbs into the *same* log, so the Console reflects undo and
+  Console == saved journal again (the earlier "no `# undo` marker / Console ≠ saved" gap is closed).
+- **Saved ops carry labels** (was gap 5). Save serializes the whole `EventLog`, which interleaves the
+  `# merge N pieces, M faces` / gesture-summary `#` comments with the ops. (There's still no first-class
+  "command label precedes its ops" wiring, but a saved journal is no longer unlabeled.)
+- **Merge debt cleared** (was gap 9). The master merge landed: the method is `Revert()` (the branch's
+  `CmdKind.Revert` command + master's `Revert()` method reconciled), and `Pattern.CreaseMap` is now a
+  `Transient<HashSet<long>>` — the op-log is no longer on a pre-`Transient<T>` base.

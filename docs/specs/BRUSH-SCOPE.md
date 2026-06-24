@@ -1,17 +1,22 @@
 # Brush scope — CreaseStudio (built on the PieceSolver base)
 
-Status: scoping spec for the brush system in the consolidated app. The `studio/`
-brush zoo was an exploratory study; the plan is to **port the brush *chassis*,
-cull all 14 experimental brushes, and ship one good brush** (Freeze /
-Consolidate). PieceSolver currently has **no** brush UI (0 brush refs) — this is
-a port-the-scaffolding + build-one-brush task, not a merge.
+Status: **spec — not yet implemented.** Scoping the brush system for CreaseStudio (the PieceSolver base).
+The plan is to **lift the brush *chassis*, cull all 14 experimental brushes, and ship one good brush**
+(Freeze / Consolidate). PieceSolver has no Freeze/paint brush yet — only the Piecer's *piece-selection*
+footprint (`BrushSize` / `ShowBrushPreview`), a different mechanism — so this is a build-the-scaffolding +
+build-one-brush task, not a merge.
+
+> **`studio/` was removed 2026-06-24.** The brush zoo it carried lives in **git history only**, so every
+> `studio/MainWindow.xaml.cs:NNN` anchor below points at a deleted tree — treat them as historical
+> references to recover from git, not live line numbers. The Layer-0 engine hook (in `src/`, still shared)
+> and the Layer-3 Freeze brush (still unbuilt) are the parts that remain actionable.
 
 The one-liner: **port the brush chassis (size / hotkeys / preview / stroke /
-falloff) from `studio/`, throw away all 14 brush engines, and bolt on a single
+falloff) from `studio/` (git history), throw away all 14 brush engines, and bolt on a single
 Freeze brush that writes the `BrushWeights` field the flow already honours.**
 
 This brush is **stage 3** of the consolidated pipeline (*manual discernment — a
-brush isolates patches*); see [`APP-CONSOLIDATION.md`](APP-CONSOLIDATION.md) for
+brush isolates patches*); see [`APP-CONSOLIDATION.md`](../archive/APP-CONSOLIDATION.md) for
 the full 6-stage workflow. The brush is one of three studio→PieceSolver ports
 (brush chassis · the **crease proposer**, stage 2 · **Shine shading**), not the
 only one. It also embodies the project's **fewer-options** principle: one brush

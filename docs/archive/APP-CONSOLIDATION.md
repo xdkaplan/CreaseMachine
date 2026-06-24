@@ -1,7 +1,13 @@
 # App consolidation — `studio/` + `PieceSolver/` → CreaseStudio
 
+> **Archived (2026-06-24).** Superseded. The `studio/` → `PieceSolver/` consolidation this doc sequences
+> largely happened: `studio/` was **removed 2026-06-24** (its crease proposer + Shine ported into
+> `PieceSolver/`). The brush-chassis port and the rename (PieceSolver → CreaseStudio,
+> IsometricLM → PieceSolver) remain forward-looking — see `AGENTS.md` and
+> [`../specs/BRUSH-SCOPE.md`](../specs/BRUSH-SCOPE.md).
+
 Status: findings + sequencing for the merge. Companion to
-[`BRUSH-SCOPE.md`](BRUSH-SCOPE.md) (the brush part of the merge) and the engine
+[`BRUSH-SCOPE.md`](../specs/BRUSH-SCOPE.md) (the brush part of the merge) and the engine
 boundary plan (below). **Revised 2026-06-22** after the crease-proposer + Shine
 shading landed in `studio/` and merged to master — the port list is now wider
 than brush-only, and the "stale fork" framing is dropped (see TL;DR).

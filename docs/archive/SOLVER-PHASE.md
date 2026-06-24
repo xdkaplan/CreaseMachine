@@ -1,11 +1,15 @@
 # Solver phase — make the painted pieces drive Solve (the unweld handoff)
 
+> **Archived (2026-06-24).** The unweld-handoff Solve described here **shipped** — this is the design
+> record. The present-tense "Today Solve…" framing describes the *pre-implementation* state, and the
+> bracketed source line numbers predate the change.
+
 Today **Solve develops the mesh's connected components** (`MeshOps.ComponentCount`/`SplitComponents`) —
 i.e. the *weld topology* the file shipped with (FBX seams), **ignoring the painted `Pattern`** — and on
 top of that it *destroys* the Pattern (`OnSolveAsync` calls `ApplyReset`). This spec wires the two together:
 the **painted partition becomes what Solve develops**, via an *unweld along the creases* before the bake.
 
-Sequel to [`DOC-TX-REFACTOR.md`](DOC-TX-REFACTOR.md): it builds directly on Real / Transient / Ephemeral
+Sequel to [`DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md): it builds directly on Real / Transient / Ephemeral
 and the Doc model. Two parts: the **Design Note** (model + decisions + *why*) and the **Implementation
 Plan** (ordered, build-green steps).
 
@@ -20,7 +24,7 @@ mesh that derived mesh is the authoring mesh **unwelded along its creases** so e
 connected component; the existing per-component bake then develops them. The authoring mesh + `Pattern`
 never move, so they **survive Solve** and you can keep piecing.
 
-This is the [`DOC-TX-REFACTOR.md`](DOC-TX-REFACTOR.md) model applied to geometry:
+This is the [`DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md) model applied to geometry:
 
 - **Real:** mesh + `Pattern` (`PieceMap`) + bake params.
 - **Transient (the Solver's):** the cut/developed mesh. **Derived** from Real (unweld-along-`CreaseMap`, then

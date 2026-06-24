@@ -51,7 +51,7 @@ To install, copy that `.gha` into your Grasshopper Libraries folder
 
 ## Tests / bench
 
-A Rhino-free console bench was developed to help AI development. This is nearly a standalone app, but wat
+A Rhino-free console bench was developed to help AI development. This is nearly a standalone app, but was
 originally only so we could test gradients in a 'headless' mode (rhino being the head)
 
 ```sh
@@ -64,7 +64,7 @@ test/bin/Release/net48/GradCheck.exe
 `lib/Plankton.dll` and `lib/PlanktonGh.dll` are stock, unmodified upstream
 [Plankton](https://github.com/meshmash/Plankton) (0.4.3) by Daniel Piker, 
 Will Pearson, and David Stasiuk. We may expect these are C:/Repo/meshmash/Plankton
-You'll definitely nee the DLL and GHA for the Grasshopper node.
+You'll definitely need the DLL and GHA for the Grasshopper node.
 
 ## License
 

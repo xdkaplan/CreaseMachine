@@ -1,12 +1,16 @@
 # Piecer / Pattern refactor
 
+> **Archived (2026-06-24).** Historical record of the Piecer / Pattern / Editor extraction (shipped). The
+> deferred tx/undo stack + typed `Selection` it points to as future are now built — see
+> [`../DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md), which supersedes this for the Doc/tx layer.
+
 Extract the Piecing interaction and its data model out of the `MainWindow` god-file
 (2023 lines, ~8 responsibilities) into cohesive units, and stand up an **Editor**
 abstraction — without changing any behavior. This is the first concrete step toward
 proper CAD editability (today we select **Pieces**; later, **Creases**).
 
 > **Sequel:** the deferred tx/undo stack + typed `Selection` from this doc's roadmap are now specced and
-> built in [`DOC-TX-REFACTOR.md`](DOC-TX-REFACTOR.md) — the **Doc** orchestrator, `IDelta`/`Op`/`ITxAble`,
+> built in [`DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md) — the **Doc** orchestrator, `IDelta`/`Op`/`ITxAble`,
 > Commands, Real/Transient state, and undoable Merge. Read that for the current piecing architecture.
 
 This doc has two parts: the **Design Note** (durable — the model and the decisions and

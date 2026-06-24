@@ -91,7 +91,7 @@ namespace PieceSolver
         readonly Transient<double[]> _proposedPos = new Transient<double[]>();
         // TRANSIENT (the Solver's): the developed mesh from the last Solve — a derived clone/unweld of the
         // authoring mesh, NOT the authoring mesh itself (which + its Pattern survive the bake). PUSH (produced
-        // by the async bake); shown in the Solver phase. v1-split; see docs/SOLVER-PHASE.md.
+        // by the async bake); shown in the Solver phase. v1-split; see docs/archive/SOLVER-PHASE.md.
         readonly Transient<PlanktonMesh> _developed = new Transient<PlanktonMesh>();
         // PARTITION: the thin Pattern companion over the live mesh holds the per-face piece map (PieceMap, was
         // _faceRegion) + the derived crease set (CreaseMap, was _creaseEdges). It is the Doc's Store — the single
@@ -557,7 +557,7 @@ namespace PieceSolver
         {
             if (_baking || _session == null || _meshPath == null) return;
 
-            // v1-split (docs/SOLVER-PHASE.md): develop a DERIVED clone on a temporary session, so the authoring
+            // v1-split (docs/archive/SOLVER-PHASE.md): develop a DERIVED clone on a temporary session, so the authoring
             // _session + its Pattern survive the bake (the authoring mesh is restored in the finally; the result
             // is kept as the Solver Transient _developed and shown). Phase C unwelds-by-CreaseMap instead of
             // cloning when the mesh is pieced. Develop-state is reset for the clone exactly as Revert used to.
@@ -1250,7 +1250,7 @@ namespace PieceSolver
         // Reload the current mesh from disk and reset the flow. Same bounds -> camera kept (no reframe).
         // A true Revert: discard all work and reload the document from the file on disk. The standalone global
         // op behind the Reset button / Ctrl+R / the journal's Reset command. (Solve must NOT call this — it
-        // develops a derived clone instead, so the authoring mesh + Pattern survive. See docs/SOLVER-PHASE.md.)
+        // develops a derived clone instead, so the authoring mesh + Pattern survive. See docs/archive/SOLVER-PHASE.md.)
         void Revert()
         {
             if (_meshPath == null || !System.IO.File.Exists(_meshPath)) return;

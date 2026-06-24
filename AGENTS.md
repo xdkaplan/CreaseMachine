@@ -39,6 +39,7 @@ Category: **Mesh → CreaseMachine**.
 | DetMix | DetMix | Number | 0.0 | Continuous blend in `[0, 1]` between the paper-faithful `λ_min(M)` energy (`DetMix=0`) and the symmetric `det(M_tangent) = λ_min·λ_max` energy (`DetMix=1`). `λ_min` is genuinely non-smooth at degenerate vertices (icosahedral corners, symmetric quads) — the picked eigenvector is direction-arbitrary there, which can produce visible twist on symmetric meshes. Mixing in a small amount (try 0.05–0.2) restores symmetry by combining both tangent-plane eigenvectors. Live-tunable. |
 | MomFix | MomFix | Integer | 4 | Momentum-restart mode for near-isotropic vertices whose gradient direction is arbitrary (the source of "racking" on symmetric meshes like geodesic spheres). `1` = none (paper behaviour, racks ~iter 27). `2` = DegenZeroMom: zero velocity where eigenvalue separation `sep < 0.1`. `3` = GradRestart: zero velocity when `dot(grad, vel) > 0` **and** `DetMix < 0.5` (velocity heading uphill; delays racking to ~iter 61). `4` = Combined 2+3 **plus a global adaptive momentum restart** (O'Donoghue–Candès: reset all velocity on any step that overshoots uphill in aggregate) that prevents the fold→collapse cascade which destroyed meshes under sustained high momentum — makes `Momentum = 0.9` stable *and* convergent (default). Live-tunable. |
 | CrazeBand | CrazeBand | Number | 0.1 | **deCraze smoothing band, in radians (Huber).** `deCraze` penalises `|φ|` on the *unsigned* dihedral, whose force holds constant magnitude as `φ → 0` and reverses direction across the flat (`φ=0`) cusp — a non-vanishing, flipping force that makes `deCraze` *vibrate/jitter* under momentum instead of flattening cleanly. `CrazeBand` replaces `|φ|` with a quadratic below the band, so the force tapers smoothly to 0 at flat (near-flat edges **settle**) while edges above the band keep the full L1 pull (real creases untouched). ~0.1 rad (~5.7°, default) calms the jitter while preserving creases; raise toward 0.2–0.3 if it still buzzes, lower if real creases soften. `0` = off (original pure-L1 behaviour). Only active when `deCraze > 0`. Live-tunable. |
+| Stabilize | Stabilize | Number | 0.0 | Weight (0–~0.5) of the projected **tangential relaxer** — the vertex-slippage fix. Pulls each interior vertex a fraction of the way toward its 1-ring centroid, but **first removes the part of that pull lying along the developability gradient**, so the motion is confined to the zero-energy (developable-preserving) directions. It cannot oppose or assist the develop force and does not move the converged shape — it only stops low-angle, multi-panel vertices from sliding along their normal/tangent plane (the "slippage" that turns symmetric inputs like icosahedra oblong). Internally scale/resolution-invariant (no per-mesh tuning); the weight only sets how fast slip is damped. `0` = off; start ~0.2. Live-tunable. |
 
 ### Outputs
 
@@ -203,7 +204,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   per **Subdivision level**, subdivides + re-develops. **Solve develops a *derived* mesh, never the
   authoring mesh** (so the authoring mesh + its `Pattern` survive — `OnSolveAsync` no longer calls
   `Revert`; it bakes a clone/unweld on a temporary session and keeps the result as the `_developed`
-  Transient the view shows; see [`docs/SOLVER-PHASE.md`](docs/SOLVER-PHASE.md)). The derived mesh: a
+  Transient the view shows; see [`docs/archive/SOLVER-PHASE.md`](docs/archive/SOLVER-PHASE.md)). The derived mesh: a
   **pieced** mesh (>1 painted region) is **unwelded along its creases** (`MeshOps.UnweldByRegion`) so each
   painted piece is its own connected component; an FBX solid arrives multi-component already; a single open
   patch is a plain clone. The multi-component path then splits (`MeshOps.SplitComponents`), BFF-flattens +
@@ -243,7 +244,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 - **Piecing data model + transactions + editors** (`Pattern.cs` / `PieceId.cs` / `Tx.cs` / `Doc.cs` /
   `Commands.cs` / `Editor.cs` / `Piecer.cs`): the Piecing partition, its undo/redo transaction layer, and
   its interaction all live outside the `MainWindow` god-file. See
-  [`docs/PIECER-REFACTOR.md`](docs/PIECER-REFACTOR.md) (the unit extraction) and
+  [`docs/archive/PIECER-REFACTOR.md`](docs/archive/PIECER-REFACTOR.md) (the unit extraction) and
   [`docs/DOC-TX-REFACTOR.md`](docs/DOC-TX-REFACTOR.md) (the Doc / undo-redo layer) for the models +
   glossary + roadmap. The vocabulary below is shared by both.
   - **`Doc`** (`Doc.cs`) — the **orchestrator**. Owns the Store(s), the typed `Selection<T>`(s), and the
@@ -297,6 +298,18 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   naming — and the conceptual model behind a name. **Propose** any new name or rename and get **explicit
   acceptance** before introducing it; never coin or rename unilaterally. This whole vocabulary was settled
   exactly that way (propose → debate → accept), and that is the expected workflow for the next one.
+
+  **Definition of Done** (`docs/DEFINITION-OF-DONE.md`) — the terse bar: every command is **replayable**
+  from the journal; the journal stays **human-readable & concise** (a `#` comment only when the user's
+  action can't be inferred from the deltas alone); and the **Regen / dependency tree** (Real / Transient /
+  Ephemeral) is functional and test-protected.
+
+  **Do not modify any Doc orchestration — user acceptance required in all cases.** The transaction layer
+  (`Doc` / `Tx` / `IDelta` / `Op` / the undo-redo stacks / the op-log) is load-bearing and easy to break
+  subtly. Treat it as frozen: do not touch `Run` / `OpenTx` / `CloseTx` / `Undo` / `Redo` / `Record` /
+  `Apply` / `Invert` or the delta shapes without **proposing the change and getting explicit acceptance
+  first** — the same propose → debate → accept workflow as naming. Building new Commands *on top of* the
+  existing primitives is fine; changing the primitives is not.
 
   **Real / Transient / Ephemeral** — one distinction that governs undo, regen, *and* save:
   - **Real** — authored source-of-truth (mesh, `Pattern`, params, future crease types / seams). Undoable

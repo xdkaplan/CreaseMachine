@@ -9,7 +9,7 @@ namespace PieceSolver
     // The thin companion over ONE PlanktonMesh: the partition (PieceMap) + the derived crease set
     // (CreaseMap) + the ops that mutate them. NOT a mesh — it stores no geometry, only the per-face
     // piece labels index-coupled to the held mesh. (Plankton has no per-face attribute storage, so the
-    // labels have nowhere to live ON the mesh — they live here.) See docs/PIECER-REFACTOR.md.
+    // labels have nowhere to live ON the mesh — they live here.) See docs/archive/PIECER-REFACTOR.md.
     sealed class Pattern : ITxAble
     {
         readonly PlanktonMesh _mesh;

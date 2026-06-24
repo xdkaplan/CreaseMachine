@@ -7,7 +7,7 @@ namespace PieceSolver
 {
     // The narrow contract the host (MainWindow) exposes to an editor — the wall that keeps the editor
     // from depending on the whole 2000-line window. Picking, the brush footprint, the Pattern, and the
-    // view-refresh hooks live on the host; the editor reaches them only through here. See PIECER-REFACTOR.md.
+    // view-refresh hooks live on the host; the editor reaches them only through here. See docs/archive/PIECER-REFACTOR.md.
     interface IEditorHost
     {
         PlanktonMesh Mesh { get; }            // the live mesh the Pattern is index-coupled to (= _session.Mesh)
