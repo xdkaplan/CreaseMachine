@@ -211,7 +211,7 @@ namespace PieceSolver
             BakeCancel.Click += (s, e) => _bakeCts?.Cancel();
             CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
-            ResetButton.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);
+            MenuReset.Click += (s, e) => Execute(StudioCommand.Reset(), record: true);   // File > Reset (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
             PresetAButton.Click += (s, e) => _sim.ApplyPreset('A');
@@ -264,14 +264,13 @@ namespace PieceSolver
             _console.ReplayButton.Click += (s, e) => OpenAndReplay();
             _console.ClearButton.Click += (s, e) => { _journal.Clear(); _console.ClearLog(); Log("journal cleared"); };
 
-            // Menu bar + keyboard shortcuts (Ctrl+S = Save As, Ctrl+Shift+J = toggle Console).
-            MenuSaveAs.Click += (s, e) => SaveSession();
+            // Menu bar + keyboard shortcuts (Ctrl+Shift+J = toggle Console). Session-saving lives on the Console's
+            // Save button; Ctrl+S is intentionally NOT bound here — it's reserved for the future real save.
             MenuAbout.Click += (s, e) => ShowAbout();
             MenuConsole.Click += (s, e) => ShowConsole(MenuConsole.IsChecked);   // IsCheckable flips first
             PreviewKeyDown += (s, e) =>
             {
-                if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveSession(); e.Handled = true; }
-                else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
+                if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Reset(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
@@ -937,7 +936,6 @@ namespace PieceSolver
             // missing or stale for this topology.
             if (_pattern.PieceMap == null || _pattern.PieceMap.Length != nF) _pattern.Seed();
             int[] pieceId = _pattern.PieceMap;
-            int pieceCount = 0; for (int f = 0; f < nF; f++) if (pieceId[f] + 1 > pieceCount) pieceCount = pieceId[f] + 1;
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
             float meshR = (_view != null) ? Math.Max(1e-4f, _view.Radius) : 1f;
@@ -1026,7 +1024,6 @@ namespace PieceSolver
             }
             _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
             _pieceDirty = true; _showPieces = _piecePos.Length > 0;
-            Log($"pieces: {pieceCount} region(s)");
             _gl?.InvalidateVisual();
         }
 
