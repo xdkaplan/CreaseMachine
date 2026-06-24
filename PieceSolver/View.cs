@@ -18,6 +18,7 @@ namespace PieceSolver
 
         public Doc Doc { get; }
         public DisplaySource Display { get; set; } = DisplaySource.Authoring;
+        public Camera Camera { get; } = new Camera();   // the orbit camera — Ephemeral view state (see Camera.cs)
 
         public View(Doc doc, Action rot) { Doc = doc; _rot = rot; }
 

@@ -63,8 +63,7 @@ namespace PieceSolver
         bool _shuttingDown;                         // main window closing -> let tool windows actually close
 
         // orbit camera
-        float _azimuth = 0.6f, _elevation = 0.4f, _distance = 3f;
-        Vector3 _target = Vector3.Zero;
+        // Orbit camera (azimuth / elevation / target / distance) now lives on the View — `_view.Camera` (Camera.cs).
         System.Windows.Point _lastMouse;
         enum DragMode { None, Orbit, Pan, Edit }
         DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = Crease brush
@@ -161,7 +160,7 @@ namespace PieceSolver
             _gl.MouseDown += OnMouseDown;
             _gl.MouseUp += OnMouseUp;
             _gl.MouseMove += OnMouseMove;
-            _gl.MouseWheel += (s, e) => { _distance *= MathF.Pow(0.999f, e.Delta); InvalidateView(); };
+            _gl.MouseWheel += (s, e) => { _view.Camera.Zoom(e.Delta); _view.Rot(); };
 
             // Brush-footprint preview: a circle over the viewport on hover (Freeze brush only), hidden on
             // drag / when the cursor leaves. IsHitTestVisible=false so it passes clicks through to the GL view.
@@ -1626,9 +1625,8 @@ namespace PieceSolver
             switch (_drag)
             {
                 case DragMode.Orbit:
-                    _azimuth += dx * 0.01f;
-                    _elevation = Math.Clamp(_elevation + dy * 0.01f, -1.5f, 1.5f);
-                    InvalidateView();
+                    _view.Camera.Orbit(dx, dy);
+                    _view.Rot();
                     break;
                 case DragMode.Pan:
                     PanCamera(dx, dy);
@@ -1636,20 +1634,8 @@ namespace PieceSolver
             }
         }
 
-        // Unit vector from the orbit target toward the eye (eye = target + dir*distance). Z-up.
-        Vector3 CamDir() => Picker.CamDir(_azimuth, _elevation);
-
-        // Translate the orbit target in the camera's screen plane (Shift+right-drag). Speed scales
-        // with zoom distance so the feel is consistent at any zoom.
-        void PanCamera(float dx, float dy)
-        {
-            Vector3 dir = CamDir();                                                  // eye = target + dir*distance
-            Vector3 right = Vector3.Normalize(Vector3.Cross(Vector3.UnitZ, dir));   // camera-right in world
-            Vector3 up = Vector3.Normalize(Vector3.Cross(dir, right));              // camera-up in world
-            float scale = _distance * 0.0015f;
-            _target += (-dx * right + dy * up) * scale;
-            InvalidateView();
-        }
+        // Shift+right-drag pan -> the View's camera (speed scales with zoom inside Camera.Pan).
+        void PanCamera(float dx, float dy) { _view.Camera.Pan(dx, dy); _view.Rot(); }
 
         // ===================== Crease brush — host-side helpers (the interaction lives in Piecer) =====================
 
@@ -1668,7 +1654,7 @@ namespace PieceSolver
         {
             eye = default; rd = default;
             if (_session == null) return false;
-            return Picker.PickRay(screen, _gl.ActualWidth, _gl.ActualHeight, _target, _azimuth, _elevation, _distance, out eye, out rd);
+            return _view.Camera.PickRay(screen, _gl.ActualWidth, _gl.ActualHeight, out eye, out rd);
         }
 
         // Build a pick ray and intersect the mesh (nearest hit point).
@@ -1715,8 +1701,8 @@ namespace PieceSolver
         // The brush's world radius projected to screen pixels at the given surface point's depth.
         public double ScreenRadiusPx(Vector3 hit)
         {
-            Vector3 dir = CamDir();
-            Vector3 eye = _target + dir * _distance;
+            Vector3 dir = _view.Camera.Dir;
+            Vector3 eye = _view.Camera.Eye;
             double dist = Math.Max(1e-4, Vector3.Dot(hit - eye, -dir));   // depth along the view axis
             double h = Math.Max(1, _gl.ActualHeight);
             double tanH = Math.Tan(MathHelper.DegreesToRadians(45f) * 0.5);
@@ -1792,7 +1778,7 @@ namespace PieceSolver
                     Vector3 bbHi = Vector3.ComponentMax(fitCenter + new Vector3(fitRadius), flatCen + new Vector3(flatRad));
                     fitCenter = (bbLo + bbHi) * 0.5f; fitRadius = MathF.Max(1e-4f, (bbHi - bbLo).Length * 0.5f);
                 }
-                _target = fitCenter; _distance = fitRadius * 3f;
+                _view.Camera.Frame(fitCenter, fitRadius);
                 _grid.Build(fitCenter, fitRadius);
                 _reframe = false;
             }
@@ -1830,13 +1816,10 @@ namespace PieceSolver
             double w = _gl.ActualWidth, h = Math.Max(1, _gl.ActualHeight);
             float aspect = (float)(w / h);
 
-            // Z-up (Rhino convention): elevation raises +Z, up vector is +Z.
-            Vector3 dir = CamDir();
-            Vector3 eye = _target + dir * _distance;
-            Matrix4 view = Matrix4.LookAt(eye, _target, Vector3.UnitZ);
+            // Z-up (Rhino convention): elevation raises +Z, up vector is +Z. Matrices come from the View's camera.
+            Matrix4 view = _view.Camera.ViewMatrix;
             float r = _renderer != null ? _renderer.Radius : 1f;
-            Matrix4 proj = Matrix4.CreatePerspectiveFieldOfView(
-                MathHelper.DegreesToRadians(45f), aspect, MathF.Max(1e-3f, r * 0.01f), r * 100f);
+            Matrix4 proj = _view.Camera.ProjMatrix(aspect, r);
 
             _grid?.Draw(view, proj);   // ground reference, behind the mesh (depth-tested)
             if (_renderer != null)
