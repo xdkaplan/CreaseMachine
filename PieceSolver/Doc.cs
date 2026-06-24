@@ -16,7 +16,8 @@ namespace PieceSolver
         public void Replace(T x) { _set.Clear(); _set.Add(x); Changed?.Invoke(); }
         public void Add(T x)     { if (_set.Add(x))    Changed?.Invoke(); }
         public void Remove(T x)  { if (_set.Remove(x)) Changed?.Invoke(); }
-        public void Clear()      { if (_set.Count > 0) { _set.Clear(); Changed?.Invoke(); } }
+        public void Clear()      { if (_set.Count > 0) { _set.Clear(); Changed?.Invoke(); } }   // user deselect -> notify
+        public void ClearSilent() { _set.Clear(); }   // programmatic reset (the caller drives its own rebuild)
     }
 
     // The orchestrator: owns the Store(s) + Selection(s) + the undo/redo stacks, and gatekeeps all mutation
@@ -38,7 +39,7 @@ namespace PieceSolver
 
         // Re-point at a fresh Store (mesh load / subdivide / reset) and drop the now-meaningless history +
         // selection — the deltas reference the old face indices, so they cannot survive a re-mesh.
-        public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); Pieces.Clear(); }
+        public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); Pieces.ClearSilent(); }
 
         // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
         // SAME mesh, so old deltas reference invalid region ids). Selection is cleared separately by the caller.

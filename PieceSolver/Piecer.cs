@@ -318,7 +318,7 @@ namespace PieceSolver
         }
 
         // ---- selection lifecycle ----
-        public void ClearSelection() { Sel.Clear(); }                  // programmatic (e.g. Seed/mesh change); Changed drives the rebuild
+        public void ClearSelection() { Sel.ClearSilent(); }            // programmatic (Seed/mesh change/teardown); the caller drives the rebuild
         public override void Deselect() { Sel.Clear(); }               // user deselect (ESC / empty-canvas click); Changed drives the rebuild
 
         // ---- colours ----
