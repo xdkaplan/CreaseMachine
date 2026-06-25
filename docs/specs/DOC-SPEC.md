@@ -61,6 +61,15 @@ There are **two** node kinds and **two** relationships — the whole point is *n
   two axes on distinct words is what makes them unambiguous even though one Real lives in *both*
   graphs (its ownership children are not its DAG downstreams). The freshness machinery (§5)
   walks the DAG's **downstream** edges so a rot floods everything that derives from the changed node.
+- **Two propagation channels, never mixed (confirmed 2026-06-25):** the **rot cascade** (a Real's
+  `Invalidate()` → its derived Transients) carries *invalidation only* — it marks downstreams stale, it
+  **never mutates Real state**, and it is **not undoable**. **Authored** change — including any future
+  **Real→Real** consistency (e.g. a `Crease` edit reconciling the `Piece`s it borders, an I4 concern) —
+  rides the **ops / transaction** layer instead: a Command computes a delta → `Apply`/`Invert` → one undo
+  unit. A single edit uses *both*, in order: the tx mutates the Real (undoable), **then** `Invalidate()`
+  rots its derived Transients (re-derived on demand). Conflating them — a rot that writes Real state, or a
+  Real→Real update made outside a tx — breaks undo. So: a Real *originates* a Transient rot; the Tree and
+  the DAG meet only at that source node, only downstream.
 
 **Consumers project a Real.** A Real is never gated "viewable / not" — any consumer takes what
 it can. The **3D View** pulls a Real's geometry Transient and draws it (type-dispatching on
