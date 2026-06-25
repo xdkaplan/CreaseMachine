@@ -1,7 +1,7 @@
 # Node-Model Implementation Plan — building Real / Transient
 
-**Status:** implementation plan (design = [DOC-SPEC.md](DOC-SPEC.md)). **I1 built + committed `45909a1`
-(2026-06-24)** — see the increment list; everything past I1 is still plan. **Revised 2026-06-24 after a
+**Status:** **I1 + pre-I2 untangle + I2a + I3 all BUILT & committed (2026-06-24/25)** — see the increment
+list for commit hashes; I4+ is still plan. Design = [DOC-SPEC.md](DOC-SPEC.md). **Revised 2026-06-24 after a
 read-only audit** (the audit caught three show-stoppers in the first draft — see the change log at the
 end). Filename provisional.
 
@@ -49,23 +49,23 @@ arrays incl. `Dist`/`Edge`, own shader.)*
 
 ## 2. Increment order (each: build 0/0, app-runs, user-smoke-test, commit)
 
-- **I1 — the spine, on an always-on overlay (grid or crease lines). Lowest risk; freeze-safe; no DisplaySource
-  change.** Introduce `Real` + `RenderData`/`RenderKind`. Make the **ground grid** (and/or the **crease
-  overlay**) a `Real` whose `Geometry` yields a `Lines` `RenderData`; `OnRender` pulls it and stages the
-  existing `SetCreases`/grid upload. Proves "Real → RenderData → staged GL upload" on a node that is
-  *always drawn, never selected, never occludes the base mesh* — so it sidesteps `DisplaySource` entirely.
-  *(The degenerate write-once `_developed` is NOT the I1 proof — it exercises none of the machinery.)*
-- **I2 — `Piece : Real`, re-materialized (I2a).** Build Piece-Reals **derived fresh on each `Doc.Changed`**
-  from `PieceMap` (no long-lived per-Piece objects, no stable identity — `Selection` stays `PieceId`-int).
-  Their `Geometry` yields a `Pieces` `RenderData`. The View draws Piece-Reals as the `Pieces` base source.
-  **Blocked on untangling `RebuildPieces` first** (see §3). *I2b (stable per-Piece identity) is the I4
-  gateway — explicitly deferred.*
-- **I3 — the rot cascade. FROZEN-LAYER — requires sign-off.** Wiring Real-mutation → `rotDownstream` lands in
-  `Pattern.Apply/Invert` (the only Real-mutation sites) and/or `Doc.*Internal`. `Pattern` *already* rots
-  `CreaseMap` there, so the crease edge can ride the existing hook, but extending the cascade to Piece
-  geometry touches frozen code. **Checkpoint required**, same tier as I4.
-- **I4+ — frozen / later:** Crease-with-identity (`regen`→`reconcile`), Spline + its Store, the property
-  panel as a second consumer, stable `PieceId` GUIDs.
+- **I1 ✓ DONE (`45909a1`) — the spine, on an always-on overlay.** Introduced `Real` + `RenderData`/
+  `RenderKind`; made the **crease overlay** a `Real` whose `Geometry` yields a `Lines` `RenderData`;
+  `OnRender` `Peek`s it and stages `SetCreases`. Proves "Real → RenderData → staged GL upload" on a node
+  that is always drawn, never occludes — sidesteps `DisplaySource` entirely.
+- **pre-I2 untangle ✓ DONE (`33886d4`)** — pure `DerivePieceBuffers` extracted; see §3.
+- **I2a ✓ DONE (`458cfc3`) — the partition `Pattern` IS the Pieces Real.** (User's call: no separate
+  `PieceView` / per-`Piece` class — *"don't shatter the abstraction until we need it"*.) `Pattern : Real`
+  gained a **Supplied** `Geometry` Transient (beside its **Grown** `CreaseMap`); `RebuildPieces` runs the
+  pure `DerivePieceBuffers` and Supplies it; `OnRender` pulls it for the `Pieces` base source. ONE Real,
+  ONE buffer — per-piece identity stays the I4 gateway.
+- **I3 ✓ DONE (`375f503`) — the rot cascade.** (Frozen-layer; built with user sign-off.) `Node` base holds
+  **Downstream** edges + `RotDownstream()` (the flood); `Transient.Rot`/`Supply` cascade; `Real : Node`;
+  `Pattern` wires `CreaseMap` + `Geometry` as downstreams and `RegenCrease() → RotDownstream()`, so every
+  PieceMap change rots both. `Apply`/`Invert` bodies byte-identical (only `RegenCrease`'s reach widened) —
+  undo math untouched. No frame-glitch artifacts in testing.
+- **I4+ — frozen / later:** Crease-with-identity (`regen`→`reconcile`), per-`Piece` identity + selection,
+  Spline + its Store, the property panel as a second consumer, stable `PieceId` GUIDs.
 
 ## 3. Pre-I2 untangle (REQUIRED — `RebuildPieces` is not pure)
 
@@ -88,10 +88,10 @@ separate consumer; **deferred**, flagged so it isn't forgotten.
 
 | Increment | Frozen layer? |
 |---|---|
-| Pre-I2 untangle (`RebuildPieces` → pure) | No (relocates a derivation; removes a read-side mutation) |
-| I1 (Real + RenderData; grid/crease adopter; `Doc.Scene` additive) | **No** |
-| I2a (Piece-Reals re-materialized; View draws them) | **No** (`Selection<T>` is Ephemeral, not a tx primitive) |
-| I3 (rot cascade onto Real-mutation) | **YES — `Pattern.Apply/Invert` / `Doc.*Internal`; sign-off** |
+| Pre-I2 untangle (`RebuildPieces` → pure) ✓ | No (relocated a derivation; removed a read-side mutation) |
+| I1 (Real + RenderData; crease adopter) ✓ | **No** |
+| I2a (`Pattern : Real`; Supplied `Geometry`) ✓ | **No** (additive to `Pattern`; no `Apply`/`Invert`/delta change) |
+| I3 (rot cascade) ✓ | **Touched frozen `Pattern` — done with sign-off**; `RegenCrease → RotDownstream`, `Apply`/`Invert` bodies byte-identical |
 | I4+ (Crease-identity, Spline Store, …) | **YES — sign-off** |
 
 ## 6. Verification per increment

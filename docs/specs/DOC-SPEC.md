@@ -39,7 +39,7 @@ save, and concurrency** at once.
 not refreshed; lose it and it's gone). So Ephemeral is *only* for the genuinely disposable
 (selection, camera, preview) — putting real state there is the trap.
 
-## 3. The graphs — Real tree + Transient DAG  ○ designed
+## 3. The graphs — Real tree + Transient DAG  ◑ first edges built (I3)
 
 There are **two** node kinds and **two** relationships — the whole point is *not* to conflate them:
 
@@ -68,7 +68,9 @@ mesh / lines / points), or no-ops when there's none. The **property / Settings p
 *same* Real's values and shows them. Same Real, many projections; the viewport and the panels
 are **peer consumers** of one Real-tree, not a privileged "viewable" hierarchy.
 
-*Today:* exactly one edge exists, hand-wired — `Pattern.Apply/Invert` rots `CreaseMap`.
+*Today (I3 built):* `Pattern` has two downstream edges — `CreaseMap` and the Pieces `Geometry` — and any
+PieceMap change rots both via `RotDownstream()` (the `Node`/`Transient` cascade). The wider multi-level
+graph is supported by the machinery but only this flat graph is wired so far.
 
 ## 4. Freshness  ✓ built (the bool) / ○ the invariant
 
@@ -81,7 +83,7 @@ A transient is **Fresh** (cache valid — equals what a rebuild would produce) o
 `.Value` short-circuits on Fresh without consulting upstreams, so a fresh node must never sit
 over a stale upstream. §5 preserves this by cascading the rot **downstream** at invalidation time.
 
-## 5. Transitions  ○ designed (rot/refresh model)
+## 5. Transitions  ✓ built (the rot cascade; I3)
 
 Two umbrella transitions, organic antonyms:
 
@@ -186,9 +188,9 @@ reads must `Peek`), because you can't refresh past a not-yet-produced upstream.
 | Piece | State |
 |---|---|
 | `Transient<T>` with `IsFresh`/`IsStale`, `Value`, `Peek`, `Set`, `Rot`, `Clear` | ✓ built |
-| One hand-wired edge: `Pattern.Apply/Invert` rots `CreaseMap` | ✓ built |
+| `Pattern` rots `CreaseMap` + `Geometry` via the `RotDownstream` cascade (I3) | ✓ built |
 | Real/Transient/Ephemeral distinction | ✓ built (AGENTS.md) |
-| Upstream/Downstream edges + `rotDownstream` cascade | ○ designed |
+| Upstream/Downstream edges + `rotDownstream` cascade (`Node`/`Transient`) | ✓ built (I3; wired Pattern→{CreaseMap, Geometry}) |
 | `Grown` / `Supplied` flavor (formalized) | ○ designed |
 | `.Value` throws on stale-Supplied | ○ designed |
 | `Supply` method (from `Set`) + Grown/Supplied/Grow vocab in `Transient.cs` | ✓ built |
