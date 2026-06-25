@@ -113,14 +113,10 @@ namespace PieceSolver
         readonly View _view;
         // EDITOR: the active interaction. Non-null == a proposal has been accepted and the Crease brush owns the
         // left-button + hover paths. Set in OpenCreaseReview's onAccept, cleared in ClearProposedCreases (mesh
-        // change / review-cancel / load / reset / subdivide / run / solve). The Piecer instance is retained so
-        // its selection persists across activations. The brush is LIVE only when EditorActive (which also gates
-        // out the transient `_baking` / `_camModal` windows) — exactly the old BrushAvailable condition.
-        Editor _activeEditor;
-        Piecer _piecer;
-        // The old BrushAvailable gate, now expressed over the editor: an editor is bound AND we're not in a
-        // transient blocking state (a bake or a camera-modal). Drives the delegation, preview, and [ / ] keys.
-        bool EditorActive => _activeEditor != null && !_baking && !_camModal;
+        // change / review-cancel / load / reset / subdivide / run / solve). The active editor + the retained
+        // Piecer instance now live on the View (`_view.ActiveEditor` / `_view.Piecer`), which hosts them; the brush
+        // is LIVE only when `_view.EditorActive` (an editor bound AND not in a transient `_baking` / `_camModal`
+        // window) — exactly the old BrushAvailable condition. See PieceSolver/View.cs.
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
         bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
@@ -154,10 +150,9 @@ namespace PieceSolver
             _gl = new GLWpfControl();
             // The viewport IS the editor's host (IEditorHost): display + camera + picking + brush footprint live on
             // it; the render rebuilds + preview dot are wired in as shell hooks until the render-loop drains.
-            _view = new View(_doc, _gl, () => _session?.Mesh, () => _sim.BrushSize,
+            _view = new View(_doc, _gl, () => _baking, () => _camModal, () => _session?.Mesh, () => _sim.BrushSize,
                              RebuildPieces, RebuildCreaseOverlay, UpdatePreview,
                              () => _previewDot.Visibility = Visibility.Collapsed);
-            _piecer = new Piecer(_view);   // the Piecing editor now talks to the View, not the window
             CenterHost.Children.Add(_gl);   // GL viewport lives in the center cell of the docked layout
             _gl.Start(new GLWpfControlSettings
             {
@@ -310,17 +305,17 @@ namespace PieceSolver
                 }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
-                else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
-                else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
-                else if (e.Key == Key.Y && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
-                else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { _doc.Redo(); e.Handled = true; }   // Ctrl+Shift+Z = redo
-                else if (e.Key == Key.M && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryMerge(); e.Handled = true; }   // M = merge the selected pieces
-                else if ((e.Key == Key.Delete || e.Key == Key.Back) && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryDelPiece(); e.Handled = true; }   // Del / Backspace = delete the selected pieces (donate to neighbour)
-                else if (e.Key == Key.OemCloseBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
+                else if (e.Key == Key.Escape && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_view.ActiveEditor.GesturePending) _view.ActiveEditor.CancelGesture(); else _view.ActiveEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
+                else if (e.Key == Key.Z && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
+                else if (e.Key == Key.Y && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
+                else if (e.Key == Key.Z && _view.EditorActive && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { _doc.Redo(); e.Handled = true; }   // Ctrl+Shift+Z = redo
+                else if (e.Key == Key.M && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryMerge(); e.Handled = true; }   // M = merge the selected pieces
+                else if ((e.Key == Key.Delete || e.Key == Key.Back) && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None) { TryDelPiece(); e.Handled = true; }   // Del / Backspace = delete the selected pieces (donate to neighbour)
+                else if (e.Key == Key.OemCloseBrackets && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None)   // ] = grow brush
                 {
                     ResizeBrush(1); UpdatePreview(_lastHover); e.Handled = true;
                 }
-                else if (e.Key == Key.OemOpenBrackets && EditorActive && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
+                else if (e.Key == Key.OemOpenBrackets && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None)    // [ = shrink brush
                 {
                     ResizeBrush(-1); UpdatePreview(_lastHover); e.Handled = true;
                 }
@@ -822,7 +817,7 @@ namespace PieceSolver
             ShowCamModal("Review creases — drag Crease ∠, then Accept", BuildCreaseReviewBody(),
                 onAccept: () =>
                 {
-                    _activeEditor = _piecer;   // proposal accepted -> the Crease brush goes live (was: _faceRegion != null)
+                    _view.ActiveEditor = _view.Piecer;   // proposal accepted -> the Crease brush goes live (was: _faceRegion != null)
                     RebuildPieces();   // _camModal now false -> recolour to neutral (via the editor's FaceFill); creases stay committed
                     _doc.Comment($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
                     Title = "PieceSolver — " + _creaseCount + " creases committed";
@@ -890,7 +885,7 @@ namespace PieceSolver
         void RelabelCreases()
         {
             SeedCreaseEdges();          // provisional crease set into _doc.Pattern.CreaseMap
-            _piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
+            _view.Piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
             _doc.ClearHistory();        // Chapter reset: the re-partition invalidates the undo/redo deltas
             _doc.Pattern?.Seed();           // flood-fill the regions across non-crease edges
             _doc.Pattern?.Invalidate();     // rot downstreams: CreaseMap regrows to the real region-boundary creases
@@ -977,8 +972,8 @@ namespace PieceSolver
             if (_creaseFold == null && _proposedPos.IsStale && (_doc.Pattern == null || _doc.Pattern.CreaseMap.IsStale) && _creaseCount == 0 && _view.Display != DisplaySource.Pieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos.Clear();
             if (_doc.Pattern != null) { _doc.Pattern.CreaseMap.Clear(); _doc.Pattern.PieceMap = null; }
-            _piecer?.ClearSelection();
-            _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
+            _view.Piecer?.ClearSelection();
+            _view.ActiveEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; _creaseDirty = true;   // drop the crease wires (CreaseLines grows empty once cleared)
             _view.Display = DisplaySource.Authoring; _doc.Pattern?.Geometry.Clear(); _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
@@ -1004,7 +999,7 @@ namespace PieceSolver
 
             // Inputs the pure derivation needs that come from render/editor/modal state (caller concerns):
             float meshR = (_renderer != null) ? Math.Max(1e-4f, _renderer.Radius) : 1f;
-            _activeEditor?.FaceFillBegin();   // precompute the remove-set ONCE so the colour callback stays O(1)
+            _view.ActiveEditor?.FaceFillBegin();   // precompute the remove-set ONCE so the colour callback stays O(1)
             // Colour source (grooves delineate the pieces in every case; this only sets the FILL tint):
             //   crease review (cam-modal): settled -> full rainbow patchwork (PieceColor); mid-drag -> neutral
             //     white (the crease shader still shows the pieces, but no colour churns while you slide the angle)
@@ -1012,7 +1007,7 @@ namespace PieceSolver
             //     null -> white).
             Func<int, int, Vector3> colorOf = (f, pid) =>
                 _camModal ? (_angleDragging ? Vector3.One : PieceColor(pid))
-                          : (_activeEditor?.FaceFill(f, pid) ?? Vector3.One);
+                          : (_view.ActiveEditor?.FaceFill(f, pid) ?? Vector3.One);
 
             var (pos, nrm, col, dist, edge) = DerivePieceBuffers(P, _doc.Pattern.PieceMap, creaseMap, meshR, colorOf);
             // SUPPLY the Pattern Real's geometry Transient (the buffers need render/editor inputs, so this is
@@ -1031,7 +1026,7 @@ namespace PieceSolver
         }
 
         // PURE derivation: PieceMap (+ its derived creaseMap) -> the 5 SPLIT render buffers + the groove inset.
-        // No Seed, no _renderer/_activeEditor/_camModal reads (those arrive as meshR + colorOf). This IS the I2a
+        // No Seed, no _renderer/_view.ActiveEditor/_camModal reads (those arrive as meshR + colorOf). This IS the I2a
         // Piece-Real Grow recipe; RebuildPieces is the caller that supplies the inputs and stores the result.
         // (node-model pre-I2 untangle; see docs/specs/NODE-MODEL-IMPL.md §3.)
         static (float[] pos, float[] nrm, float[] col, float[] dist, float[] edge) DerivePieceBuffers(
@@ -1628,7 +1623,7 @@ namespace PieceSolver
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, _heldMods);
+                if (_view.EditorActive) _view.ActiveEditor.OnPointerDown(_lastMouse, _heldMods);
             }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
@@ -1638,13 +1633,13 @@ namespace PieceSolver
         {
             _drag = DragMode.None;
             _gl.ReleaseMouseCapture();
-            if (EditorActive) _activeEditor.OnPointerUp(_lastMouse);
+            if (_view.EditorActive) _view.ActiveEditor.OnPointerUp(_lastMouse);
             if (e.ChangedButton == MouseButton.Right && _rightClickArmed)
             {
                 _rightClickArmed = false;
                 var up = e.GetPosition(_gl);
                 double dx = up.X - _rightDownPos.X, dy = up.Y - _rightDownPos.Y;
-                if (dx * dx + dy * dy <= RightClickPx * RightClickPx && EditorActive) ShowPieceMenu();   // a click, not an orbit -> pop the menu
+                if (dx * dx + dy * dy <= RightClickPx * RightClickPx && _view.EditorActive) ShowPieceMenu();   // a click, not an orbit -> pop the menu
             }
         }
 
@@ -1681,12 +1676,12 @@ namespace PieceSolver
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
-                if (EditorActive) _activeEditor.OnHover(p);   // footprint preview on hover (no-op when no editor is active)
+                if (_view.EditorActive) _view.ActiveEditor.OnHover(p);   // footprint preview on hover (no-op when no editor is active)
                 return;
             }
             if (_drag == DragMode.Edit)
             {
-                if (EditorActive) _activeEditor.OnPointerMove(p);
+                if (_view.EditorActive) _view.ActiveEditor.OnPointerMove(p);
                 _lastMouse = p;
                 return;
             }
@@ -1769,7 +1764,7 @@ namespace PieceSolver
 
         void UpdatePreview(System.Windows.Point cursor)
         {
-            if (!EditorActive || !_view.PickSurface(cursor, out var hit))
+            if (!_view.EditorActive || !_view.PickSurface(cursor, out var hit))
             { _previewDot.Visibility = Visibility.Collapsed; return; }
             double rpx = _view.ScreenRadiusPx(hit);
             _previewDot.Width = _previewDot.Height = 2.0 * rpx;

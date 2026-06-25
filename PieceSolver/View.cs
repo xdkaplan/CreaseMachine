@@ -26,17 +26,29 @@ namespace PieceSolver
         // render-loop + preview dot move onto View.
         readonly Action _refreshPieces, _refreshCreaseOverlay, _hidePreview;
         readonly Action<Point> _showPreview;
+        readonly Func<bool> _baking, _camModal;   // transient blocking states — injected so EditorActive can gate on them
 
         public Doc Doc { get; }
         public DisplaySource Display { get; set; } = DisplaySource.Authoring;
         public Camera Camera { get; } = new Camera();   // the orbit camera — Ephemeral view state (see Camera.cs)
 
-        public View(Doc doc, GLWpfControl gl, Func<PlanktonMesh> mesh, Func<double> brushSize,
+        // EDITOR (Ephemeral): the active interaction the View hosts. The Piecer instance is retained so its
+        // selection persists across activations; ActiveEditor is non-null only once a proposal is accepted.
+        readonly Piecer _piecer;
+        public Piecer Piecer => _piecer;
+        public Editor ActiveEditor { get; set; }
+        // The brush is LIVE only when an editor is bound AND we're not in a transient blocking state (a bake or a
+        // camera-modal) — the old BrushAvailable / EditorActive gate, now expressed on the host.
+        public bool EditorActive => ActiveEditor != null && !_baking() && !_camModal();
+
+        public View(Doc doc, GLWpfControl gl, Func<bool> baking, Func<bool> camModal,
+                    Func<PlanktonMesh> mesh, Func<double> brushSize,
                     Action refreshPieces, Action refreshCreaseOverlay, Action<Point> showPreview, Action hidePreview)
         {
-            Doc = doc; _gl = gl; _mesh = mesh; _brushSize = brushSize;
+            Doc = doc; _gl = gl; _baking = baking; _camModal = camModal; _mesh = mesh; _brushSize = brushSize;
             _refreshPieces = refreshPieces; _refreshCreaseOverlay = refreshCreaseOverlay;
             _showPreview = showPreview; _hidePreview = hidePreview;
+            _piecer = new Piecer(this);   // the Piecing editor talks to the View (its host); ctor doesn't use the host
         }
 
         // Mark the rendered frame stale and schedule its re-grow. The frame is itself a Transient (derived from
