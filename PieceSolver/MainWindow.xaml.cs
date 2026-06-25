@@ -301,7 +301,14 @@ namespace PieceSolver
             PreviewKeyDown += (s, e) =>
             {
                 _heldMods = e.KeyboardDevice.Modifiers;   // track held modifiers so mouse gestures read this, not a stale/early Keyboard.Modifiers
-                if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
+                // TAB toggles the base view between Authoring and Developed. WPF treats Tab as focus traversal, so
+                // we intercept it in PreviewKeyDown (window-level). Gated off a focused text control so a future
+                // editable field keeps Tab; today there are none, so this is effectively a window-level toggle.
+                if (e.Key == Key.Tab && Keyboard.Modifiers == ModifierKeys.None && !(Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase))
+                {
+                    ToggleDevelopedView(); e.Handled = true;
+                }
+                else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
@@ -443,6 +450,7 @@ namespace PieceSolver
             try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
             catch (Exception ex) { Title = "PieceSolver — load failed: " + ex.Message; return; }
             RebindPattern();          // the partition companion now wraps the new mesh
+            _developed.Rot();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
             ClearProposedCreases();   // labels reference the prior mesh's vertices
@@ -452,6 +460,33 @@ namespace PieceSolver
             _bffNeeded = true;        // new mesh -> BFF must (re)run before the sim can step
             Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
             RefreshSeamDisplay();     // show the fitted seam wires immediately if Fix B-spline edges is on
+            _gl?.InvalidateVisual();
+        }
+
+        // Upload the base-mesh buffer for the CURRENT display source. The Developed view is sourced from the
+        // governed _developed Transient (Peek: stale/never-supplied => fall back to authoring); Authoring/Pieces
+        // share the authoring mesh. The single Display-aware upload site so a stray _meshDirty can't replace the
+        // developed view with the authoring mesh.
+        void UploadForDisplay()
+        {
+            if (_renderer == null) return;
+            if (_view.Display == DisplaySource.Developed && _developed.Peek(out var dev) && dev != null)
+                _renderer.Upload(dev);            // developed view sourced from the governed Transient
+            else if (_session?.Mesh != null)
+                _renderer.Upload(_session.Mesh);  // authoring / pieces base = the authoring mesh
+        }
+
+        // TAB: flip the base view between Authoring and Developed. From Developed -> Authoring. From
+        // Authoring/Pieces -> Developed only if a solved result exists (the _developed Transient is Fresh);
+        // otherwise land on Authoring (so TAB with nothing solved is a clean no-op-ish that shows authoring).
+        void ToggleDevelopedView()
+        {
+            if (_view.Display == DisplaySource.Developed)
+                _view.Display = DisplaySource.Authoring;
+            else
+                _view.Display = (_developed.Peek(out var d) && d != null) ? DisplaySource.Developed : DisplaySource.Authoring;
+            _meshDirty = true; _pieceDirty = true;   // re-evaluate the base upload + ShowPieces for the new display
+            UpdateStatus();
             _gl?.InvalidateVisual();
         }
 
@@ -651,7 +686,7 @@ namespace PieceSolver
                     _creaseCount = 0; _creaseDirty = true;   // drop the crease wires (CreaseLines grows empty once cleared)
                 }
                 _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
-                if (_renderer != null) _renderer.Upload(developed ? _developed.Value : _session.Mesh);   // show the developed result, else authoring
+                UploadForDisplay();                              // Display==Developed (set above) => governed _developed; else authoring
                 if (_hasFlat && _flatRenderer != null && _flat != null) { _flatRenderer.Upload(_flat); PlaceFlat(); }
                 _meshDirty = false; _rulingsDirty = true;     // mesh just uploaded; recompute rulings if shown
                 RefreshSeamDisplay();
@@ -1288,6 +1323,7 @@ namespace PieceSolver
                 _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;    // strain stays ~constant (subdivide is metric-preserving)
             }
             _meshDirty = true;
+            _developed.Rot();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
             ClearProposedCreases();   // 1->4 renumbers vertices -> labels invalid
             Title = "PieceSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
@@ -1303,6 +1339,7 @@ namespace PieceSolver
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
             catch (Exception ex) { Title = "PieceSolver — reset failed: " + ex.Message; return; }
             RebindPattern();          // the partition companion now wraps the reloaded mesh
+            _developed.Rot();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
@@ -1799,7 +1836,7 @@ namespace PieceSolver
             if (_meshDirty && !_baking && _session != null)
             {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                _renderer.Upload(_session.Mesh);
+                UploadForDisplay();   // Display-aware: Developed => governed _developed, else authoring mesh
                 sw.Stop();
                 _lastUploadMs = sw.Elapsed.TotalMilliseconds;
                 _meshDirty = false;
