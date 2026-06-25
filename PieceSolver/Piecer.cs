@@ -152,7 +152,11 @@ namespace PieceSolver
             else
             {
                 // PLAIN drag: MULTI-SELECT — paint pieces; on release every wholly-painted piece REPLACES the
-                // selection. Selection is Ephemeral (not undoable), so NO tx is opened.
+                // selection. Selection is Ephemeral (not undoable), so NO tx is opened. CLEAR the prior selection
+                // the moment the drag triggers (silently — the RefreshPieces below repaints): this gesture builds a
+                // REPLACEMENT, so a previously-tapped piece must not linger highlighted under the brush. (ESC then
+                // leaves an empty selection — a clean bail.)
+                Sel.ClearSilent();
                 _selecting = true; _selTouched = new HashSet<int>();
                 if (_host.PickSurface(_downScreen, out var hit)) MarkSelectUnderBrush(hit);
                 _host.RefreshPieces();
