@@ -976,26 +976,60 @@ namespace PieceSolver
             if (_session == null || _doc.Pattern == null)
             { _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
-            int nV = P.Vertices.Count, nF = P.Faces.Count;
+            int nF = P.Faces.Count;
 
-            // Pieces ARE the painted face regions now (the primary segmentation). Re-seed only if the map is
-            // missing or stale for this topology — BEFORE pulling the (derived) crease set off it.
-            if (_doc.Pattern.PieceMap == null || _doc.Pattern.PieceMap.Length != nF) _doc.Pattern.Seed();
+            // Pieces ARE the painted face regions (the primary segmentation). Re-seed only if the map is missing
+            // or stale for this topology — a CALLER-side Real-state concern, kept OUT of the pure derivation so a
+            // piece-geometry .Value read can never re-partition the mesh (pre-I2 untangle; NODE-MODEL-IMPL §3).
+            EnsurePieceMap(nF);
             var creaseMap = _doc.Pattern.CreaseMap.Value;   // Transient: derived from the now-ensured PieceMap
             if (creaseMap == null || creaseMap.Count == 0)
             { _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+
+            // Inputs the pure derivation needs that come from render/editor/modal state (caller concerns):
+            float meshR = (_renderer != null) ? Math.Max(1e-4f, _renderer.Radius) : 1f;
+            _activeEditor?.FaceFillBegin();   // precompute the remove-set ONCE so the colour callback stays O(1)
+            // Colour source (grooves delineate the pieces in every case; this only sets the FILL tint):
+            //   crease review (cam-modal): settled -> full rainbow patchwork (PieceColor); mid-drag -> neutral
+            //     white (the crease shader still shows the pieces, but no colour churns while you slide the angle)
+            //   brush mode: the active editor's per-face fill (active region light-blue / remove preview red /
+            //     null -> white).
+            Func<int, int, Vector3> colorOf = (f, pid) =>
+                _camModal ? (_angleDragging ? Vector3.One : PieceColor(pid))
+                          : (_activeEditor?.FaceFill(f, pid) ?? Vector3.One);
+
+            (_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge, _pieceInset) =
+                DerivePieceBuffers(P, _doc.Pattern.PieceMap, creaseMap, meshR, colorOf);
+            _pieceDirty = true;
+            _view.Display = _piecePos.Length > 0 ? DisplaySource.Pieces : DisplaySource.Authoring;
+            _gl?.InvalidateVisual();
+        }
+
+        // Caller-side Real-state ensure: (re)partition only when the PieceMap is missing or stale for this
+        // topology. Isolated from RebuildPieces' pure derivation (pre-I2 untangle; NODE-MODEL-IMPL §3).
+        void EnsurePieceMap(int nF)
+        {
+            if (_doc.Pattern.PieceMap == null || _doc.Pattern.PieceMap.Length != nF) _doc.Pattern.Seed();
+        }
+
+        // PURE derivation: PieceMap (+ its derived creaseMap) -> the 5 SPLIT render buffers + the groove inset.
+        // No Seed, no _renderer/_activeEditor/_camModal reads (those arrive as meshR + colorOf). This IS the I2a
+        // Piece-Real Grow recipe; RebuildPieces is the caller that supplies the inputs and stores the result.
+        // (node-model pre-I2 untangle; see docs/specs/NODE-MODEL-IMPL.md §3.)
+        static (float[] pos, float[] nrm, float[] col, float[] dist, float[] edge, float inset) DerivePieceBuffers(
+            PlanktonMesh P, int[] pieceId, System.Collections.Generic.HashSet<long> creaseMap, float meshR,
+            Func<int, int, Vector3> colorOf)
+        {
+            int nV = P.Vertices.Count, nF = P.Faces.Count;
 
             double[] dp = null;   // proposed-preview removed -> live mesh coords
             Vector3 Pos(int v) => dp != null
                 ? new Vector3((float)dp[v * 3], (float)dp[v * 3 + 1], (float)dp[v * 3 + 2])
                 : new Vector3((float)P.Vertices[v].X, (float)P.Vertices[v].Y, (float)P.Vertices[v].Z);
 
-            int[] pieceId = _doc.Pattern.PieceMap;
-
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
-            float meshR = (_renderer != null) ? Math.Max(1e-4f, _renderer.Radius) : 1f;
             float cap = 0.25f * meshR;
-            _pieceInset = 0.06f * meshR;
+            float inset = 0.06f * meshR;
             var dist = new float[nV]; for (int v = 0; v < nV; v++) dist[v] = cap;
             var pq = new System.Collections.Generic.PriorityQueue<int, float>();
             foreach (long key in creaseMap)
@@ -1041,19 +1075,11 @@ namespace PieceSolver
             var col = new System.Collections.Generic.List<float>(nF * 9);
             var dst = new System.Collections.Generic.List<float>(nF * 3);
             var edg = new System.Collections.Generic.List<float>(nF * 12);
-            // Colour source split (grooves delineate the pieces in every case; this only sets the FILL tint):
-            //   - crease review (cam-modal): settled -> full rainbow patchwork (PieceColor); mid-drag -> neutral
-            //     white (the crease shader still shows the pieces, but no colour churns while you slide the angle)
-            //   - brush mode: the active EDITOR's per-face fill (active region light-blue / remove preview red /
-            //     null -> white). FaceFillBegin precomputes the remove set ONCE so FaceFill stays O(1) per face.
-            _activeEditor?.FaceFillBegin();
             for (int f = 0; f < nF; f++)
             {
                 if (pieceId[f] < 0) continue;
                 int[] fv = P.Faces.GetFaceVertices(f); if (fv.Length != 3) continue;
-                Vector3 cc;
-                if (_camModal) cc = _angleDragging ? Vector3.One : PieceColor(pieceId[f]);   // crease-review colouring stays HERE
-                else cc = _activeEditor?.FaceFill(f, pieceId[f]) ?? Vector3.One;              // brush colouring comes from the editor
+                Vector3 cc = colorOf(f, pieceId[f]);
                 Vector3 p0 = Pos(fv[0]), p1 = Pos(fv[1]), p2 = Pos(fv[2]);
                 bool c0 = creaseMap.Contains(Pattern.EdgeKey(fv[0], fv[1]));   // edge 0 = (v0,v1)
                 bool c1 = creaseMap.Contains(Pattern.EdgeKey(fv[1], fv[2]));   // edge 1 = (v1,v2)
@@ -1077,9 +1103,7 @@ namespace PieceSolver
                     edg.Add(flat);
                 }
             }
-            _piecePos = pos.ToArray(); _pieceNrm = nrm.ToArray(); _pieceCol = col.ToArray(); _pieceDist = dst.ToArray(); _pieceEdge = edg.ToArray();
-            _pieceDirty = true; _view.Display = _piecePos.Length > 0 ? DisplaySource.Pieces : DisplaySource.Authoring;
-            _gl?.InvalidateVisual();
+            return (pos.ToArray(), nrm.ToArray(), col.ToArray(), dst.ToArray(), edg.ToArray(), inset);
         }
 
         // (The active-region + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)

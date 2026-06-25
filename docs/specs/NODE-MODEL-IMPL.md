@@ -1,8 +1,9 @@
 # Node-Model Implementation Plan — building Real / Transient
 
-**Status:** implementation plan (design = [DOC-SPEC.md](DOC-SPEC.md)). *Nothing built yet.* **Revised
-2026-06-24 after a read-only audit** (the audit caught three show-stoppers in the first draft — see the
-change log at the end). Filename provisional.
+**Status:** implementation plan (design = [DOC-SPEC.md](DOC-SPEC.md)). **I1 built + committed `45909a1`
+(2026-06-24)** — see the increment list; everything past I1 is still plan. **Revised 2026-06-24 after a
+read-only audit** (the audit caught three show-stoppers in the first draft — see the change log at the
+end). Filename provisional.
 
 ## 0. Two hard constraints the audit surfaced (read first)
 
