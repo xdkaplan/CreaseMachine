@@ -116,7 +116,7 @@ namespace PieceSolver
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
         bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
-        // Piece visualization: crease-bounded face regions tinted per piece. The SPLIT buffers now live on the
+        // Piece visualization: crease-bounded face pieces tinted per piece. The SPLIT buffers now live on the
         // Pattern Real's Geometry Transient (I2a — Supplied by RebuildPieces, staged GL-side in OnRender like the
         // mesh/crease overlay). _pieceDirty is the PUSH flag that re-stages it. Auto-shown after Propose.
         bool _pieceDirty;
@@ -274,7 +274,7 @@ namespace PieceSolver
                 else if (e.PropertyName == nameof(SimSettings.MeshIndex) || e.PropertyName == nameof(SimSettings.AssetSet)) OnMeshIndexChanged();
                 else if (e.PropertyName == nameof(SimSettings.CreaseAngleDeg))
                 {
-                    RelabelCreases();   // recompute regions + crease-EDGE overlay
+                    RelabelCreases();   // recompute pieces + crease-EDGE overlay
                     RebuildPieces();    // rebuild the crease-shader grooves; colour rule: rainbow when settled, NEUTRAL while dragging
                     _gl?.InvalidateVisual();
                 }
@@ -626,7 +626,7 @@ namespace PieceSolver
             // is kept as the Solver Transient _developed and shown). Phase C unwelds-by-CreaseMap instead of
             // cloning when the mesh is pieced. Develop-state is reset for the clone exactly as Revert used to.
             var authoring = _session;
-            // The derived develop mesh: when the mesh is PIECED (>1 painted region), UNWELD along the creases so
+            // The derived develop mesh: when the mesh is PIECED (>1 painted piece), UNWELD along the creases so
             // each piece is its own connected component — the per-component bake (RunBakeMulti) then develops the
             // painted pieces. Otherwise a plain clone (single-patch develop). The authoring mesh is untouched.
             var pieceMap = _doc.Pattern?.PieceMap;
@@ -872,25 +872,25 @@ namespace PieceSolver
         // Re-seed the editable crease selection from the cached fold angles at the current Crease angle
         // threshold (DISCARDS brush edits), then rebuild the overlay. Called on Propose + the Crease angle
         // slider. No cached angles -> clears.
-        // Re-seed the per-FACE region map from the threshold creases (DISCARDS brush paint), then derive the
-        // crease set from those region boundaries and rebuild the overlay. The region map is primary; creases
-        // are whatever separates two regions. A dangling threshold crease (doesn't split a region) is dropped.
-        // Seed a provisional crease set (into the Pattern's CreaseMap) to flood-fill the initial regions, then
-        // re-seed the per-FACE region map from it (DISCARDS brush paint) and re-derive the real region-boundary
-        // creases, then rebuild the overlay. The region map is primary; creases are whatever separates two
-        // regions. A dangling threshold crease (doesn't split a region) is dropped. Piecer inactive (modal).
+        // Re-seed the per-FACE piece map from the threshold creases (DISCARDS brush paint), then derive the
+        // crease set from those piece boundaries and rebuild the overlay. The piece map is primary; creases
+        // are whatever separates two pieces. A dangling threshold crease (doesn't split a piece) is dropped.
+        // Seed a provisional crease set (into the Pattern's CreaseMap) to flood-fill the initial pieces, then
+        // re-seed the per-FACE piece map from it (DISCARDS brush paint) and re-derive the real piece-boundary
+        // creases, then rebuild the overlay. The piece map is primary; creases are whatever separates two
+        // pieces. A dangling threshold crease (doesn't split a piece) is dropped. Piecer inactive (modal).
         void RelabelCreases()
         {
             SeedCreaseEdges();          // provisional crease set into _doc.Pattern.CreaseMap
             _view.Piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
             _doc.ClearHistory();        // Chapter reset: the re-partition invalidates the undo/redo deltas
-            _doc.Pattern?.Seed();           // flood-fill the regions across non-crease edges
-            _doc.Pattern?.Invalidate();     // rot downstreams: CreaseMap regrows to the real region-boundary creases
+            _doc.Pattern?.Seed();           // flood-fill the pieces across non-crease edges
+            _doc.Pattern?.Invalidate();     // rot downstreams: CreaseMap regrows to the real piece-boundary creases
             RebuildCreaseOverlay();
         }
 
         // Seed a provisional crease set from the threshold-labeled proposed edges (only used to flood-fill the
-        // initial regions in _doc.Pattern.Seed; Invalidate then rots CreaseMap so it regrows the real boundaries).
+        // initial pieces in _doc.Pattern.Seed; Invalidate then rots CreaseMap so it regrows the real boundaries).
         void SeedCreaseEdges()
         {
             if (_doc.Pattern == null) return;
@@ -975,7 +975,7 @@ namespace PieceSolver
             _view.Display = DisplaySource.Authoring; _doc.Pattern?.Geometry.Clear(); _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
 
-        // Identify pieces (face regions bounded by the crease selection + mesh boundaries) and stage a
+        // Identify pieces (face groups bounded by the crease selection + mesh boundaries) and stage a
         // per-piece-tinted SPLIT render buffer (pos / normal / piece colour / world distance-to-boundary).
         // CPU-only here; the GL upload is staged for OnRender. Auto-shown after Propose, refreshed on Crease
         // angle change, on a brush stroke, and on the proposed-mesh preview toggle.
@@ -986,7 +986,7 @@ namespace PieceSolver
             var P = _session.Mesh;
             int nF = P.Faces.Count;
 
-            // Pieces ARE the painted face regions (the primary segmentation). Re-seed only if the map is missing
+            // Pieces ARE the painted face groups (the primary segmentation). Re-seed only if the map is missing
             // or stale for this topology — a CALLER-side Real-state concern, kept OUT of the pure derivation so a
             // piece-geometry .Value read can never re-partition the mesh (pre-I2 untangle; NODE-MODEL-IMPL §3).
             EnsurePieceMap(nF);
@@ -1000,7 +1000,7 @@ namespace PieceSolver
             // Colour source (grooves delineate the pieces in every case; this only sets the FILL tint):
             //   crease review (cam-modal): settled -> full rainbow patchwork (PieceColor); mid-drag -> neutral
             //     white (the crease shader still shows the pieces, but no colour churns while you slide the angle)
-            //   brush mode: the active editor's per-face fill (active region light-blue / remove preview red /
+            //   brush mode: the active editor's per-face fill (active piece light-blue / remove preview red /
             //     null -> white).
             Func<int, int, Vector3> colorOf = (f, pid) =>
                 _camModal ? (_angleDragging ? Vector3.One : PieceColor(pid))
@@ -1115,7 +1115,7 @@ namespace PieceSolver
             return (pos.ToArray(), nrm.ToArray(), col.ToArray(), dst.ToArray(), edg.ToArray());
         }
 
-        // (The active-region + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)
+        // (The active-piece + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)
 
         // Per-piece colour: cycle the open-color hues at shade 3 (standardized / accessible). Pieces a full
         // palette-cycle apart in id share a colour, but the deboss grooves always separate them.

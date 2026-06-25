@@ -13,7 +13,7 @@ namespace PieceSolver
     //           Drag: MULTI-SELECT — paint faces (Indigo 2); a fully-painted piece pops Indigo 5; on release every
     //           fully-painted piece REPLACES the selection (settling to the active colour).
     //   SHIFT — tap: ADD that piece to the selection (union). Drag: GROW the whole selection (when nothing is
-    //           selected, MINT a new region from the largest connected blob). Provisional — candidates preview
+    //           selected, MINT a new piece from the largest connected blob). Provisional — candidates preview
     //           Green 5 (will be added) / Green 2 (a disconnected no-op affordance); commits on release.
     //   CTRL  — tap: REMOVE that piece from the selection. Drag: CARVE faces out of the whole selection (donated
     //           to a neighbour outside the selection, or split off as an island), or — nothing selected — DELETE
@@ -30,7 +30,7 @@ namespace PieceSolver
 
         // ---- selection lives in the Doc (typed, shared, NOT undoable); the Piecer drives it via this handle ----
         Selection<PieceId> Sel => _host.Doc.Pieces;
-        bool Selected(int region) => region >= 0 && Sel.Contains(new PieceId(region));
+        bool Selected(int piece) => piece >= 0 && Sel.Contains(new PieceId(piece));
         HashSet<int> SelIds() { var s = new HashSet<int>(); foreach (var p in Sel.Items) s.Add(p.Value); return s; }
 
         // ---- gesture arming (tap vs drag, decided by travel from the press point) ----
@@ -140,7 +140,7 @@ namespace PieceSolver
             else if ((_downMods & ModifierKeys.Shift) != 0)
             {
                 _tx = _host.Doc.OpenTx();   // mutating stroke: hold the lease
-                // SHIFT drag (provisional): nothing selected -> MINT a new region (the largest connected blob);
+                // SHIFT drag (provisional): nothing selected -> MINT a new piece (the largest connected blob);
                 // a selection -> GROW it (candidates a selected front reaches -> Green 5; the rest Green 2, a no-op
                 // affordance until they connect). Commits on release.
                 _growActive = true; _growMint = Sel.Count == 0;
@@ -197,13 +197,13 @@ namespace PieceSolver
             PieceDelta delta; PieceId minted = default; bool didMint = _growMint;
             if (_growMint)
             {
-                // MINT: a brand-new region from the largest connected blob (Green 5); strays were never written.
+                // MINT: a brand-new piece from the largest connected blob (Green 5); strays were never written.
                 var connected = _growConnected;
                 delta = _host.Pattern.ComputeDelta(() =>
                 {
                     if (connected != null && connected.Count > 0)
                     {
-                        var id = _host.Pattern.NewRegionId();
+                        var id = _host.Pattern.NewPieceId();
                         _host.Pattern.ApplyGrow(connected, id);
                         _host.Pattern.SplitDisconnected();
                         minted = id;
@@ -356,8 +356,8 @@ namespace PieceSolver
 
         // Precomputed once per buffer build so FaceFill is O(1) per face (MostlyMarked is O(F)).
         HashSet<int> _marked;        // the delete-gesture marked set (null when not removing)
-        HashSet<int> _mostlyMarked;   // regions wholly marked -> will be deleted (dark red)
-        HashSet<int> _selFully;      // plain-select: regions wholly painted -> read the active colour (will be selected)
+        HashSet<int> _mostlyMarked;   // pieces wholly marked -> will be deleted (dark red)
+        HashSet<int> _selFully;      // plain-select: pieces wholly painted -> read the active colour (will be selected)
 
         public override void FaceFillBegin()
         {
@@ -368,7 +368,7 @@ namespace PieceSolver
             _selFully = (_selecting && _selTouched != null && _selTouched.Count > 0) ? _host.Pattern.MostlyMarked(_selTouched) : null;
         }
 
-        public override Vector3? FaceFill(int face, int region)
+        public override Vector3? FaceFill(int face, int piece)
         {
             // Shift preview (mint or grow): a candidate that will be added reads Green 5; a disconnected grow
             // candidate reads Green 2 (a no-op affordance until it connects). Provisional — mesh unchanged until release.
@@ -380,7 +380,7 @@ namespace PieceSolver
             // Plain multi-select preview: a painted face reads Indigo 2 (candidate); once its whole piece is painted
             // it pops Indigo 5 (will be selected). On release the selection settles to the active colour.
             if (_selecting && _selTouched != null && _selTouched.Contains(face))
-                return (_selFully != null && _selFully.Contains(region)) ? SelectFull : SelectCandidate;
+                return (_selFully != null && _selFully.Contains(piece)) ? SelectFull : SelectCandidate;
             // Ctrl-gesture preview on marked faces:
             //   CARVE  -> a SELECTED piece's faces read the DELETE colour (dark red); other faces under the brush
             //             can't be carved, shown in the lighter PRE-SELECT colour as a no-op affordance.
@@ -388,11 +388,11 @@ namespace PieceSolver
             if (_marked != null && _marked.Contains(face))
             {
                 if (_carve)
-                    return Selected(region) ? ToDelete : PreHighlight;
-                return (_mostlyMarked != null && _mostlyMarked.Contains(region)) ? ToDelete : PreHighlight;
+                    return Selected(piece) ? ToDelete : PreHighlight;
+                return (_mostlyMarked != null && _mostlyMarked.Contains(piece)) ? ToDelete : PreHighlight;
             }
             // Every selected piece -> the active highlight.
-            if (Selected(region)) return ActiveRegionColor;
+            if (Selected(piece)) return ActivePieceColor;
             return null;   // caller defaults to white
         }
 
@@ -419,7 +419,7 @@ namespace PieceSolver
 
         // ---- colours ----
         // Selected-piece highlight — open-color Indigo 3.
-        static readonly Vector3 ActiveRegionColor = OpenColor.Indigo3;
+        static readonly Vector3 ActivePieceColor = OpenColor.Indigo3;
         // Ctrl-gesture preview, on open-color reds (the "marked but not deleting" cue is the SAME in both modes —
         // it does not diverge by context):
         //   PreHighlight (Red 2) = a marked face that will NOT be deleted — the no-selection delete pre-highlight
@@ -431,7 +431,7 @@ namespace PieceSolver
         static readonly Vector3 GrowAdd = OpenColor.Green5;
         static readonly Vector3 GrowPreview = OpenColor.Green2;
         // Plain multi-select preview: Indigo 2 = a painted candidate; Indigo 5 = a wholly-painted piece (pops; settles
-        // to ActiveRegionColor once it becomes the real selection on release).
+        // to ActivePieceColor once it becomes the real selection on release).
         static readonly Vector3 SelectCandidate = OpenColor.Indigo2;
         static readonly Vector3 SelectFull = OpenColor.Indigo5;
     }

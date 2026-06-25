@@ -26,7 +26,7 @@ namespace PieceSolver
         // PRIMARY segmentation: per-face piece id (-1 = unused). Seeded by Propose (flood-fill), painted
         // by the Piecer. The hot-path array stays int[]; PieceId is the typed handle at the API boundary.
         public int[] PieceMap;
-        // DERIVED crease set = edges between faces of different region; a Transient view of PieceMap. Feeds the
+        // DERIVED crease set = edges between faces of different piece; a Transient view of PieceMap. Feeds the
         // overlay + piece viz. PULL: lazily (re)derived from PieceMap (DeriveCreases) on read; marked stale by
         // Invalidate after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Supply (see
         // SeedCreaseEdges). Lossy — rebuilt wholesale, no per-crease identity. See AGENTS.md (Real/Transient).
@@ -49,7 +49,7 @@ namespace PieceSolver
 
         // ===================== ops (mutate the authoritative partition) =====================
 
-        // Flood-fill face regions across non-crease interior edges (a crease blocks the merge), producing the
+        // Flood-fill face pieces across non-crease interior edges (a crease blocks the merge), producing the
         // per-face PieceMap (compacted ids 0..N-1; -1 for unused faces). This is the primary segmentation the
         // Piecer paints. A whole-partition reset (a Chapter reset), not a delta.
         public void Seed()
@@ -65,16 +65,16 @@ namespace PieceSolver
                 if (seedCreases != null && seedCreases.Contains(EdgeKey(a, b))) return;
                 uf.Union(f1, f2);
             });
-            var region = new int[nF];
+            var piece = new int[nF];
             var rootId = new Dictionary<int, int>();
             int count = 0;
             for (int f = 0; f < nF; f++)
             {
-                if (P.Faces[f].IsUnused) { region[f] = -1; continue; }
+                if (P.Faces[f].IsUnused) { piece[f] = -1; continue; }
                 int r = uf.Find(f); if (!rootId.TryGetValue(r, out int id)) { id = count++; rootId[r] = id; }
-                region[f] = id;
+                piece[f] = id;
             }
-            PieceMap = region;
+            PieceMap = piece;
         }
 
         // Remove the wholly-marked pieces and HEAL the gap by merging their faces into the dominant surviving
@@ -97,16 +97,16 @@ namespace PieceSolver
                 if (IsRemoved(f1) && IsRemoved(f2)) uf.Union(f1, f2);
             });
 
-            // Tally each blob's shared boundary (edge count) with each SURVIVING region.
+            // Tally each blob's shared boundary (edge count) with each SURVIVING piece.
             var tally = new Dictionary<int, Dictionary<int, int>>();
             MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
                 bool r1 = IsRemoved(f1), r2 = IsRemoved(f2);
                 if (r1 == r2) return;                            // both removed (internal) or both surviving
                 int rf = r1 ? f1 : f2, sf = r1 ? f2 : f1;        // removed face / surviving face
-                int blob = uf.Find(rf), sreg = PieceMap[sf];
+                int blob = uf.Find(rf), spiece = PieceMap[sf];
                 if (!tally.TryGetValue(blob, out var d)) { d = new Dictionary<int, int>(); tally[blob] = d; }
-                d[sreg] = DictGet(d, sreg) + 1;
+                d[spiece] = DictGet(d, spiece) + 1;
             });
 
             // Heal target per blob = dominant surviving neighbour (most shared border).
@@ -156,22 +156,22 @@ namespace PieceSolver
             for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(uf.Find(f));
             if (blobRoots.Count == 0) return null;            // nothing under the brush belonged to the selection
 
-            // Tally each blob's shared border with each region OUTSIDE the selection (selected pieces excluded,
+            // Tally each blob's shared border with each piece OUTSIDE the selection (selected pieces excluded,
             // so the carve cannot heal back into the selection it left).
             var tally = new Dictionary<int, Dictionary<int, int>>();
             MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
                 bool c1 = IsCarved(f1), c2 = IsCarved(f2);
                 if (c1 == c2) return;
-                int cf = c1 ? f1 : f2, sf = c1 ? f2 : f1, sreg = PieceMap[sf];
-                if (selection.Contains(sreg)) return;            // inside the selection -> excluded
+                int cf = c1 ? f1 : f2, sf = c1 ? f2 : f1, spiece = PieceMap[sf];
+                if (selection.Contains(spiece)) return;            // inside the selection -> excluded
                 int blob = uf.Find(cf);
                 if (!tally.TryGetValue(blob, out var d)) { d = new Dictionary<int, int>(); tally[blob] = d; }
-                d[sreg] = DictGet(d, sreg) + 1;
+                d[spiece] = DictGet(d, spiece) + 1;
             });
 
             // Target per blob: dominant neighbour outside the selection, else a fresh piece id (island).
-            int nextId = NewRegionId().Value, islands = 0;
+            int nextId = NewPieceId().Value, islands = 0;
             var target = new Dictionary<int, int>();
             foreach (int blob in blobRoots)
             {
@@ -195,38 +195,38 @@ namespace PieceSolver
                                : $"carved {carved} face(s)";
         }
 
-        // A brush stroke can carve one region into several edge-disconnected islands that still share its id
-        // (e.g. painting B straight through A leaves two A-halves). Re-split every such region: the LARGEST
+        // A brush stroke can carve one piece into several edge-disconnected islands that still share its id
+        // (e.g. painting B straight through A leaves two A-halves). Re-split every such piece: the LARGEST
         // island keeps the original id, each other island gets a fresh id. (Creases are unaffected — the
-        // islands are separated by OTHER regions, so no A|A' edge exists.) Returns true if it renumbered.
+        // islands are separated by OTHER pieces, so no A|A' edge exists.) Returns true if it renumbered.
         public bool SplitDisconnected()
         {
             if (PieceMap == null || _mesh == null) return false;
             var P = _mesh;
             int nF = P.Faces.Count;
-            // within-region connectivity: union faces sharing an edge that have the SAME region id.
+            // within-piece connectivity: union faces sharing an edge that have the SAME piece id.
             var uf = new UnionFind(nF);
             MeshOps.ForEachInteriorEdge(P, (f1, f2, a, b) =>
             {
                 if (PieceMap[f1] == PieceMap[f2]) uf.Union(f1, f2);
             });
             var blobSize = new Dictionary<int, int>();
-            var regionBlobs = new Dictionary<int, List<int>>();
+            var pieceBlobs = new Dictionary<int, List<int>>();
             for (int f = 0; f < nF; f++)
             {
                 if (P.Faces[f].IsUnused) continue;
                 int r = PieceMap[f]; if (r < 0) continue;
                 int root = uf.Find(f);
                 blobSize[root] = DictGet(blobSize, root) + 1;
-                if (!regionBlobs.TryGetValue(r, out var lst)) { lst = new List<int>(); regionBlobs[r] = lst; }
+                if (!pieceBlobs.TryGetValue(r, out var lst)) { lst = new List<int>(); pieceBlobs[r] = lst; }
                 if (!lst.Contains(root)) lst.Add(root);
             }
-            int nextId = NewRegionId().Value;
+            int nextId = NewPieceId().Value;
             bool changed = false;
-            foreach (var kv in regionBlobs)
+            foreach (var kv in pieceBlobs)
             {
                 var blobs = kv.Value;
-                if (blobs.Count <= 1) continue;                  // region is still connected
+                if (blobs.Count <= 1) continue;                  // piece is still connected
                 int keep = blobs[0], keepSize = DictGet(blobSize, blobs[0]);
                 foreach (int b in blobs) { int s = DictGet(blobSize, b); if (s > keepSize) { keepSize = s; keep = b; } }
                 var newIdFor = new Dictionary<int, int>();
@@ -278,7 +278,7 @@ namespace PieceSolver
 
         // Of the candidate faces, return the LARGEST edge-connected component (connectivity stepping only through
         // other candidates). Used by the provisional Shift+mint (no selection): the main blob previews Green 5 and
-        // becomes the new region; disconnected strays preview Green 2 and are dropped on release — so a mint never
+        // becomes the new piece; disconnected strays preview Green 2 and are dropped on release — so a mint never
         // spawns stray single-triangle pieces. Same union-find pass as the other grow queries; read-only.
         public HashSet<int> LargestComponent(HashSet<int> touched)
         {
@@ -303,7 +303,7 @@ namespace PieceSolver
             return result;
         }
 
-        // Commit a single-piece grow / mint: assign the given faces to one region. Re-derives creases.
+        // Commit a single-piece grow / mint: assign the given faces to one piece. Re-derives creases.
         public void ApplyGrow(HashSet<int> faces, PieceId active)
         {
             if (PieceMap == null || faces == null || active.Value < 0) return;
@@ -434,16 +434,16 @@ namespace PieceSolver
             return map;
         }
 
-        // A fresh, unused region id (one past the current max), so Shift+paint introduces a NEW region rather
-        // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten regions are fine.
-        public PieceId NewRegionId()
+        // A fresh, unused piece id (one past the current max), so Shift+paint introduces a NEW piece rather
+        // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten pieces are fine.
+        public PieceId NewPieceId()
         {
             int mx = -1;
             if (PieceMap != null) for (int i = 0; i < PieceMap.Length; i++) if (PieceMap[i] > mx) mx = PieceMap[i];
             return new PieceId(mx + 1);
         }
 
-        // The set of regions at least ~90% marked (a big piece needn't be 100% covered to read as intended — the
+        // The set of pieces at least ~90% marked (a big piece needn't be 100% covered to read as intended — the
         // unmarked sliver is treated as part of it; tiny pieces still need ~all of it). O(F). Used by the no-selection
         // "kill & donate" delete and the plain multi-select (both act on whole pieces; carving never removes whole pieces).
         public HashSet<int> MostlyMarked(HashSet<int> touched)

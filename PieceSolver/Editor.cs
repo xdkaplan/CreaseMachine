@@ -52,7 +52,7 @@ namespace PieceSolver
         // Per-face FILL tint for the piece view (grooves always delineate pieces; this only sets the fill).
         // null => the caller defaults to white. Called once per face during the buffer build, so it must be
         // O(1); FaceFillBegin precomputes any per-build state first.
-        public virtual Vector3? FaceFill(int face, int region) => null;
+        public virtual Vector3? FaceFill(int face, int piece) => null;
         public virtual void FaceFillBegin() { }
     }
 }

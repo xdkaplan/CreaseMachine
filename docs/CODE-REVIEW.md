@@ -118,8 +118,9 @@ but never downgraded to as-built.
 - [ ] **stale `Transient<T>` merge-debt note.** *(Agent E#6)*
 - [~] **Real/Transient/Ephemeral redefined in 4 docs** with drift. *(Agent E#3,#12)*
   — *AGENTS.md / DOC-TX-REFACTOR / DoD / DOC-SPEC aligned to one vocabulary 2026-06-24; re-check HANDOFF.md.*
-- [ ] **Naming:** `region` vs `piece` (in `PieceMap`/`NewRegionId` vs the locked
-  "piece"); `StudioCommand`/`CmdKind` in an app named PieceSolver; `Rot()` vs
+- [ ] **Naming:** ~~`region` vs `piece` (in `PieceMap`/`NewRegionId` vs the locked
+  "piece")~~ *(done 2026-06-25: piece-meaning `region`→`piece` swept; `NewRegionId`→`NewPieceId`)*;
+  `StudioCommand`/`CmdKind` in an app named PieceSolver; `Rot()` vs
   stale/regen vocabulary; the Reset/Revert split undocumented; three senses of
   "studio" (partly eased by the `studio/` removal). *(Agents A#8,#12, F#7, E#8,#11)*
 

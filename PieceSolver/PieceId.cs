@@ -2,7 +2,7 @@ using System;
 
 namespace PieceSolver
 {
-    // A zero-cost typed handle over the int region id stored densely in Pattern.PieceMap.
+    // A zero-cost typed handle over the int piece id stored densely in Pattern.PieceMap.
     // The id, distinct from the future first-class Piece Real. (`Id`, not `ID` — .NET treats
     // "Id" as a word, cf. Process.Id.) The int still lives in the hot-path array; this struct
     // only appears at the API / selection boundary, where it makes "a selection is a Piece" free.

@@ -268,7 +268,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     `ComputeDelta(mutate)` runs an in-place op, captures the net change as a delta, and rolls back (so the
     intricate in-place engines — `Delete`/`Carve`/`Grow`/`Mint` + `SplitDisconnected` — are reused as
     delta-producing Commands). `Seed` flood-fill = a whole-partition **Chapter** reset; queries are
-    read-only (`NewRegionId`, `MostlyMarked`, `FacesUnderBrush`, `GrowAssign`, `LargestComponent`,
+    read-only (`NewPieceId`, `MostlyMarked`, `FacesUnderBrush`, `GrowAssign`, `LargestComponent`,
     `MergeGroups`).
   - **`Tx`** (`Tx.cs`) — the transaction primitives: **`IDelta`** (one reversible change, opaque to the
     Doc, concrete to the Store), **`Op`** (its invertible atom — a face's label `From → To`), `PieceDelta`

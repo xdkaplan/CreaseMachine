@@ -37,7 +37,7 @@ namespace PieceSolver
         int _indexCount;
         bool _ready;
 
-        // --- Piece visualization: a per-piece-tinted render of the crease-bounded regions. Uploaded SPLIT
+        // --- Piece visualization: a per-piece-tinted render of the crease-bounded pieces. Uploaded SPLIT
         // (one set of 3 corners per triangle) so each piece carries its own colour + boundary-distance with
         // no bleed across creases. The baseline shader is flat tint; subagent aesthetics restyle PIECE_FRAG. ---
         int _pieceProg, _pieceVao, _pieceVboPos, _pieceVboNrm, _pieceVboCol, _pieceVboDist, _pieceVboEdge;

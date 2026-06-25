@@ -464,7 +464,7 @@
                                     <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding BrushSize, StringFormat=0}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                     <Slider Minimum="1" Maximum="10" Value="{Binding BrushSize}" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Margin="6,0" />
                                 </DockPanel>
-                                <TextBlock Text="After Accept the brush is live on the model (no toggle): left-click a patch to select it (light blue), drag across a seam to grow it. Shift+click starts a NEW region (e.g. a bullseye inside a patch). Right-drag orbits. Re-Propose to redo the angle." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
+                                <TextBlock Text="After Accept the brush is live on the model (no toggle): left-click a patch to select it (light blue), drag across a seam to grow it. Shift+click starts a NEW piece (e.g. a bullseye inside a patch). Right-drag orbits. Re-Propose to redo the angle." Foreground="#6E6E78" FontSize="10" TextWrapping="Wrap" Margin="2,12,0,0" />
                             </StackPanel>
                         </TabItem>
                     </TabControl>

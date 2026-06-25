@@ -92,7 +92,7 @@ namespace PieceSolver
         public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); _open = null; Pieces.ClearSilent(); }
 
         // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
-        // SAME mesh, so old deltas reference invalid region ids). Selection is cleared separately by the caller.
+        // SAME mesh, so old deltas reference invalid piece ids). Selection is cleared separately by the caller.
         public void ClearHistory() { _undo.Clear(); _redo.Clear(); }
 
         // A long op (bake / open) takes/releases the Doc. While busy, Run/OpenTx/Undo/Redo self-reject.

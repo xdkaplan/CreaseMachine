@@ -281,7 +281,7 @@ Merge undoable end-to-end; Step 5 converts the remaining piece ops; Step 6 revis
 ### Step 3 — hoist selection into the Doc *(behavior-preserving)*
 - Add `Doc Doc { get; }` to `IEditorHost`; `MainWindow` returns its `Doc`.
 - `Piecer._selection` → `_host.Doc.Pieces`. Replace the tap logic's set mutations with
-  `Pieces.Replace/Add/Remove/Clear`; `FaceFill` reads `Pieces.Contains(region)`; `Deselect` /
+  `Pieces.Replace/Add/Remove/Clear`; `FaceFill` reads `Pieces.Contains(piece)`; `Deselect` /
   `ClearSelection` → `Pieces.Clear()`.
 - Subscribe `MainWindow` to `Doc.Pieces.Changed` → `RebuildPieces` (replaces the selection-driven
   imperative `RefreshPieces` calls in `Piecer`; brush-preview refreshes stay for now).
@@ -299,7 +299,7 @@ Merge undoable end-to-end; Step 5 converts the remaining piece ops; Step 6 revis
   mutators into Commands that compute a `PieceDelta` (compute-new-then-diff; carve/grow bundle
   their `SplitDisconnected` renumber into the same delta). Route each through `Doc.Run`.
 - `Pattern` slims to a **pure Store**: Real (`PieceMap`) + Transient (`CreaseMap`) + `ITxAble`
-  (`Apply`/`Invert`) + `RegenCrease` + read-only queries (`FacesUnderBrush`, `NewRegionId`,
+  (`Apply`/`Invert`) + `RegenCrease` + read-only queries (`FacesUnderBrush`, `NewPieceId`,
   `GrowAssign`, `LargestComponent`, `MostlyMarked`). Mutating logic moves to `Commands`.
 - The Doc recomputes the affected selection after each op (decision 7).
 - Build 0/0, launch — carve / grow / mint / delete all undo/redo. The app is uniformly undoable.
