@@ -32,7 +32,13 @@ namespace PieceSolver
         // SeedCreaseEdges). Lossy — rebuilt wholesale, no per-crease identity. See AGENTS.md (Real/Transient).
         public readonly Transient<HashSet<long>> CreaseMap;
 
-        public Pattern(PlanktonMesh mesh) { _mesh = mesh; CreaseMap = new Transient<HashSet<long>>(DeriveCreases); }
+        public Pattern(PlanktonMesh mesh)
+        {
+            _mesh = mesh;
+            CreaseMap = new Transient<HashSet<long>>(DeriveCreases);
+            AddDownstream(CreaseMap);   // refresh-graph edges: both derive from PieceMap, so a PieceMap change rots both
+            AddDownstream(_geometry);
+        }
 
         // ===================== ops (mutate the authoritative partition) =====================
 
@@ -327,10 +333,12 @@ namespace PieceSolver
 
         // ===================== regen (re-derive the cached crease view) =====================
 
-        // Creases are DERIVED from PieceMap (a crease = an interior edge between differing pieces). RegenCrease
-        // marks the CreaseMap Transient stale; it rebuilds lazily (DeriveCreases) on the next read. Called after
-        // every op + Seed. Lossy — rebuilt wholesale, no per-crease identity.
-        public void RegenCrease() => CreaseMap.Rot();
+        // After ANY PieceMap change, invalidate everything DERIVED from it — the rot cascade (DOC-SPEC §5).
+        // rotDownstream marks Pattern's downstream Transients stale: CreaseMap (regrows lazily via DeriveCreases
+        // on next read) and the Pieces Geometry (RebuildPieces re-supplies it, guaranteed via Doc.Changed).
+        // Called after every op + Seed. NOTE: the name `RegenCrease` is now a slight misnomer (it rots all
+        // downstreams, not just creases) — a rename is a pending user decision (propose→accept).
+        public void RegenCrease() => RotDownstream();
 
         // The pull regen behind the CreaseMap Transient: build the crease set from the current PieceMap.
         HashSet<long> DeriveCreases()

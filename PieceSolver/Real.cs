@@ -5,7 +5,7 @@ namespace PieceSolver
     // View just no-ops). Adopters so far: the crease overlay (I1) and the partition Pattern (I2a — its Pieces
     // SPLIT buffer). Still ahead: the ownership tree (Parent/Children), the rot cascade (I3), per-piece
     // identity + Crease-with-identity (I4) — see docs/specs/NODE-MODEL-IMPL.md.
-    abstract class Real
+    abstract class Real : Node   // a Real is a refresh-graph node: it can own downstream Transients + originate a rot
     {
         public abstract string Name { get; }
 
