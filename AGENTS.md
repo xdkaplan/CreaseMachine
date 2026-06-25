@@ -262,7 +262,8 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   - **`Pattern`** — the (only, today) **Store**: a THIN companion over one `PlanktonMesh` (Plankton has no
     per-face attribute storage). Holds **Real** state — the authoritative **`PieceMap`** (`int[]`, per-face
     piece id) — and a **Transient**, derived **`CreaseMap`** (`HashSet<long>` packed edge keys, edges
-    between differing pieces) that `RegenCrease` re-derives (lossy; runs after every Apply/Invert).
+    between differing pieces) that `Invalidate` (the base-`Real` rot-cascade origin, rotting ALL downstreams,
+    not just creases) marks stale so it re-derives (lossy; runs after every Apply/Invert).
     Implements `ITxAble` (`Apply`/`Invert` a `PieceDelta` — the single persistent `PieceMap` writer);
     `ComputeDelta(mutate)` runs an in-place op, captures the net change as a delta, and rolls back (so the
     intricate in-place engines — `Delete`/`Carve`/`Grow`/`Mint` + `SplitDisconnected` — are reused as

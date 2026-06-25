@@ -858,12 +858,12 @@ namespace PieceSolver
             _piecer?.ClearSelection();  // ids are renumbered by Seed (matches the old SeedRegions resetting _brushRegion)
             _doc.ClearHistory();        // Chapter reset: the re-partition invalidates the undo/redo deltas
             _doc.Pattern?.Seed();           // flood-fill the regions across non-crease edges
-            _doc.Pattern?.RegenCrease();    // overwrite CreaseMap with the real region-boundary creases
+            _doc.Pattern?.Invalidate();     // rot downstreams: CreaseMap regrows to the real region-boundary creases
             RebuildCreaseOverlay();
         }
 
         // Seed a provisional crease set from the threshold-labeled proposed edges (only used to flood-fill the
-        // initial regions in _doc.Pattern.Seed; RegenCrease then overwrites CreaseMap with the real boundaries).
+        // initial regions in _doc.Pattern.Seed; Invalidate then rots CreaseMap so it regrows the real boundaries).
         void SeedCreaseEdges()
         {
             if (_doc.Pattern == null) return;
@@ -874,7 +874,7 @@ namespace PieceSolver
                 for (int i = 0; i < _creaseFold.Length; i++)
                     if (_creaseFold[i] >= thr) set.Add(Pattern.EdgeKey(_creaseA[i], _creaseB[i]));
             }
-            _doc.Pattern.CreaseMap.Supply(set);   // Supply the provisional set; Seed peeks it, then RegenCrease marks it stale
+            _doc.Pattern.CreaseMap.Supply(set);   // Supply the provisional set; Seed peeks it, then Invalidate marks it stale
         }
 
         // Build the GL_LINES overlay from the editable selection at the current display positions (the

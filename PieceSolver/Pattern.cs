@@ -28,7 +28,7 @@ namespace PieceSolver
         public int[] PieceMap;
         // DERIVED crease set = edges between faces of different region; a Transient view of PieceMap. Feeds the
         // overlay + piece viz. PULL: lazily (re)derived from PieceMap (DeriveCreases) on read; marked stale by
-        // RegenCrease after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Supply (see
+        // Invalidate after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Supply (see
         // SeedCreaseEdges). Lossy — rebuilt wholesale, no per-crease identity. See AGENTS.md (Real/Transient).
         public readonly Transient<HashSet<long>> CreaseMap;
 
@@ -118,7 +118,7 @@ namespace PieceSolver
                 if (target.TryGetValue(uf.Find(f), out int tgt)) PieceMap[f] = tgt; else stuck++;
             }
             foreach (var r in remove) healed++;
-            RegenCrease();
+            Invalidate();
             return stuck > 0 ? $"removed {healed} piece(s); {stuck} face(s) had no surviving neighbour (left as-is)"
                              : $"removed {healed} piece(s)";
         }
@@ -183,7 +183,7 @@ namespace PieceSolver
                 if (!IsCarved(f)) continue;
                 PieceMap[f] = target[uf.Find(f)]; carved++;
             }
-            RegenCrease();
+            Invalidate();
             return islands > 0 ? $"carved {carved} face(s) ({islands} new island piece(s))"
                                : $"carved {carved} face(s)";
         }
@@ -303,7 +303,7 @@ namespace PieceSolver
             bool changed = false;
             foreach (int f in faces)
                 if (f >= 0 && f < PieceMap.Length && PieceMap[f] != active.Value) { PieceMap[f] = active.Value; changed = true; }
-            if (changed) RegenCrease();
+            if (changed) Invalidate();
         }
 
         // Commit a multi-source grow: assign each face to the piece GrowAssign mapped it to. Re-derives creases.
@@ -313,17 +313,10 @@ namespace PieceSolver
             bool changed = false;
             foreach (var kv in faceToPiece)
                 if (kv.Key >= 0 && kv.Key < PieceMap.Length && PieceMap[kv.Key] != kv.Value) { PieceMap[kv.Key] = kv.Value; changed = true; }
-            if (changed) RegenCrease();
+            if (changed) Invalidate();
         }
 
         // ===================== regen (re-derive the cached crease view) =====================
-
-        // After ANY PieceMap change, invalidate everything DERIVED from it — the rot cascade (DOC-SPEC §5).
-        // rotDownstream marks Pattern's downstream Transients stale: CreaseMap (regrows lazily via DeriveCreases
-        // on next read) and the Pieces Geometry (RebuildPieces re-supplies it, guaranteed via Doc.Changed).
-        // Called after every op + Seed. NOTE: the name `RegenCrease` is now a slight misnomer (it rots all
-        // downstreams, not just creases) — a rename is a pending user decision (propose→accept).
-        public void RegenCrease() => RotDownstream();
 
         // The pull regen behind the CreaseMap Transient: build the crease set from the current PieceMap.
         HashSet<long> DeriveCreases()
@@ -352,13 +345,13 @@ namespace PieceSolver
         {
             if (PieceMap == null || !(d is PieceDelta pd)) return;
             foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.To;
-            RegenCrease();
+            Invalidate();
         }
         public void Invert(IDelta d)
         {
             if (PieceMap == null || !(d is PieceDelta pd)) return;
             foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.From;
-            RegenCrease();
+            Invalidate();
         }
 
         // Run an in-place mutator, capture the net PieceMap change as a delta, then ROLL BACK — leaving Real and
@@ -368,11 +361,11 @@ namespace PieceSolver
         {
             if (PieceMap == null) { mutate(); return new PieceDelta(new List<Op>()); }
             var before = (int[])PieceMap.Clone();
-            mutate();                                       // existing logic mutates PieceMap (+ RegenCrease)
+            mutate();                                       // existing logic mutates PieceMap (+ Invalidate)
             var ops = new List<Op>();
             int n = Math.Min(before.Length, PieceMap.Length);
             for (int f = 0; f < n; f++) if (PieceMap[f] != before[f]) ops.Add(new Op(f, before[f], PieceMap[f]));
-            PieceMap = before; RegenCrease();               // roll Real + Transient back; Doc.Run re-applies the delta
+            PieceMap = before; Invalidate();               // roll Real + Transient back; Doc.Run re-applies the delta
             return new PieceDelta(ops);
         }
 

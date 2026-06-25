@@ -12,6 +12,11 @@ namespace PieceSolver
         // Optional viewable geometry — a Transient the View pulls (Peek) and stages via OnRender. null =>
         // nothing to draw. (Parent/Children come with I2, when the tree has more than one node.)
         public virtual Transient<RenderData> Geometry => null;
+
+        // The rule-1 cascade origin: a Real mutated its authored state -> rot everything downstream. Provided
+        // once on the base so no Store coins its own hook (see docs/specs/DOC-SPEC.md §5). Symmetric with the
+        // other two rot-origins, Transient.Rot() and Transient.Supply().
+        public void Invalidate() => RotDownstream();
     }
 
     // I1 adopter: the proposed-crease overlay as the first Real the View pulls. Taxonomy note — this overlay
