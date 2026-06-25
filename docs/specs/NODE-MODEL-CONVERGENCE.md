@@ -20,6 +20,33 @@ Transients to `Pattern` is additive and within the freeze (same as `CreaseMap`/`
 
 ---
 
+## Status — 2026-06-25 (THIS is the live TODO; the per-phase checkboxes below are the original plan)
+
+**Done & on `master`** (each build-0/0 + smoke-tested):
+- ✓ **D-1 / Task 5** — `Real.Invalidate` hoist; deleted `Pattern.RegenCrease` (`92c6735`)
+- ✓ **Phase 1 · Task 1** — cascade unit test (`fc70356`)
+- ✓ **Phase 1 · Task 2+3** — crease overlay → `Pattern.CreaseLines` (Grown; multi-level DAG) (`c90d285`)
+- ✓ **Phase 2 · Task 4** — `_developed` governed by the cascade **+ TAB toggle** (`b6c8509`). *Root-caused
+  differently than the plan assumed: the fix is `UploadForDisplay` + `_developed.Rot()` on mesh change; the
+  planned ":654 read guard" was moot (nothing read `_developed` at display time).*
+- ✓ **Phase 3 · Task 6** — editor ownership → View (view-drain 1a) (`ed28c7b`)
+- ✓ **Phase 3 · Task 7** — pointer pipeline → View (view-drain 1b) (`bfec806`)
+- ✓ **D-2 / Phase 5** — `region → piece` rename sweep (`c311569`)
+- (+ `50c9346` — the two-channel invariant pinned in DOC-SPEC)
+
+**Remaining:**
+- [ ] **Phase 3 · Task 9** — the render-loop drain (`OnRender` + the `_meshDirty`/`_pieceDirty`/`_creaseDirty`
+  flags → View; let a Real's geometry rot drive staging). The big, riskiest remaining piece.
+  *Task 8 (preview dot → View) is **descoped**: `_previewDot` is a WPF `Ellipse` = chrome; it stays in
+  MainWindow via the `Show/HideBrushPreview` hooks. Those hooks + `RefreshPieces`/`RefreshCreaseOverlay`
+  collapse together with Task 9.*
+- [ ] **Phase 4 · Task 10/11** — M′ flat-map → `Transient` + collapse the 3 copy-paste reset blocks.
+
+**Follow-on (separate track):** `BakeRunner` extraction · `CreaseEngine` multi-target library · `Doc.Run`
+sugar (D-3, deferred) · **I4** new Real types (per-`Piece` identity, `Crease`-with-identity, `Spline`).
+
+---
+
 ## Phase 0 — Decisions (gate; nothing builds until these are answered)
 
 These are the user's calls (naming + frozen sign-off). The plan assumes the **Recommended** answer; if the
