@@ -26,8 +26,6 @@ namespace PieceSolver
         readonly IEditorHost _host;
         public Piecer(IEditorHost host) { _host = host; }
 
-        public override string Name => "Piece";
-
         // ---- selection lives in the Doc (typed, shared, NOT undoable); the Piecer drives it via this handle ----
         Selection<PieceId> Sel => _host.Doc.Pieces;
         bool Selected(int piece) => piece >= 0 && Sel.Contains(new PieceId(piece));

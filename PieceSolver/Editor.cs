@@ -33,8 +33,6 @@ namespace PieceSolver
     // next Real (deferred). Pure relocation — no behaviour added here.
     abstract class Editor
     {
-        public abstract string Name { get; }
-
         public virtual void Activate() { }
         public virtual void Deactivate() { }
         public virtual void Deselect() { }   // clear any active selection (ESC / empty-canvas click); no-op by default
