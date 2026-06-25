@@ -25,9 +25,11 @@ Transients to `Pattern` is additive and within the freeze (same as `CreaseMap`/`
 These are the user's calls (naming + frozen sign-off). The plan assumes the **Recommended** answer; if the
 user picks otherwise, swap the name/flag in the affected tasks.
 
-- [ ] **D-1 · `RegenCrease` target name.** It is now `=> RotDownstream()` and rots *all* downstreams.
-  **Recommended:** rename to **`Invalidate()`** (reads cleanly: "PieceMap changed → `Invalidate()`").
-  Alternatives: expose `RotDownstream()` public + inline; or `Touched()`. *Used in Phase 2.*
+- [x] **D-1 · cascade origin is architectural (RESOLVED).** Don't rename `RegenCrease` — *remove* it. The
+  Real-mutation→cascade affordance belongs on the base, not coined per-Store. Add **`Real.Invalidate()
+  => RotDownstream()`** (public), delete `Pattern.RegenCrease`, repoint its sites to the inherited
+  `Invalidate()`. Symmetric three origins: `Transient.Rot()`, `Transient.Supply()`, `Real.Invalidate()`.
+  Name `Invalidate` pending final accept (alt: expose `RotDownstream()`). *Foundational — Phase 1, runs early.*
 - [ ] **D-2 · `region → piece` sign-off + targets.** Direction is fixed (locked noun = "piece"). Targets:
   `NewRegionId→NewPieceId`, `FaceFill(int face, int region)→int piece`, `ActiveRegionColor→ActivePieceColor`,
   locals `region`/`regionBlobs`/`sreg`→`piece`/`pieceBlobs`/`spiece`. **Recommended:** yes, as Phase 5.
@@ -162,16 +164,21 @@ if (_creaseDirty && !_baking && _renderer != null && _doc.Pattern != null
   Confirm the mesh is never stale; confirm Solve still shows the developed sheet; Revert returns to authoring.
 - [ ] **Step 4 — Commit:** `fix(piecesolver): _developed rots on mesh change — closes the Revert->Propose stale mesh`
 
-### Task 5 — `RegenCrease → Invalidate` (D-1)
+### Task 5 — Hoist the cascade origin to `Real.Invalidate()`; delete `Pattern.RegenCrease` (D-1) — *foundational, run early*
 
-**Files:** Modify `PieceSolver/Pattern.cs` (def + ~7 internal calls), `MainWindow.xaml.cs` (~2 calls), `AGENTS.md` (the `:262` reference)
+The Real-mutation→cascade affordance is architectural; it belongs on the base, not hand-rolled per-Store.
+Symmetric result: `Transient.Rot()` / `Transient.Supply()` / `Real.Invalidate()`.
 
-- [ ] **Step 1 — Rename** the method (`Pattern.cs:326`) and every call site (grep `RegenCrease` first; the
-  body stays `=> RotDownstream()`). Update the doc-comment to drop the "misnomer" note. Fix the `AGENTS.md`
-  reference. Leave `Apply`/`Invert` bodies otherwise untouched (they just call the renamed method).
-- [ ] **Step 2 — Build 0/0; grep `RegenCrease` → 0 hits.**
-- [ ] **Step 3 — SMOKE:** any piece edit still updates creases + pieces (cascade unchanged).
-- [ ] **Step 4 — Commit:** `refactor(pattern): RegenCrease -> Invalidate (rots all downstreams; matches its body)`
+**Files:** Modify `PieceSolver/Real.cs` (add `Invalidate`), `Pattern.cs` (delete `RegenCrease`, repoint ~7 internal calls), `MainWindow.xaml.cs` (~2 calls), `AGENTS.md` (the `:262` reference).
+
+- [ ] **Step 1 — Add to `Real.cs`:** `public void Invalidate() => RotDownstream();` with a comment (the rule-1
+  cascade origin; provided once so no Store coins its own hook).
+- [ ] **Step 2 — Delete `Pattern.RegenCrease`** (`Pattern.cs:326`); repoint every call (grep first —
+  Pattern-internal + the `MainWindow:862` external caller) to `Invalidate()`. Leave `Apply`/`Invert` logic
+  otherwise untouched (they now call `Invalidate()`).
+- [ ] **Step 3 — Build 0/0; grep `RegenCrease` → 0 hits.**
+- [ ] **Step 4 — SMOKE:** any piece edit still updates creases + pieces (cascade unchanged).
+- [ ] **Step 5 — Commit:** `refactor(node): hoist cascade origin to Real.Invalidate; delete Pattern.RegenCrease`
 
 ---
 
