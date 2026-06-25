@@ -632,7 +632,7 @@ namespace PieceSolver
                     // developed mesh stays hidden behind it unless the Piecer-view decorations come off. Drop the
                     // piece colours + crease wires — DISPLAY only; the Pattern / CreaseMap data survive.
                     _view.Display = DisplaySource.Developed; _pieceDirty = true;   // Solve shows the developed mesh; Developed => pieces off (no occlusion)
-                    _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
+                    _creaseCount = 0; SetCreasePts(System.Array.Empty<float>());
                 }
                 _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
                 if (_renderer != null) _renderer.Upload(developed ? _developed.Value : _session.Mesh);   // show the developed result, else authoring
@@ -869,7 +869,7 @@ namespace PieceSolver
             var creaseMap = _doc.Pattern?.CreaseMap.Value;   // Transient: lazily derived from PieceMap
             if (creaseMap == null || creaseMap.Count == 0 || _session == null)
             {
-                _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true; _gl?.InvalidateVisual();
+                _creaseCount = 0; SetCreasePts(System.Array.Empty<float>()); _gl?.InvalidateVisual();
                 return;
             }
             PlanktonMesh P = _session.Mesh;
@@ -895,8 +895,16 @@ namespace PieceSolver
                 }
                 n++;
             }
-            _creasePts = pts.ToArray(); _creaseCount = n; _creaseDirty = true;
+            _creaseCount = n; SetCreasePts(pts.ToArray());
             _gl?.InvalidateVisual();
+        }
+
+        // Single writer for the crease-overlay geometry: keeps the `_creasePts` field AND the View's
+        // CreaseOverlay Real (the node OnRender pulls) in sync. I1 of the node model — see NODE-MODEL-IMPL.md.
+        void SetCreasePts(float[] pts)
+        {
+            _creasePts = pts; _creaseDirty = true;
+            _view.CreaseOverlay.Geometry.Supply(new RenderData { Kind = RenderKind.Lines, Segments = pts });
         }
 
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
@@ -955,7 +963,7 @@ namespace PieceSolver
             if (_doc.Pattern != null) { _doc.Pattern.CreaseMap.Clear(); _doc.Pattern.PieceMap = null; }
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
-            _creaseCount = 0; _creasePts = System.Array.Empty<float>(); _creaseDirty = true;
+            _creaseCount = 0; SetCreasePts(System.Array.Empty<float>());
             _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
 
@@ -1707,7 +1715,9 @@ namespace PieceSolver
                 _envDirty = false;
             }
             // staged proposed-crease line vertices (GL thread); gate on !_baking like the mesh upload
-            if (_creaseDirty && !_baking && _renderer != null) { _renderer.SetCreases(_creasePts ?? System.Array.Empty<float>()); _creaseDirty = false; }
+            // I1: pull the crease geometry from the View's CreaseOverlay Real + stage it (Real -> RenderData -> GL).
+            if (_creaseDirty && !_baking && _renderer != null && _view.CreaseOverlay.Geometry.Peek(out var creaseRd))
+            { _renderer.SetCreases(creaseRd.Segments ?? System.Array.Empty<float>()); _creaseDirty = false; }
             // staged piece-visualization buffers (GL thread)
             if (_pieceDirty && !_baking && _renderer != null)
             {
