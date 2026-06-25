@@ -47,40 +47,14 @@
         <Geometry x:Key="IconLayout">F1 M 6.5 2 C 5.119 2 4 3.119 4 4.5 L 4 19.5 C 4 20.881 5.119 22 6.5 22 L 17.5 22 C 18.881 22 20 20.881 20 19.5 L 20 8.2421875 C 20 7.4461875 19.684094 6.6840937 19.121094 6.1210938 L 15.878906 2.8789062 C 15.315906 2.3159062 14.553812 2 13.757812 2 L 6.5 2 z M 6.5 4 L 13 4 C 13.552 4 14 4.448 14 5 L 14 7.2402344 C 14 7.6592344 14.340766 8 14.759766 8 L 17 8 C 17.552 8 18 8.448 18 9 L 18 19.5 C 18 19.776 17.776 20 17.5 20 L 6.5 20 C 6.224 20 6 19.776 6 19.5 L 6 4.5 C 6 4.224 6.224 4 6.5 4 z M 9 12 C 8.448 12 8 12.448 8 13 C 8 13.552 8.448 14 9 14 L 15 14 C 15.552 14 16 13.552 16 13 C 16 12.448 15.552 12 15 12 L 9 12 z M 9 16 C 8.448 16 8 16.448 8 17 C 8 17.552 8.448 18 9 18 L 13 18 C 13.552 18 14 17.552 14 17 C 14 16.448 13.552 16 13 16 L 9 16 z</Geometry>
         <Geometry x:Key="IconSettings">F1 M12,8c-2.206,0-4,1.794-4,4s1.794,4,4,4s4-1.794,4-4S14.206,8,12,8z M12,14c-1.103,0-2-0.897-2-2s0.897-2,2-2s2,0.897,2,2S13.103,14,12,14z M20.376,13.43l-0.275-0.224c-0.106-0.086-0.161-0.223-0.146-0.363C19.984,12.566,20,12.285,20,12c0-0.286-0.016-0.567-0.046-0.842c-0.015-0.142,0.04-0.279,0.146-0.365l0.273-0.223c0.927-0.75,1.167-2.045,0.57-3.078l-0.567-0.984c-0.597-1.032-1.84-1.473-2.95-1.046L17.09,5.591c-0.125,0.047-0.265,0.035-0.363-0.038c-0.474-0.349-0.983-0.645-1.514-0.878c-0.107-0.047-0.187-0.159-0.208-0.294l-0.057-0.349C14.763,2.855,13.761,2,12.567,2h-1.135c-1.193,0-2.195,0.855-2.381,2.03L8.995,4.383C8.974,4.517,8.895,4.628,8.789,4.675c-0.531,0.234-1.041,0.53-1.516,0.879C7.176,5.625,7.038,5.64,6.911,5.591L6.573,5.462C5.46,5.037,4.219,5.476,3.623,6.509L3.056,7.492C2.46,8.525,2.699,9.819,3.624,10.569L3.9,10.793c0.106,0.086,0.16,0.222,0.146,0.362C4.016,11.433,4,11.715,4,12c0,0.286,0.016,0.567,0.046,0.842c0.015,0.142-0.04,0.279-0.146,0.365L3.625,13.43c-0.926,0.751-1.165,2.045-0.569,3.078l0.567,0.984c0.596,1.032,1.837,1.472,2.95,1.046l0.337-0.129c0.129-0.048,0.266-0.035,0.363,0.038c0.474,0.349,0.983,0.645,1.514,0.878c0.107,0.047,0.187,0.159,0.208,0.294l0.057,0.349C9.237,21.145,10.239,22,11.433,22h1.135c1.193,0,2.195-0.855,2.381-2.03l0.057-0.354c0.021-0.133,0.101-0.245,0.206-0.292c0.531-0.234,1.041-0.53,1.517-0.88c0.097-0.073,0.236-0.085,0.362-0.037l0.338,0.129c1.108,0.426,2.354-0.012,2.95-1.045v0l0.567-0.983C21.542,15.475,21.302,14.18,20.376,13.43z M19.213,15.508l-0.567,0.983c-0.102,0.176-0.311,0.249-0.504,0.178l-0.338-0.129c-0.767-0.294-1.613-0.183-2.263,0.295c-0.357,0.263-0.738,0.484-1.137,0.659c-0.731,0.323-1.245,0.999-1.374,1.806l-0.057,0.354C12.941,19.855,12.771,20,12.567,20h-1.135c-0.203,0-0.374-0.145-0.406-0.348l-0.057-0.35c-0.129-0.809-0.643-1.484-1.376-1.808c-0.397-0.175-0.779-0.396-1.133-0.657c-0.409-0.302-0.896-0.458-1.395-0.458c-0.291,0-0.586,0.053-0.87,0.162l-0.338,0.13c-0.193,0.072-0.402-0.003-0.503-0.178l-0.567-0.984c-0.102-0.176-0.062-0.396,0.097-0.524l0.276-0.224c0.634-0.516,0.961-1.312,0.873-2.132C6.012,12.422,6,12.212,6,12c0-0.212,0.012-0.421,0.034-0.63c0.088-0.819-0.239-1.615-0.873-2.13L4.885,9.016C4.728,8.889,4.687,8.668,4.788,8.492l0.567-0.983C5.457,7.332,5.67,7.259,5.858,7.33l0.338,0.129c0.768,0.295,1.614,0.183,2.263-0.294C8.816,6.902,9.197,6.68,9.596,6.505c0.731-0.323,1.245-0.999,1.374-1.806l0.057-0.354C11.059,4.145,11.229,4,11.433,4h1.135c0.203,0,0.374,0.145,0.406,0.348l0.057,0.35c0.129,0.809,0.643,1.484,1.376,1.808c0.397,0.175,0.779,0.396,1.134,0.658c0.648,0.479,1.493,0.591,2.264,0.296l0.338-0.13c0.191-0.073,0.402,0.003,0.503,0.178l0.567,0.984c0.102,0.176,0.062,0.396-0.098,0.524L18.839,9.24c-0.634,0.516-0.961,1.312-0.873,2.132C17.988,11.578,18,11.788,18,12c0,0.212-0.012,0.421-0.034,0.629c-0.088,0.818,0.239,1.614,0.874,2.13l0.277,0.225C19.274,15.112,19.314,15.332,19.213,15.508z</Geometry>
 
-        <!-- Left tool-rail button: 42px icon + label, dark with hover + active (indigo). Visual only for now. -->
-        <Style x:Key="ToolRailButton" TargetType="ToggleButton">
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="Foreground" Value="#9296A0" />
-            <Setter Property="Height" Value="90" />
-            <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ToggleButton">
-                        <Border x:Name="bd" Background="{TemplateBinding Background}">
-                            <Grid>
-                                <Rectangle x:Name="accent" Width="3" Margin="0,16" Fill="#6A9FE0" HorizontalAlignment="Left" Visibility="Collapsed" />
-                                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                                    <Viewbox Width="36" Height="36">
-                                        <Path Data="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Fill="{TemplateBinding Foreground}" />
-                                    </Viewbox>
-                                    <TextBlock Text="{TemplateBinding Content}" Foreground="{TemplateBinding Foreground}" FontSize="11" HorizontalAlignment="Center" Margin="0,6,0,0" />
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Foreground" Value="#C8CCD4" />
-                                <Setter TargetName="bd" Property="Background" Value="#2E2E33" />
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="Foreground" Value="#6A9FE0" />
-                                <Setter TargetName="bd" Property="Background" Value="#23303F" />
-                                <Setter TargetName="accent" Property="Visibility" Value="Visible" />
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
+        <!-- Fold-gutter (the thin tab a collapsed pane shows): dark with a hover wash. -->
+        <Style x:Key="FoldGutter" TargetType="Border">
+            <Setter Property="Background" Value="#252526" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#2E2E33" />
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <!-- Flat top-bar button (icon + text), no WPF chrome — transparent with a hover wash. -->
@@ -160,7 +134,7 @@
         <!-- MIDDLE row: left panel | splitter | center | splitter | right panel -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="LeftCol" Width="56" MinWidth="26" />
+                <ColumnDefinition x:Name="LeftCol" Width="220" MinWidth="26" />
                 <ColumnDefinition x:Name="LeftSplitCol" Width="6" />
                 <ColumnDefinition Width="*" MinWidth="120" />
                 <ColumnDefinition x:Name="RightSplitCol" Width="6" />
@@ -171,10 +145,6 @@
                  Window > Console or Ctrl+Shift+J). Collapse chevron at the top-RIGHT (inner) corner. -->
             <Border x:Name="LeftPanel" Grid.Column="0" Background="#252526" ClipToBounds="True">
                 <Grid>
-                    <StackPanel x:Name="ToolRail" VerticalAlignment="Center" HorizontalAlignment="Stretch">
-                        <ToggleButton Style="{StaticResource ToolRailButton}" Content="3D Model" Tag="{StaticResource IconModel}" />
-                        <ToggleButton Style="{StaticResource ToolRailButton}" Content="Layout"   Tag="{StaticResource IconLayout}" />
-                    </StackPanel>
                     <Button x:Name="LeftCollapseBtn" HorizontalAlignment="Right" VerticalAlignment="Top"
                             Width="24" Height="24" Margin="0,4,4,0" Background="Transparent"
                             BorderThickness="0" Cursor="Hand" ToolTip="Collapse / expand panel">
@@ -191,8 +161,39 @@
                           Background="#3F3F46" ShowsPreview="False"
                           ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
 
-            <!-- CENTER region: GL viewport gets injected here in code-behind -->
-            <Grid x:Name="CenterHost" Grid.Column="2" Background="#1A1A1C" ClipToBounds="True" />
+            <!-- CENTER: 3D viewport | folding divider | 2D layout. Drag the divider to an edge to stash a pane
+                 into its gutter tab; click the tab to pop it back to its remembered width. GL injects into CenterHost. -->
+            <Grid x:Name="SplitGrid" Grid.Column="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="Col3D" Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition x:Name="Col2D" Width="*" />
+                </Grid.ColumnDefinitions>
+                <!-- 3D pane (GL viewport + brush preview inject into CenterHost in code-behind — name preserved) -->
+                <Grid Grid.Column="0">
+                    <Grid x:Name="CenterHost" Background="#1A1A1C" ClipToBounds="True" />
+                    <Border x:Name="Gutter3D" Visibility="Collapsed" Cursor="Hand" Style="{StaticResource FoldGutter}" ToolTip="Show 3D">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <Viewbox Width="18" Height="18"><Path Data="{StaticResource IconModel}" Fill="#6A9FE0" /></Viewbox>
+                            <TextBlock Text="3D" FontSize="10" Foreground="#6A9FE0" HorizontalAlignment="Center" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+                <!-- folding divider (only visible when both panes are open) -->
+                <Border x:Name="CenterDivider" Grid.Column="1" Width="8" Background="#303034" Cursor="SizeWE" />
+                <!-- 2D pane (placeholder for now) -->
+                <Grid Grid.Column="2">
+                    <Border x:Name="View2DPane" Background="#202024">
+                        <TextBlock Text="2D LAYOUT" Foreground="#54545E" FontSize="13" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <Border x:Name="Gutter2D" Visibility="Collapsed" Cursor="Hand" Style="{StaticResource FoldGutter}" ToolTip="Show 2D">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <Viewbox Width="18" Height="18"><Path Data="{StaticResource IconLayout}" Fill="#6A9FE0" /></Viewbox>
+                            <TextBlock Text="2D" FontSize="10" Foreground="#6A9FE0" HorizontalAlignment="Center" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Grid>
 
             <!-- RIGHT splitter (drag to resize, click to collapse/expand) -->
             <GridSplitter x:Name="RightSplitter" Grid.Column="3" Width="6"
