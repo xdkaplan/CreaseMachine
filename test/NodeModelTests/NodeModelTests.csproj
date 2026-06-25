@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <RootNamespace>NodeModelTests</RootNamespace>
+    <!-- RenderData's Pieces fields (Pos/Nrm/Col/Dist/Edge) are assigned by the app, not by this isolated
+         cascade test, so the linked source trips CS0649 here only — suppress it in the test build. -->
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+  <!-- Dependency-free guard for the node-model rot cascade. Links the three closed-set,
+       BCL-only PieceSolver sources (no WPF/OpenTK/Plankton) and exercises them directly.
+       The PieceSolver classes are `internal`; linking the sources makes them part of THIS
+       assembly, so Program.cs can reference them. No test framework / NuGet restore. -->
+  <ItemGroup>
+    <Compile Include="..\..\PieceSolver\Transient.cs" />
+    <Compile Include="..\..\PieceSolver\Real.cs" />
+    <Compile Include="..\..\PieceSolver\RenderData.cs" />
+  </ItemGroup>
+</Project>
