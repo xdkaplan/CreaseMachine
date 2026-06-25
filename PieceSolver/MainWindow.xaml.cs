@@ -92,7 +92,7 @@ namespace PieceSolver
         // Propose, so the Crease angle slider re-labels the overlay without re-proposing. The Propose
         // bake reuses the same modal machinery (_baking / _bakeCts / BakeOverlay).
         double[] _creaseFold; int[] _creaseA, _creaseB;
-        float[] _creasePts; bool _creaseDirty; int _creaseCount;
+        bool _creaseDirty; int _creaseCount;
         // TRANSIENT (Supplied): settled (developed) geometry from the last Propose, per original vertex (nV*3).
         // Retained for a future re-surfacing — the "preview proposed mesh" display path was removed; produced by
         // the Propose bake, not regenerable on demand.
@@ -648,7 +648,7 @@ namespace PieceSolver
                     // developed mesh stays hidden behind it unless the Piecer-view decorations come off. Drop the
                     // piece colours + crease wires — DISPLAY only; the Pattern / CreaseMap data survive.
                     _view.Display = DisplaySource.Developed; _pieceDirty = true;   // Solve shows the developed mesh; Developed => pieces off (no occlusion)
-                    _creaseCount = 0; SetCreasePts(System.Array.Empty<float>());
+                    _creaseCount = 0; _creaseDirty = true;   // drop the crease wires (CreaseLines grows empty once cleared)
                 }
                 _session = authoring;                            // restore the authoring session (Pattern still coupled to it)
                 if (_renderer != null) _renderer.Upload(developed ? _developed.Value : _session.Mesh);   // show the developed result, else authoring
@@ -877,50 +877,15 @@ namespace PieceSolver
             _doc.Pattern.CreaseMap.Supply(set);   // Supply the provisional set; Seed peeks it, then Invalidate marks it stale
         }
 
-        // Build the GL_LINES overlay from the editable selection at the current display positions (the
-        // proposed-preview geometry when that toggle is on, else the live mesh). CPU-only; the GL upload
-        // happens in OnRender. The Crease brush calls this after each bump; the slider re-seeds first.
+        // Mark the crease render stale: Pattern's Grown CreaseLines Transient grows the actual segment buffer on
+        // read in OnRender (from CreaseMap + the held mesh). This is now just the "crease render needs re-staging"
+        // trigger — no CPU build here. Called from Doc.Changed + the RefreshCreaseOverlay editor hook.
         void RebuildCreaseOverlay()
         {
             var creaseMap = _doc.Pattern?.CreaseMap.Value;   // Transient: lazily derived from PieceMap
-            if (creaseMap == null || creaseMap.Count == 0 || _session == null)
-            {
-                _creaseCount = 0; SetCreasePts(System.Array.Empty<float>()); _gl?.InvalidateVisual();
-                return;
-            }
-            PlanktonMesh P = _session.Mesh;
-            int nV = P.Vertices.Count;
-            double[] src = null;   // proposed-preview removed -> always place creases on the live mesh (M0)
-            var pts = new System.Collections.Generic.List<float>();
-            int n = 0;
-            foreach (long key in creaseMap)
-            {
-                int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
-                if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
-                if (P.Vertices[a].IsUnused || P.Vertices[b].IsUnused) continue;
-                if (src != null)
-                {
-                    pts.Add((float)src[a * 3]); pts.Add((float)src[a * 3 + 1]); pts.Add((float)src[a * 3 + 2]);
-                    pts.Add((float)src[b * 3]); pts.Add((float)src[b * 3 + 1]); pts.Add((float)src[b * 3 + 2]);
-                }
-                else
-                {
-                    var pa = P.Vertices[a]; var pb = P.Vertices[b];
-                    pts.Add((float)pa.X); pts.Add((float)pa.Y); pts.Add((float)pa.Z);
-                    pts.Add((float)pb.X); pts.Add((float)pb.Y); pts.Add((float)pb.Z);
-                }
-                n++;
-            }
-            _creaseCount = n; SetCreasePts(pts.ToArray());
+            _creaseCount = creaseMap?.Count ?? 0;            // gates ShowCreases + feeds the proposal status/title
+            _creaseDirty = true;
             _gl?.InvalidateVisual();
-        }
-
-        // Single writer for the crease-overlay geometry: keeps the `_creasePts` field AND the View's
-        // CreaseOverlay Real (the node OnRender pulls) in sync. I1 of the node model — see NODE-MODEL-IMPL.md.
-        void SetCreasePts(float[] pts)
-        {
-            _creasePts = pts; _creaseDirty = true;
-            _view.CreaseOverlay.Geometry.Supply(new RenderData { Kind = RenderKind.Lines, Segments = pts });
         }
 
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
@@ -974,12 +939,12 @@ namespace PieceSolver
         // mesh, or topology/geometry changed). Idempotent.
         void ClearProposedCreases()
         {
-            if (_creaseFold == null && _proposedPos.IsStale && (_doc.Pattern == null || _doc.Pattern.CreaseMap.IsStale) && (_creasePts == null || _creasePts.Length == 0) && _view.Display != DisplaySource.Pieces) return;
+            if (_creaseFold == null && _proposedPos.IsStale && (_doc.Pattern == null || _doc.Pattern.CreaseMap.IsStale) && _creaseCount == 0 && _view.Display != DisplaySource.Pieces) return;
             _creaseFold = null; _creaseA = null; _creaseB = null; _proposedPos.Clear();
             if (_doc.Pattern != null) { _doc.Pattern.CreaseMap.Clear(); _doc.Pattern.PieceMap = null; }
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
-            _creaseCount = 0; SetCreasePts(System.Array.Empty<float>());
+            _creaseCount = 0; _creaseDirty = true;   // drop the crease wires (CreaseLines grows empty once cleared)
             _view.Display = DisplaySource.Authoring; _doc.Pattern?.Geometry.Clear(); _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
 
@@ -1813,9 +1778,13 @@ namespace PieceSolver
                 _envDirty = false;
             }
             // staged proposed-crease line vertices (GL thread); gate on !_baking like the mesh upload
-            // I1: pull the crease geometry from the View's CreaseOverlay Real + stage it (Real -> RenderData -> GL).
-            if (_creaseDirty && !_baking && _renderer != null && _view.CreaseOverlay.Geometry.Peek(out var creaseRd))
-            { _renderer.SetCreases(creaseRd.Segments ?? System.Array.Empty<float>()); _creaseDirty = false; }
+            // pull the crease geometry from Pattern's Grown CreaseLines Transient + stage it (Real -> RenderData -> GL).
+            if (_creaseDirty && !_baking && _renderer != null)
+            {
+                var creaseRd = _doc.Pattern?.CreaseLines.Value;   // Grown: grows fresh on read
+                _renderer.SetCreases(creaseRd?.Segments ?? System.Array.Empty<float>());
+                _creaseDirty = false;
+            }
             // I2a: pull the Pieces SPLIT geometry from the Pattern Real (Supplied by RebuildPieces) + stage it.
             if (_pieceDirty && !_baking && _renderer != null)
             {

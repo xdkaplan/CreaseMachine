@@ -30,7 +30,6 @@ namespace PieceSolver
         public Doc Doc { get; }
         public DisplaySource Display { get; set; } = DisplaySource.Authoring;
         public Camera Camera { get; } = new Camera();   // the orbit camera — Ephemeral view state (see Camera.cs)
-        public CreaseOverlay CreaseOverlay { get; } = new CreaseOverlay();   // I1: first Real the View pulls (see Real.cs)
 
         public View(Doc doc, GLWpfControl gl, Func<PlanktonMesh> mesh, Func<double> brushSize,
                     Action refreshPieces, Action refreshCreaseOverlay, Action<Point> showPreview, Action hidePreview)

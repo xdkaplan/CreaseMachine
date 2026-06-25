@@ -31,6 +31,11 @@ namespace PieceSolver
         // Invalidate after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Supply (see
         // SeedCreaseEdges). Lossy — rebuilt wholesale, no per-crease identity. See AGENTS.md (Real/Transient).
         public readonly Transient<HashSet<long>> CreaseMap;
+        // DERIVED wire overlay: the GL_LINES segment buffer for the proposed-crease wires. GROWN from CreaseMap +
+        // the held mesh's vertex positions (DeriveCreaseLines) — pure, no render/editor state. Downstream of
+        // CreaseMap (NOT Pattern): it derives from the crease SET, making Pattern -> CreaseMap -> CreaseLines the
+        // first multi-level edge in the refresh graph (a PieceMap change rots CreaseMap, which rots this in turn).
+        public readonly Transient<RenderData> CreaseLines;
 
         public Pattern(PlanktonMesh mesh)
         {
@@ -38,6 +43,8 @@ namespace PieceSolver
             CreaseMap = new Transient<HashSet<long>>(DeriveCreases);
             AddDownstream(CreaseMap);   // refresh-graph edges: both derive from PieceMap, so a PieceMap change rots both
             AddDownstream(_geometry);
+            CreaseLines = new Transient<RenderData>(DeriveCreaseLines);
+            CreaseMap.AddDownstream(CreaseLines);   // downstream of CreaseMap (the crease set), NOT Pattern
         }
 
         // ===================== ops (mutate the authoritative partition) =====================
@@ -335,6 +342,29 @@ namespace PieceSolver
                 set.Add(EdgeKey(a, b));
             }
             return set;
+        }
+
+        // The pull regen behind the CreaseLines Transient: build the GL_LINES segment buffer from the current
+        // CreaseMap, placing each crease edge on the held mesh's vertex positions. Pure — no render/editor state.
+        RenderData DeriveCreaseLines()
+        {
+            var empty = new RenderData { Kind = RenderKind.Lines, Segments = Array.Empty<float>() };
+            if (_mesh == null) return empty;
+            var creaseMap = CreaseMap.Value;
+            if (creaseMap == null || creaseMap.Count == 0) return empty;
+            var P = _mesh;
+            int nV = P.Vertices.Count;
+            var pts = new List<float>();
+            foreach (long key in creaseMap)
+            {
+                int a = (int)(key >> 32), b = (int)(key & 0xFFFFFFFFL);
+                if (a < 0 || b < 0 || a >= nV || b >= nV) continue;
+                if (P.Vertices[a].IsUnused || P.Vertices[b].IsUnused) continue;
+                var pa = P.Vertices[a]; var pb = P.Vertices[b];
+                pts.Add((float)pa.X); pts.Add((float)pa.Y); pts.Add((float)pa.Z);
+                pts.Add((float)pb.X); pts.Add((float)pb.Y); pts.Add((float)pb.Z);
+            }
+            return new RenderData { Kind = RenderKind.Lines, Segments = pts.ToArray() };
         }
 
         // ===================== transactions (ITxAble) =====================
