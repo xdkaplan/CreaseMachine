@@ -4,7 +4,7 @@ using System.Diagnostics;
 
 namespace PieceSolver
 {
-    // A typed selection set (one per Element type), living in the Doc. The Editor mutates it; the view and
+    // A typed selection set (one per Real type), living in the Doc. The Editor mutates it; the view and
     // command-availability react to Changed. NOT on the undo stack — selection isn't undoable. See
     // docs/DOC-TX-REFACTOR.md.
     sealed class Selection<T>

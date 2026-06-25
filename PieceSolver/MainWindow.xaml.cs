@@ -234,7 +234,7 @@ namespace PieceSolver
             StageShadingMatcap("54584E_B1BAC5_818B91", isEnv: true);    // sky / landscape environment map
 
             // Top-bar actions route through Execute() so each is recorded to the session journal.
-            // Solve is the studio's main develop; it records a full BakeParams snapshot so a recorded
+            // Solve is PieceSolver's main develop; it records a full BakeParams snapshot so a recorded
             // session reproduces the bake on replay (and via the headless CLI value-check).
             SolveButton.Click += (s, e) => Execute(StudioCommand.Solve(_sim.ToBakeParams()), record: true);   // async bake: develop-to-accuracy + subdivide, on a worker with a progress+cancel modal
             ProposeButton.Click += (s, e) => { _ = OnProposeAsync(); };   // stage 2: propose piece-boundary creases (no-collapse flow, reuses the modal)
@@ -379,7 +379,7 @@ namespace PieceSolver
 
         // ===================== command sink (the journal chokepoint) =====================
 
-        // The single entry point for every studio action. Performs the side effect (Apply*), records
+        // The single entry point for every app action. Performs the side effect (Apply*), records
         // the semantic command when asked, and syncs the display controls (so replay reflects state).
         // Every UI handler and the replay loop go through here, so the journal is the complete,
         // authoritative record of what happened - and replay drives the exact same code paths.
@@ -1330,7 +1330,7 @@ namespace PieceSolver
 
         // Reload the current mesh from disk and reset the flow. Same bounds -> camera kept (no reframe).
         // A true Revert: discard all work and reload the document from the file on disk. The standalone global
-        // op behind the Reset button / Ctrl+R / the journal's Reset command. (Solve must NOT call this — it
+        // op behind the Revert button / Ctrl+R / the journal's Revert command. (Solve must NOT call this — it
         // develops a derived clone instead, so the authoring mesh + Pattern survive. See docs/archive/SOLVER-PHASE.md.)
         void Revert()
         {
@@ -1646,7 +1646,7 @@ namespace PieceSolver
             }
         }
 
-        // The right-click (no-drag) piece context menu: a disabled count header ("5 Pieces" / "No Elements
+        // The right-click (no-drag) piece context menu: a disabled count header ("5 Pieces" / "No Pieces
         // Selected"), then Merge (needs 2+ selected) and Delete (DelPiece, needs 1+). Built fresh per pop so the
         // enabled state matches the live selection. Only while the Piecer is the active editor.
         void ShowPieceMenu()
@@ -1657,7 +1657,7 @@ namespace PieceSolver
                 PlacementTarget = _gl,
                 Placement = System.Windows.Controls.Primitives.PlacementMode.Mouse
             };
-            menu.Items.Add(new System.Windows.Controls.MenuItem { Header = n == 0 ? "No Elements Selected" : PieceId.Name(n), IsEnabled = false });
+            menu.Items.Add(new System.Windows.Controls.MenuItem { Header = n == 0 ? "No Pieces Selected" : PieceId.Name(n), IsEnabled = false });
             menu.Items.Add(new System.Windows.Controls.Separator());
             var merge = new System.Windows.Controls.MenuItem { Header = "Merge", IsEnabled = n >= 2 };
             merge.Click += (s, e) => TryMerge();

@@ -12,11 +12,13 @@ and *why*) and the **Implementation Plan** (the ordered, mostly behavior-preserv
 Merge-first).
 
 > **Revised 2026-06-24 — see [§ Revision: journaling = the op-log](#revision-2026-06-24-journaling--the-op-log) and [Part 3](#part-3--journaling-op-log-implementation-plan).**
-> The undo/tx layer in Parts 1–2 **shipped**. That revision folds **journaling** in and, doing so,
-> collapses the planned *"forward command → journal / reverse delta → undo"* duality into a **single
-> op-log**. Wherever Parts 1–2 below say journaling is deferred, or that an `Op` is merely "the atom
-> inside a delta," the Revision supersedes them. Read Parts 1–2 as the as-built undo layer; read the
-> Revision for the current target.
+> Read **Parts 1–2 + the [Shortcomings list](#shortcomings--known-gaps-journaling-op-log) as the as-built
+> state**: the undo/tx layer **shipped**, and the op-log records every piece op — but, as the Shortcomings
+> spell out, it did **not** collapse the two journals into one (piece-op *replay* is unwired, and CLI parity
+> for the new verbs is broken). Read **the Revision as the target**: the *one op-log = undo = journal =
+> save* model it describes (folding journaling in and dropping the forward/reverse duality, generalizing
+> `Op` beyond "the atom inside a delta") is the aspiration the as-built is converging toward, not a
+> finished state.
 
 ---
 
@@ -298,7 +300,7 @@ Merge undoable end-to-end; Step 5 converts the remaining piece ops; Step 6 revis
   their `SplitDisconnected` renumber into the same delta). Route each through `Doc.Run`.
 - `Pattern` slims to a **pure Store**: Real (`PieceMap`) + Transient (`CreaseMap`) + `ITxAble`
   (`Apply`/`Invert`) + `RegenCrease` + read-only queries (`FacesUnderBrush`, `NewRegionId`,
-  `GrowAssign`, `LargestComponent`, `FullyMarked`). Mutating logic moves to `Commands`.
+  `GrowAssign`, `LargestComponent`, `MostlyMarked`). Mutating logic moves to `Commands`.
 - The Doc recomputes the affected selection after each op (decision 7).
 - Build 0/0, launch — carve / grow / mint / delete all undo/redo. The app is uniformly undoable.
 

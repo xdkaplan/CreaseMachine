@@ -356,7 +356,7 @@ namespace PieceSolver
 
         // Precomputed once per buffer build so FaceFill is O(1) per face (MostlyMarked is O(F)).
         HashSet<int> _marked;        // the delete-gesture marked set (null when not removing)
-        HashSet<int> _fullyMarked;   // regions wholly marked -> will be deleted (dark red)
+        HashSet<int> _mostlyMarked;   // regions wholly marked -> will be deleted (dark red)
         HashSet<int> _selFully;      // plain-select: regions wholly painted -> read the active colour (will be selected)
 
         public override void FaceFillBegin()
@@ -364,7 +364,7 @@ namespace PieceSolver
             _marked = (_removing && _touched != null && _touched.Count > 0) ? _touched : null;
             // "fully-marked piece -> dark red" only applies to the no-selection DELETE preview; a carve marks
             // faces (not whole pieces), so a marked selected-piece face is the delete colour.
-            _fullyMarked = (_marked != null && !_carve) ? _host.Pattern.MostlyMarked(_touched) : null;
+            _mostlyMarked = (_marked != null && !_carve) ? _host.Pattern.MostlyMarked(_touched) : null;
             _selFully = (_selecting && _selTouched != null && _selTouched.Count > 0) ? _host.Pattern.MostlyMarked(_selTouched) : null;
         }
 
@@ -389,7 +389,7 @@ namespace PieceSolver
             {
                 if (_carve)
                     return Selected(region) ? ToDelete : PreHighlight;
-                return (_fullyMarked != null && _fullyMarked.Contains(region)) ? ToDelete : PreHighlight;
+                return (_mostlyMarked != null && _mostlyMarked.Contains(region)) ? ToDelete : PreHighlight;
             }
             // Every selected piece -> the active highlight.
             if (Selected(region)) return ActiveRegionColor;

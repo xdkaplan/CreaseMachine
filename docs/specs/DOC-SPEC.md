@@ -187,7 +187,7 @@ reads must `Peek`), because you can't refresh past a not-yet-produced upstream.
 
 | Piece | State |
 |---|---|
-| `Transient<T>` with `IsFresh`/`IsStale`, `Value`, `Peek`, `Set`, `Rot`, `Clear` | ✓ built |
+| `Transient<T>` with `IsFresh`/`IsStale`, `Value`, `Peek`, `Supply`, `Rot`, `Clear` | ✓ built |
 | `Pattern` rots `CreaseMap` + `Geometry` via the `RotDownstream` cascade (I3) | ✓ built |
 | Real/Transient/Ephemeral distinction | ✓ built (AGENTS.md) |
 | Upstream/Downstream edges + `rotDownstream` cascade (`Node`/`Transient`) | ✓ built (I3; wired Pattern→{CreaseMap, Geometry}) |
@@ -204,7 +204,7 @@ reads must `Peek`), because you can't refresh past a not-yet-produced upstream.
 **Rot** — Fresh→Stale; cascades downstream (§5).
 **Refresh** — Stale→Fresh; umbrella for **Grow | Supply** (§5).
 **Grow** — a Grown transient rebuilds itself on read (the self door).
-**Supply** — a producer feeds a Supplied transient (the push door; method `Set` today).
+**Supply** — a producer feeds a Supplied transient (the push door; method `Supply`).
 **Real (tree)** — the one authored-node class; ownership tree; never stale; undo via its Store (§2, §3).
 **Transient (DAG)** — derived node; dependency DAG hanging off the Reals; fresh/stale (§3).
 **Parent / Child** — the **Real tree** axis: *contains* / owned-by (§3).

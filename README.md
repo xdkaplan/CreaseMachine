@@ -61,15 +61,17 @@ test/bin/Release/net48/GradCheck.exe
 
 ## Vendored dependencies
 
-`lib/Plankton.dll` and `lib/PlanktonGh.dll` are stock, unmodified upstream
+`lib/PlanktonGh.dll` is stock, unmodified upstream
 [Plankton](https://github.com/meshmash/Plankton) (0.4.3) by Daniel Piker, 
-Will Pearson, and David Stasiuk. We may expect these are C:/Repo/meshmash/Plankton
+Will Pearson, and David Stasiuk. `lib/Plankton.dll` is that same unmodified 0.4.3 source
+recompiled to **netstandard2.0** (zero code changes) so one assembly serves both the net48
+plugin and the net8 in-process app. We may expect these are C:/Repo/meshmash/Plankton
 You'll definitely need the DLL and GHA for the Grasshopper node.
 
 ## License
 
 This project is released under the **GNU General Public License, version 2
-(GPL-v2)**. See `LICENSE` for the full text, and `NOTICE.md` for the upstream
+(GPL-v2)**. See `LICENSE` for the full text, and `docs/NOTICE.md` for the upstream
 attributions and how the license decision was reached.
 
 Commercial use is permitted under the GPL-v2 terms: you may distribute and

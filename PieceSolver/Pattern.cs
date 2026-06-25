@@ -28,7 +28,7 @@ namespace PieceSolver
         public int[] PieceMap;
         // DERIVED crease set = edges between faces of different region; a Transient view of PieceMap. Feeds the
         // overlay + piece viz. PULL: lazily (re)derived from PieceMap (DeriveCreases) on read; marked stale by
-        // RegenCrease after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Set (see
+        // RegenCrease after any PieceMap change. The Seed bootstrap PUSHes a provisional set via .Supply (see
         // SeedCreaseEdges). Lossy — rebuilt wholesale, no per-crease identity. See AGENTS.md (Real/Transient).
         public readonly Transient<HashSet<long>> CreaseMap;
 

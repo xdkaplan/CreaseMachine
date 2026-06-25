@@ -5,7 +5,7 @@ namespace PieceSolver
 {
     enum CmdKind { Load, Subdivide, Revert, Matcap, Solve }
 
-    // Full parameter snapshot for a Solve (bake) command. The studio's Solve develops the mesh to the
+    // Full parameter snapshot for a Solve (bake) command. PieceSolver's Solve develops the mesh to the
     // selected Accuracy (target in-plane strain %), optionally subdividing + re-developing SubdivLevel
     // times, using the IsometricLM patch-solver weights. Captured at record time so a replayed Solve
     // reproduces the bake deterministically regardless of the current slider state. A plain value bag.
@@ -26,7 +26,7 @@ namespace PieceSolver
         };
     }
 
-    // One recorded studio action - a semantic INTENT, not raw input. Robust to UI changes and
+    // One recorded app action - a semantic INTENT, not raw input. Robust to UI changes and
     // deterministic to replay. A Solve carries a full BakeParams snapshot, so replay reproduces the exact
     // step regardless of the current slider state. Serialized as one text line in a grammar that is a
     // SUPERSET of the CLI's script grammar (load / subdivide / reset / solve k=v), so the same .journal
@@ -51,7 +51,7 @@ namespace PieceSolver
             switch (Kind)
             {
                 case CmdKind.Load: return "load " + Path;
-                // The studio's main develop. Carries the full bake snapshot; the CLI maps it to its
+                // PieceSolver's main develop. Carries the full bake snapshot; the CLI maps it to its
                 // bake-to-accuracy + subdivide equivalent (run + subdivide), ignoring the LM-only weights.
                 case CmdKind.Solve: return string.Format(CultureInfo.InvariantCulture,
                     "solve acc={0} subdiv={1} iso={2} fair={3} anchor={4} scale={5} bend={6} difffair={7} benddiff={8} fixedges={9} seamratio={10}",

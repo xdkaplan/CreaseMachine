@@ -37,57 +37,12 @@ Sub-panel crazing is still the open *aesthetic* question (§5), but it now has
 multiple practical levers including a per-vertex weight map. License is
 **GPL-v2** (see `LICENSE`, `NOTICE.md`).
 
-**Two paradigms now.** Beyond this Grasshopper component (the covariance *flow*), the repo has grown an
-in-process net8 WPF app, **`PieceSolver/`** (renamed from `patchsolver/`), implementing the *other*
-developability route: **isometric Levenberg–Marquardt** piecewise-developable patch-solving — load a
-(possibly multi-piece) mesh, BFF-flatten each face, and co-refine the 3-D mesh + its flat image toward
-isometry, freezing B-spline seams so the pieces stay joined. It is the active interactive tool and will
-become a *module* within the eventual **CreaseStudio**. Its architecture + Solve workflow are documented
-in `AGENTS.md` ("In-process app — PieceSolver/"); the file table below adds its key sources. The
-covariance-flow material in §§4–8 still describes the GH component + the shared Rhino-free engine.
-
-**Piecing model extracted from `MainWindow` (behaviour-preserving refactor).** The Piecing data model +
-interaction were lifted out of the `MainWindow.xaml.cs` god-file into cohesive units. The **partition** now
-lives in **`Pattern`** — a *thin companion* over the `PlanktonMesh` (it stores the per-face `PieceMap` +
-derived `CreaseMap` + the ops, NOT geometry; Plankton has no per-face attribute storage, so the labels have
-nowhere to live on the mesh). The **interaction** is the new **`Editor`/`Piecer`** pair (the contextual
-piecing brush — select / drag-to-grow / Shift = new region / Ctrl = remove + dominant-neighbour heal),
-behind the narrow **`IEditorHost`** interface that `MainWindow` implements (the wall that keeps the god-file
-from regrowing). `MainWindow` keeps the render loop / camera / picking / crease-review modal. This was a pure
-relocation — no behaviour change. The design note, glossary, and **deferred roadmap** (tx/undo stack,
-GUID/entity table, reconciling `RegenCrease`, `Picker.cs`, `UnweldByRegion`/PieceMesh + weld-FBX-on-import,
-polymorphic `Selection`, the partition↔crease authority flip) are in `docs/archive/PIECER-REFACTOR.md`.
-
-**Doc / transaction (undo-redo) layer added on top.** Piecing edits are now undoable. A **`Doc`** (the
-orchestrator) owns the `Pattern` Store, a typed **`Selection<PieceId>`** (hoisted out of the Piecer; *not*
-on the undo stack), and the undo/redo stacks, and gatekeeps every mutation through `Run` / `Undo` / `Redo`.
-A **Command** (pure function in `Commands.cs`) reads the selection + Real state and **computes** an
-**`IDelta`** (a list of **`Op`**s); `Doc.Run(delta)` applies it via the Store's `ITxAble.Apply` (the single
-persistent `PieceMap` writer) and pushes it for undo. The intricate in-place ops (Delete/Carve/Grow/Mint) are
-reused as Commands via `Pattern.ComputeDelta` (run-in-place → capture → roll back). **`Merge`** (`M`) is the
-first native Command; `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` undo/redo. State is split **Real** (authoritative
-`PieceMap`, in deltas) vs **Transient** (derived `CreaseMap`, regen'd after Apply/Invert).
-
-**Transaction scope + concurrency guard.** A gesture brackets its edit with `Doc.OpenTx()` (the **one**
-transaction — a lease); the tool composes privately and `Tx.Apply`/`Commit`s at mouse-up (`Run` is one-shot
-sugar = open+apply+commit). Mutating entry points **self-reject when `!Ready`** (a tx is open, or a long op
-set `Busy` — the bake calls `EnterBusy(Calculating)`), so a competing `Ctrl+Z` mid-stroke is a clean no-op;
-**ESC** cancels an in-flight stroke (`Editor.GesturePending` / `CancelGesture`). A `Tx` **accumulates**
-(multiple `Apply` → one `CompositeDelta` = one undo unit; the brush only commits one, but macros/parallel
-tools can). One tx at a time, always opened-and-closed — the seam for a future multithreaded ordering guard.
-Full spec + plan + glossary: `docs/DOC-TX-REFACTOR.md`.
-
-**Solver phase — the painted pieces now drive Solve (unweld handoff).** Solve develops a **derived** mesh,
-never the authoring mesh: `OnSolveAsync` no longer calls `Revert`; it bakes a clone/unweld on a temporary
-`FlowSession` and keeps the result as the `_developed` **Transient** the view shows, so the authoring mesh +
-`Pattern` **survive** a Solve. When the mesh is **pieced** (>1 painted region) the derived mesh is
-`MeshOps.UnweldByRegion(mesh, PieceMap)` — each painted piece becomes its own connected component, so the
-existing `RunBakeMulti` develops the painted pieces (per-piece BFF + frozen seams); single/unpieced → a
-plain clone. `ApplyReset → Revert` (standalone global op). **v1-split:** the Piecer↔Solver round-trip stays
-deliberately messy (the brush still targets the now-hidden authoring mesh; the Solve finally hand-flips
-`_showPieces`/overlays) — the formal representation swap + Doc-owns-mesh is deferred. **Known limitation:**
-fully-frozen per-piece boundaries over-constrain painted pieces → wrinkly panels; loosening seams is the
-named seam-relaxation follow-up. Full spec + plan: `docs/archive/SOLVER-PHASE.md`.
+**The in-process app + its Doc/tx + Solve workflow now live in `AGENTS.md`.** Beyond this Grasshopper
+component (the covariance *flow*), the repo has grown an in-process net8 WPF app, **`PieceSolver/`**,
+implementing the *other* developability route (isometric Levenberg–Marquardt patch-solving). For the
+PieceSolver app, the Doc/tx (undo-redo) layer, the Piecing model, and the Solve workflow, see
+**`AGENTS.md`** (it is the SSOT for those). The remainder of this doc (§§4–9) covers the GH component +
+the shared Rhino-free covariance-flow engine, whose hard-won lessons live nowhere else.
 
 ## 2. Orientation
 
@@ -102,10 +57,10 @@ named seam-relaxation follow-up. Full spec + plan: `docs/archive/SOLVER-PHASE.md
 | `PAPER_FORMULAS.md` | Transcription of the App-B formulas used (B.1 Eq 7/8/9, B.2, B.3 Eq 10, B.4, B.5.1). | — |
 | `PieceSolver/IsometricLM.cs` | Isometric **Levenberg–Marquardt** patch-solver: matrix-free Jacobi-preconditioned CG, parallel gather apply, opt-in FD gradient gate, optional `pinned` Dirichlet (seam freeze). The develop engine for the in-process app. | **no** |
 | `PieceSolver/MainWindow.xaml.cs` | The PieceSolver app: load, async modal **Solve** bake, multi-piece split + reassemble, B-spline seam UX, journal/replay. Now also the `IEditorHost` (owns the **`Doc`** which owns the `Pattern`, hosts the active `Editor`, routes pointer input, reacts to `Doc.Changed`/`Pieces.Changed`, keeps render/camera/picking/crease-review). | WPF/GL |
-| `PieceSolver/Pattern.cs` | The Piecing **Store** — a thin companion over the `PlanktonMesh` holding **Real** `PieceMap` + **Transient** (regen'd) `CreaseMap`; implements `ITxAble` (`Apply`/`Invert` + `ComputeDelta`), plus the in-place ops (Seed/Carve/Grow/**Delete**/SplitDisconnected) and queries (`RegionsConnected`, `GrowAssign`, `LargestComponent`, …). NOT a mesh. | **no** |
+| `PieceSolver/Pattern.cs` | The Piecing **Store** — a thin companion over the `PlanktonMesh` holding **Real** `PieceMap` + **Transient** (regen'd) `CreaseMap`; implements `ITxAble` (`Apply`/`Invert` + `ComputeDelta`), plus the in-place ops (Seed/Carve/Grow/**Delete**/SplitDisconnected) and queries (`MergeGroups`, `GrowAssign`, `LargestComponent`, …). NOT a mesh. | **no** |
 | `PieceSolver/Tx.cs` | Transaction primitives: `IDelta` (opaque to the Doc) + `Op` (invertible atom) + `PieceDelta` + `CompositeDelta` (multi-delta bundle) + `ITxAble`. | **no** |
 | `PieceSolver/Doc.cs` | The **Doc** orchestrator: `OpenTx`/`Run`/`Undo`/`Redo` (self-reject when `!Ready`) + `Tx` (accumulating, one-at-a-time, `Commit`/`Cancel`/auto-cancel-on-dispose) + `Busy` state (bake's `EnterBusy`) + undo/redo stacks; owns the Store + typed `Selection<T>` (not undoable); fires `Changed`. | **no** |
-| `PieceSolver/Commands.cs` | **Commands** — pure functions that compute an `IDelta` from selection + Real state (the user's "Tools"). First: `Merge`. | **no** |
+| `PieceSolver/Commands.cs` | **Commands** — pure functions that compute an `IDelta` from selection + Real state (the user's "Tools"). Today: `Merge` and `DelPiece`. | **no** |
 | `PieceSolver/Editor.cs` | Abstract `Editor` (lifecycle + pointer hooks + per-face fill tint) + the narrow `IEditorHost` interface MainWindow implements. | **no** |
 | `PieceSolver/Piecer.cs` | `Piecer : Editor` — the Piecing-phase contextual brush. Multi-piece **set** selection (in `Doc.Pieces`); tap = select/add/remove, drag = grow/carve; `M` = merge. A stroke holds an open `Doc.OpenTx()` lease, commits the composed delta at mouse-up; ESC → `CancelGesture`. | **no** |
 | `PieceSolver/PieceId.cs` | Zero-cost `readonly struct` typed handle over the int piece id (`PieceMap` stays `int[]`). | **no** |

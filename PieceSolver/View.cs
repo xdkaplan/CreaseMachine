@@ -16,7 +16,7 @@ namespace PieceSolver
     // The render rebuilds (RefreshPieces / RefreshCreaseOverlay) and the brush-preview dot still live on the
     // shell (the render-loop hasn't drained yet), so View delegates just those to injected hooks; everything
     // else is View-native. MainWindow is now only the WPF chrome shell + render loop. One View today, but a
-    // real abstraction (N later); the stack of Elements is the next shape. See docs/specs/DOC-SPEC.md + AGENTS.md.
+    // real abstraction (N later); the stack of Reals is the next shape. See docs/specs/DOC-SPEC.md + AGENTS.md.
     sealed class View : IEditorHost
     {
         readonly GLWpfControl _gl;            // the GL surface — size + repaint

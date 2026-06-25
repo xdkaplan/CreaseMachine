@@ -34,7 +34,7 @@ Category: **Mesh → CreaseMachine**.
 | deConsolidate | deConsolidate | Number | 0 | Weight of the **B.2 combinatorial / consolidation** penalty — for each vertex, the minimum within-cluster pair-sum `Σ‖N_s − N_t‖²` over connected 2-partitions of its 1-ring. Penalises within-patch normal spread while leaving real seams alone — merges piecewise developability into global. Live-tunable. |
 | useMaxCov | useMaxCov | Boolean | false | Replace the default sum-covariance (smaller eigenvalue of `Σθ N Nᵀ`, Eq 5) with the **B.4 max-covariance** `λ_max = min_u max_f ⟨u,N_f⟩²`. The sum form lets rulings branch into V's at seams; the max form forces every normal onto a single 1-D arc → straight rulings. Live-tunable. |
 | Sharpness | Sharpness | Number | 4.0 | Corner-preservation exponent. Per-vertex energy and gradient are multiplied by `w(d) = 1 / (1 + (d / (π/4))^Sharpness)`, where `d` is the Gauss–Bonnet angle defect. At 0 the falloff is off (corners get pulled flat); higher values preserve sharper junctions (cube corner at Sharpness=4 keeps ~6% weight). Live-tunable. |
-| deCraze | deCraze | Number | 0 | Weight of an **L1 dihedral sparsity** penalty (`Σ|φ_e| × weight`). Sparse-promoting: within-patch edges drop their dihedral to exactly zero (so adjacent patches merge) while real seams keep theirs. Corner-weighted by `Sharpness` so sharp junctions are still preserved. Not from the paper — see `NOTICE.md` for the Lasso / He&Schaefer L0-mesh-denoising citation. Live-tunable. |
+| deCraze | deCraze | Number | 0 | Weight of an **L1 dihedral sparsity** penalty (`Σ|φ_e| × weight`). Sparse-promoting: within-patch edges drop their dihedral to exactly zero (so adjacent patches merge) while real seams keep theirs. Corner-weighted by `Sharpness` so sharp junctions are still preserved. Not from the paper — see `docs/NOTICE.md` for the Lasso / He&Schaefer L0-mesh-denoising citation. Live-tunable. |
 | Running | Running | Boolean | false | `true` = decouple compute from the GH solve cycle. The flow runs continuously on a background worker thread, snapshotting the mesh + energy out on each timer tick. All other inputs stay live-tunable. `false` = legacy behaviour: one flow step per GH solve. See [Running mode](#running-mode) below. |
 | DetMix | DetMix | Number | 0.0 | Continuous blend in `[0, 1]` between the paper-faithful `λ_min(M)` energy (`DetMix=0`) and the symmetric `det(M_tangent) = λ_min·λ_max` energy (`DetMix=1`). `λ_min` is genuinely non-smooth at degenerate vertices (icosahedral corners, symmetric quads) — the picked eigenvector is direction-arbitrary there, which can produce visible twist on symmetric meshes. Mixing in a small amount (try 0.05–0.2) restores symmetry by combining both tangent-plane eigenvectors. Live-tunable. |
 | MomFix | MomFix | Integer | 4 | Momentum-restart mode for near-isotropic vertices whose gradient direction is arbitrary (the source of "racking" on symmetric meshes like geodesic spheres). `1` = none (paper behaviour, racks ~iter 27). `2` = DegenZeroMom: zero velocity where eigenvalue separation `sep < 0.1`. `3` = GradRestart: zero velocity when `dot(grad, vel) > 0` **and** `DetMix < 0.5` (velocity heading uphill; delays racking to ~iter 61). `4` = Combined 2+3 **plus a global adaptive momentum restart** (O'Donoghue–Candès: reset all velocity on any step that overshoots uphill in aggregate) that prevents the fold→collapse cascade which destroyed meshes under sustained high momentum — makes `Momentum = 0.9` stable *and* convergent (default). Live-tunable. |
@@ -198,6 +198,9 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 - **Load** OBJ / STL / **FBX**. Binary FBX is read by `src/FbxIO.cs` preserving Rhino's *unwelded* seam
   topology, so a 6-sided solid loads as one connected component per brep face. STL can't carry that
   (triangle soup → re-welded), so FBX is the piecing-friendly format.
+- **Revert** is the disk re-init op (the button / `Ctrl+R`): discard all work and reload the document
+  from the file on disk. **Reset** is the legacy / CLI alias for the same op (the journal accepts `reset`
+  as a synonym for `revert`).
 - **Solve** is an **async, cancelable, modal bake** (a background worker behind a progress + cancel
   overlay; it is the *single* develop path — the old hold-Space live-step and the SubD button were
   removed). It develops to the selected **Accuracy** (allowable in-plane strain %, by material) and then,
@@ -264,8 +267,8 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     `ComputeDelta(mutate)` runs an in-place op, captures the net change as a delta, and rolls back (so the
     intricate in-place engines — `Delete`/`Carve`/`Grow`/`Mint` + `SplitDisconnected` — are reused as
     delta-producing Commands). `Seed` flood-fill = a whole-partition **Chapter** reset; queries are
-    read-only (`NewRegionId`, `FullyMarked`, `FacesUnderBrush`, `GrowAssign`, `LargestComponent`,
-    `RegionsConnected`).
+    read-only (`NewRegionId`, `MostlyMarked`, `FacesUnderBrush`, `GrowAssign`, `LargestComponent`,
+    `MergeGroups`).
   - **`Tx`** (`Tx.cs`) — the transaction primitives: **`IDelta`** (one reversible change, opaque to the
     Doc, concrete to the Store), **`Op`** (its invertible atom — a face's label `From → To`), `PieceDelta`
     (a list of Ops), and **`ITxAble`** (`Apply`/`Invert`).
@@ -296,9 +299,10 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 
   **Shared vocabulary** (see `DOC-TX-REFACTOR.md`): **Doc** (orchestrator) · **Store** (`ITxAble`, holds
   Real state) · **IDelta** / **Op** · **Command** (= the user's "Tool") · **Real / Transient / Ephemeral**
-  (defined below; **Reals** are the authored nodes — Piece, Crease, …, the retired "Element"/"entity") · **Selection<T>** · **regen** ·
+  (defined below; **Reals** are the authored nodes — Piece, Crease, …, the retired "Element"/"entity") · **Selection<T>** · **Refresh** ·
   **Chapter** (reset boundary) · **tx** (one gesture = one transaction). Out of scope today: crease-identity
-  / reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs, journaling of piecing.
+  / reconcile-regen, the Creaser, Joins / Tabs / Cone tips, stable GUIDs. (Piece-op journaling shipped — the
+  Doc op-log records every piece op; *replaying* a saved piecing journal back is the remaining gap.)
 
   **Naming & vocabulary are the user's call.** The user owns term, class, method, field, and command
   naming — and the conceptual model behind a name. **Propose** any new name or rename and get **explicit
@@ -307,7 +311,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
 
   **Definition of Done** (`docs/DEFINITION-OF-DONE.md`) — the terse bar: every command is **replayable**
   from the journal; the journal stays **human-readable & concise** (a `#` comment only when the user's
-  action can't be inferred from the deltas alone); and the **Regen / dependency tree** (Real / Transient /
+  action can't be inferred from the deltas alone); and the **Refresh / dependency tree** (Real / Transient /
   Ephemeral) is functional and test-protected.
 
   **Do not modify any Doc orchestration — user acceptance required in all cases.** The transaction layer
@@ -344,7 +348,7 @@ builds without a separate Plankton checkout. Plankton is LGPL — see
 ## License
 
 This project is released under the **GNU General Public License, version 2
-(GPL-v2)**. See `LICENSE` for the full text, and `NOTICE.md` for the upstream
+(GPL-v2)**. See `LICENSE` for the full text, and `docs/NOTICE.md` for the upstream
 attributions and how the license decision was reached.
 
 GPL-v2 matches the license of the reference implementation released by the

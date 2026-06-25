@@ -111,8 +111,8 @@ but never downgraded to as-built.
 - [ ] **"journaling of piecing" listed out-of-scope though it shipped.**
   *(Agent E)* — *verified AGENTS.md:294; the journal landed via the concurrent
   agent (`49ecdd0`…`5836ee2`).*
-- [ ] **`Commands.cs` described as holding Delete/Carve/Grow/Mint** — only
-  `Merge` exists; the rest are `ComputeDelta`-in-Piecer. *(Agent E#4)*
+- [ ] **`Commands.cs` described as holding Delete/Carve/Grow/Mint** — it holds
+  `Merge` and `DelPiece` (delpiece merged); Carve/Grow/Mint stay `ComputeDelta`-in-Piecer. *(Agent E#4)*
   — *AGENTS.md now reads correctly (Pattern owns those engines); re-check
   `DOC-TX-REFACTOR.md`.*
 - [ ] **stale `Transient<T>` merge-debt note.** *(Agent E#6)*

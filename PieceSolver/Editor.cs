@@ -30,7 +30,7 @@ namespace PieceSolver
 
     // Abstract base for editors: lifecycle + pointer hooks + an optional per-face fill tint the view
     // queries while building the piece buffers. Today only the Piecer exists; a Crease editor is the
-    // next entity (deferred). Pure relocation — no behaviour added here.
+    // next Real (deferred). Pure relocation — no behaviour added here.
     abstract class Editor
     {
         public abstract string Name { get; }
