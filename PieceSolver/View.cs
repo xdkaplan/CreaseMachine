@@ -1,5 +1,6 @@
 using System;
 using System.Windows;
+using System.Windows.Input;
 using OpenTK.Mathematics;
 using OpenTK.Wpf;
 using Plankton;
@@ -27,10 +28,25 @@ namespace PieceSolver
         readonly Action _refreshPieces, _refreshCreaseOverlay, _hidePreview;
         readonly Action<Point> _showPreview;
         readonly Func<bool> _baking, _camModal;   // transient blocking states — injected so EditorActive can gate on them
+        // Pointer-pipeline shell hooks: the held-modifier state (tracked from key events on the shell, NOT read live)
+        // and the right-click piece context menu (a WPF ContextMenu the shell owns). Injected so the moved pointer
+        // handlers reach them without the whole window.
+        readonly Func<ModifierKeys> _heldMods;
+        readonly Action _showPieceMenu;
 
         public Doc Doc { get; }
         public DisplaySource Display { get; set; } = DisplaySource.Authoring;
         public Camera Camera { get; } = new Camera();   // the orbit camera — Ephemeral view state (see Camera.cs)
+
+        // ---- POINTER pipeline (Ephemeral): the mouse-gesture state machine ----
+        Point _lastMouse;
+        enum DragMode { None, Orbit, Pan, Edit }
+        DragMode _drag = DragMode.None;   // right-drag = orbit, Shift+right-drag = pan, left-drag = Crease brush
+        Point _rightDownPos;   // where a right-button press started — to tell a click from an orbit-drag
+        bool _rightClickArmed; // a plain right-press that, released without dragging, pops the piece menu
+        const double RightClickPx = 6.0;   // right-release within this of the press = a click (menu); beyond = an orbit
+        Point _lastHover;      // last hover position, for the footprint preview
+        public Point LastHover => _lastHover;   // the shell's brush-resize keys re-render the preview at this point
 
         // EDITOR (Ephemeral): the active interaction the View hosts. The Piecer instance is retained so its
         // selection persists across activations; ActiveEditor is non-null only once a proposal is accepted.
@@ -42,10 +58,12 @@ namespace PieceSolver
         public bool EditorActive => ActiveEditor != null && !_baking() && !_camModal();
 
         public View(Doc doc, GLWpfControl gl, Func<bool> baking, Func<bool> camModal,
+                    Func<ModifierKeys> heldMods, Action showPieceMenu,
                     Func<PlanktonMesh> mesh, Func<double> brushSize,
                     Action refreshPieces, Action refreshCreaseOverlay, Action<Point> showPreview, Action hidePreview)
         {
             Doc = doc; _gl = gl; _baking = baking; _camModal = camModal; _mesh = mesh; _brushSize = brushSize;
+            _heldMods = heldMods; _showPieceMenu = showPieceMenu;
             _refreshPieces = refreshPieces; _refreshCreaseOverlay = refreshCreaseOverlay;
             _showPreview = showPreview; _hidePreview = hidePreview;
             _piecer = new Piecer(this);   // the Piecing editor talks to the View (its host); ctor doesn't use the host
@@ -108,5 +126,81 @@ namespace PieceSolver
         public void ShowBrushPreview(Point screen) => _showPreview?.Invoke(screen);
         public void HideBrushPreview() => _hidePreview?.Invoke();
         public void Invalidate() => Rot();
+
+        // ---- POINTER handlers (wired by the shell onto the GL surface) ----
+        // Mouse scheme: right-drag = orbit, Shift+right-drag = pan. Wheel = zoom. Left-button +
+        // hover delegate to the active editor (the Crease brush, when one is active); else they do nothing.
+        public void OnMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            _lastMouse = e.GetPosition(_gl);
+            HideBrushPreview();   // hide the footprint preview while dragging
+            if (e.ChangedButton == MouseButton.Right)
+            {
+                _drag = (_heldMods() & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
+                _rightClickArmed = _drag == DragMode.Orbit;   // a plain (no-Shift) right-click, if it doesn't drag, pops the piece menu
+                _rightDownPos = _lastMouse;
+            }
+            else if (e.ChangedButton == MouseButton.Left)
+            {
+                _drag = DragMode.Edit;
+                if (EditorActive) ActiveEditor.OnPointerDown(_lastMouse, _heldMods());
+            }
+            else return;
+            _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
+        }
+
+        public void OnMouseUp(object sender, MouseButtonEventArgs e)
+        {
+            _drag = DragMode.None;
+            _gl.ReleaseMouseCapture();
+            if (EditorActive) ActiveEditor.OnPointerUp(_lastMouse);
+            if (e.ChangedButton == MouseButton.Right && _rightClickArmed)
+            {
+                _rightClickArmed = false;
+                var up = e.GetPosition(_gl);
+                double dx = up.X - _rightDownPos.X, dy = up.Y - _rightDownPos.Y;
+                if (dx * dx + dy * dy <= RightClickPx * RightClickPx && EditorActive) _showPieceMenu?.Invoke();   // a click, not an orbit -> pop the menu
+            }
+        }
+
+        public void OnMouseMove(object sender, MouseEventArgs e)
+        {
+            var p = e.GetPosition(_gl);
+            if (_rightClickArmed)   // any travel past the threshold cancels the pending menu — even a round trip back to the press point
+            {
+                double rdx = p.X - _rightDownPos.X, rdy = p.Y - _rightDownPos.Y;
+                if (rdx * rdx + rdy * rdy > RightClickPx * RightClickPx) _rightClickArmed = false;
+            }
+            if (_drag == DragMode.None)
+            {
+                _lastHover = p;
+                if (EditorActive) ActiveEditor.OnHover(p);   // footprint preview on hover (no-op when no editor is active)
+                return;
+            }
+            if (_drag == DragMode.Edit)
+            {
+                if (EditorActive) ActiveEditor.OnPointerMove(p);
+                _lastMouse = p;
+                return;
+            }
+            float dx = (float)(p.X - _lastMouse.X), dy = (float)(p.Y - _lastMouse.Y);
+            _lastMouse = p;
+            switch (_drag)
+            {
+                case DragMode.Orbit:
+                    Camera.Orbit(dx, dy);
+                    Rot();
+                    break;
+                case DragMode.Pan:
+                    PanCamera(dx, dy);
+                    break;
+            }
+        }
+
+        // Shift+right-drag pan -> the camera (speed scales with zoom inside Camera.Pan).
+        public void PanCamera(float dx, float dy) { Camera.Pan(dx, dy); Rot(); }
+
+        public void OnMouseWheel(object sender, MouseWheelEventArgs e) { Camera.Zoom(e.Delta); Rot(); }
+        public void OnMouseLeave(object sender, MouseEventArgs e) => HideBrushPreview();
     }
 }
