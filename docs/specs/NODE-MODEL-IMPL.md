@@ -60,7 +60,7 @@ arrays incl. `Dist`/`Edge`, own shader.)*
   Their `Geometry` yields a `Pieces` `RenderData`. The View draws Piece-Reals as the `Pieces` base source.
   **Blocked on untangling `RebuildPieces` first** (see §3). *I2b (stable per-Piece identity) is the I4
   gateway — explicitly deferred.*
-- **I3 — the rot cascade. FROZEN-LAYER — requires sign-off.** Wiring Real-mutation → `rotChildren` lands in
+- **I3 — the rot cascade. FROZEN-LAYER — requires sign-off.** Wiring Real-mutation → `rotDownstream` lands in
   `Pattern.Apply/Invert` (the only Real-mutation sites) and/or `Doc.*Internal`. `Pattern` *already* rots
   `CreaseMap` there, so the crease edge can ride the existing hook, but extending the cascade to Piece
   geometry touches frozen code. **Checkpoint required**, same tier as I4.
