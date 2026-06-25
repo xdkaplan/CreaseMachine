@@ -2,9 +2,9 @@ namespace PieceSolver
 {
     // The authored node (DOC-SPEC: a Real lives in the ownership TREE, never stale, undo via its Store).
     // A Real optionally owns a geometry Transient the View pulls + stages (null => nothing to draw — the
-    // View just no-ops). I1 introduces the abstraction + the first adopter (the crease overlay); the
-    // ownership tree (Parent/Children), Piece-as-Real (I2), the rot cascade (I3), and Crease-with-identity
-    // (I4) follow — see docs/specs/NODE-MODEL-IMPL.md.
+    // View just no-ops). Adopters so far: the crease overlay (I1) and the partition Pattern (I2a — its Pieces
+    // SPLIT buffer). Still ahead: the ownership tree (Parent/Children), the rot cascade (I3), per-piece
+    // identity + Crease-with-identity (I4) — see docs/specs/NODE-MODEL-IMPL.md.
     abstract class Real
     {
         public abstract string Name { get; }

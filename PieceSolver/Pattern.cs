@@ -10,9 +10,18 @@ namespace PieceSolver
     // (CreaseMap) + the ops that mutate them. NOT a mesh — it stores no geometry, only the per-face
     // piece labels index-coupled to the held mesh. (Plankton has no per-face attribute storage, so the
     // labels have nowhere to live ON the mesh — they live here.) See docs/archive/PIECER-REFACTOR.md.
-    sealed class Pattern : ITxAble
+    sealed class Pattern : Real, ITxAble
     {
         readonly PlanktonMesh _mesh;
+
+        public override string Name => "Pattern";
+        // DERIVED display geometry: the per-piece-tinted SPLIT render buffers (Pos/Nrm/Col/Dist/Edge) the View
+        // draws for the Pieces base source. SUPPLIED, not Grown like CreaseMap: the build needs render + editor
+        // inputs the caller holds (mesh positions, meshR, the colour callback), so RebuildPieces produces it via
+        // DerivePieceBuffers and Supplies it here. ONE Real, ONE buffer for the whole partition — per-piece
+        // identity is the I4 gateway (don't shatter the abstraction until we need it).
+        readonly Transient<RenderData> _geometry = new Transient<RenderData>();
+        public override Transient<RenderData> Geometry => _geometry;
 
         // PRIMARY segmentation: per-face piece id (-1 = unused). Seeded by Propose (flood-fill), painted
         // by the Piecer. The hot-path array stays int[]; PieceId is the typed handle at the API boundary.

@@ -119,10 +119,10 @@ namespace PieceSolver
         bool _camModal;          // a camera-only modal is up: chrome disabled, viewport still orbits; pieces show full patchwork
         System.Action _camAccept, _camCancel;   // active cam-modal's Accept / Cancel callbacks
         bool _angleDragging;     // Crease angle slider thumb is being dragged: show the neutral crease-shader grooves live, defer the rainbow colour to mouse-up
-        // Piece visualization: crease-bounded face regions tinted per piece. Buffers are computed on the UI
-        // thread and staged for GL-thread upload (like the mesh/crease overlay). Auto-shown after Propose.
-        float[] _piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge;
-        bool _pieceDirty; float _pieceInset = 0.05f;
+        // Piece visualization: crease-bounded face regions tinted per piece. The SPLIT buffers now live on the
+        // Pattern Real's Geometry Transient (I2a — Supplied by RebuildPieces, staged GL-side in OnRender like the
+        // mesh/crease overlay). _pieceDirty is the PUSH flag that re-stages it. Auto-shown after Propose.
+        bool _pieceDirty;
         double _bakeStrain = double.NaN;     // worst/final strain % the bake reached (UI reads after)
         string _bakeSummary = "";            // title body the bake produced
         readonly System.Collections.Generic.List<string> _bakeLog = new System.Collections.Generic.List<string>();   // worker log lines, flushed on the UI thread
@@ -964,7 +964,7 @@ namespace PieceSolver
             _piecer?.ClearSelection();
             _activeEditor = null;     // no proposal -> the brush is unavailable (was: _faceRegion == null)
             _creaseCount = 0; SetCreasePts(System.Array.Empty<float>());
-            _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
+            _view.Display = DisplaySource.Authoring; _doc.Pattern?.Geometry.Clear(); _pieceDirty = true;   // OnRender turns the piece view off + frees the buffer
         }
 
         // Identify pieces (face regions bounded by the crease selection + mesh boundaries) and stage a
@@ -974,7 +974,7 @@ namespace PieceSolver
         void RebuildPieces()
         {
             if (_session == null || _doc.Pattern == null)
-            { _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+            { _view.Display = DisplaySource.Authoring; _doc.Pattern?.Geometry.Clear(); _pieceDirty = true; _gl?.InvalidateVisual(); return; }
             var P = _session.Mesh;
             int nF = P.Faces.Count;
 
@@ -984,7 +984,7 @@ namespace PieceSolver
             EnsurePieceMap(nF);
             var creaseMap = _doc.Pattern.CreaseMap.Value;   // Transient: derived from the now-ensured PieceMap
             if (creaseMap == null || creaseMap.Count == 0)
-            { _view.Display = DisplaySource.Authoring; _piecePos = null; _pieceDirty = true; _gl?.InvalidateVisual(); return; }
+            { _view.Display = DisplaySource.Authoring; _doc.Pattern?.Geometry.Clear(); _pieceDirty = true; _gl?.InvalidateVisual(); return; }
 
             // Inputs the pure derivation needs that come from render/editor/modal state (caller concerns):
             float meshR = (_renderer != null) ? Math.Max(1e-4f, _renderer.Radius) : 1f;
@@ -998,10 +998,12 @@ namespace PieceSolver
                 _camModal ? (_angleDragging ? Vector3.One : PieceColor(pid))
                           : (_activeEditor?.FaceFill(f, pid) ?? Vector3.One);
 
-            (_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge, _pieceInset) =
-                DerivePieceBuffers(P, _doc.Pattern.PieceMap, creaseMap, meshR, colorOf);
+            var (pos, nrm, col, dist, edge) = DerivePieceBuffers(P, _doc.Pattern.PieceMap, creaseMap, meshR, colorOf);
+            // SUPPLY the Pattern Real's geometry Transient (the buffers need render/editor inputs, so this is
+            // Supplied not Grown — unlike CreaseMap). The View projects Pattern as the Pieces base source. (I2a)
+            _doc.Pattern.Geometry.Supply(new RenderData { Kind = RenderKind.Pieces, Pos = pos, Nrm = nrm, Col = col, Dist = dist, Edge = edge });
             _pieceDirty = true;
-            _view.Display = _piecePos.Length > 0 ? DisplaySource.Pieces : DisplaySource.Authoring;
+            _view.Display = pos.Length > 0 ? DisplaySource.Pieces : DisplaySource.Authoring;
             _gl?.InvalidateVisual();
         }
 
@@ -1016,7 +1018,7 @@ namespace PieceSolver
         // No Seed, no _renderer/_activeEditor/_camModal reads (those arrive as meshR + colorOf). This IS the I2a
         // Piece-Real Grow recipe; RebuildPieces is the caller that supplies the inputs and stores the result.
         // (node-model pre-I2 untangle; see docs/specs/NODE-MODEL-IMPL.md §3.)
-        static (float[] pos, float[] nrm, float[] col, float[] dist, float[] edge, float inset) DerivePieceBuffers(
+        static (float[] pos, float[] nrm, float[] col, float[] dist, float[] edge) DerivePieceBuffers(
             PlanktonMesh P, int[] pieceId, System.Collections.Generic.HashSet<long> creaseMap, float meshR,
             Func<int, int, Vector3> colorOf)
         {
@@ -1029,7 +1031,6 @@ namespace PieceSolver
 
             // Distance-to-boundary field: Dijkstra from crease vertices over mesh edges (world lengths), capped.
             float cap = 0.25f * meshR;
-            float inset = 0.06f * meshR;
             var dist = new float[nV]; for (int v = 0; v < nV; v++) dist[v] = cap;
             var pq = new System.Collections.Generic.PriorityQueue<int, float>();
             foreach (long key in creaseMap)
@@ -1103,7 +1104,7 @@ namespace PieceSolver
                     edg.Add(flat);
                 }
             }
-            return (pos.ToArray(), nrm.ToArray(), col.ToArray(), dst.ToArray(), edg.ToArray(), inset);
+            return (pos.ToArray(), nrm.ToArray(), col.ToArray(), dst.ToArray(), edg.ToArray());
         }
 
         // (The active-region + remove-preview tints moved to the Piecer editor, which owns the brush colouring.)
@@ -1742,10 +1743,11 @@ namespace PieceSolver
             // I1: pull the crease geometry from the View's CreaseOverlay Real + stage it (Real -> RenderData -> GL).
             if (_creaseDirty && !_baking && _renderer != null && _view.CreaseOverlay.Geometry.Peek(out var creaseRd))
             { _renderer.SetCreases(creaseRd.Segments ?? System.Array.Empty<float>()); _creaseDirty = false; }
-            // staged piece-visualization buffers (GL thread)
+            // I2a: pull the Pieces SPLIT geometry from the Pattern Real (Supplied by RebuildPieces) + stage it.
             if (_pieceDirty && !_baking && _renderer != null)
             {
-                if (_piecePos != null && _piecePos.Length > 0) _renderer.SetPieces(_piecePos, _pieceNrm, _pieceCol, _pieceDist, _pieceEdge);
+                if (_doc.Pattern != null && _doc.Pattern.Geometry.Peek(out var pieceRd) && pieceRd.Pos != null && pieceRd.Pos.Length > 0)
+                    _renderer.SetPieces(pieceRd.Pos, pieceRd.Nrm, pieceRd.Col, pieceRd.Dist, pieceRd.Edge);
                 else _renderer.ClearPieces();
                 _pieceDirty = false;
             }
