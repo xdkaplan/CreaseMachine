@@ -57,6 +57,16 @@ There are **two** node kinds and **two** relationships — the whole point is *n
   the Transient-DAG it's *derives-from*. The freshness machinery (§5) needs the DAG's
   **down-edges** — a Transient knows its children so a rot can walk the subtree.
 
+  > **Open shortcoming — "Parent / Child" is overloaded (user to resolve).** Both the Real
+  > ownership tree and the Real/Transient dependency DAG borrow the *same* "Parent / Child"
+  > vocabulary for what is really a directional **upstream → downstream** relationship. Because
+  > one Real sits in *both* graphs at once, an unqualified *"X's child"* is ambiguous —
+  > ownership-child or dependency-child? Flagged, **not** resolved: if the syntactic overlap ever
+  > causes confusion, split the vocabulary — keep "Parent / Child" for one axis and give the
+  > other a distinct pair (candidates only — *upstream / downstream*, *source / derived*, …).
+  > This is a **naming decision the user owns** (propose → accept); until it's made, qualify the
+  > axis in prose ("ownership child" / "DAG child").
+
 **Consumers project a Real.** A Real is never gated "viewable / not" — any consumer takes what
 it can. The **3D View** pulls a Real's geometry Transient and draws it (type-dispatching on
 mesh / lines / points), or no-ops when there's none. The **property / Settings panel** pulls the
@@ -200,7 +210,7 @@ reads must `Peek`), because you can't refresh past a not-yet-produced ancestor.
 **Supply** — a producer feeds a Supplied transient (the push door; method `Set` today).
 **Real (tree)** — the one authored-node class; ownership tree; never stale; undo via its Store (§2, §3).
 **Transient (DAG)** — derived node; dependency DAG hanging off the Reals; fresh/stale (§3).
-**Parent / Child** — *contains* in the Real-tree, *derives-from* in the Transient-DAG; rot walks the DAG's down-edges (§3, §5).
+**Parent / Child** — *contains* in the Real-tree, *derives-from* in the Transient-DAG; rot walks the DAG's down-edges (§3, §5). **Overloaded across both graphs — open naming shortcoming, user to resolve (§3).**
 **Consumer** — anything that projects a Real (the View → its geometry Transient; a panel → its values) (§3).
 **Element** — *gone; it's just `Real`.* No Element class, facet, or term — what you'd have called an element is a `Real` (with geometry).
 **Grown / Supplied** — the flavor axis: on-demand-self vs prepared-in-advance (§6).
