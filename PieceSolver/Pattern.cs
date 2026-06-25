@@ -112,33 +112,17 @@ namespace PieceSolver
         // faces belonging to a selected piece are carved. Each connected blob of carved faces is re-homed:
         // donated to its dominant neighbour OUTSIDE the selection (selected pieces are EXCLUDED so a carve can't
         // heal back into the selection it left — that is what makes carving against a small neighbour work), or
-        // — if the blob has no such neighbour — split off as a brand-new island piece. No selected piece is ever
-        // fully consumed: a piece the brush would empty is PROTECTED (its faces are left as a no-op); if every
-        // carved face is protected, the carve is refused. Returns a summary, or null if nothing.
+        // — if the blob has no such neighbour — split off as a brand-new island piece. Carving a selected piece
+        // away entirely is allowed (its faces are absorbed by the neighbour, or become an island) — undo restores
+        // it. Returns a summary, or null if nothing under the brush belonged to the selection.
         public string Carve(HashSet<int> touched, HashSet<int> selection)
         {
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null || selection == null || selection.Count == 0) return null;
             int nF = P.Faces.Count;
 
-            // Per selected piece: total faces vs how many the brush marked. A piece the brush would EMPTY is
-            // PROTECTED — carving it all away would delete it (deselect + Remove for that), so it stays put.
-            var total = new Dictionary<int, int>();
-            var marked = new Dictionary<int, int>();
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int r = PieceMap[f]; if (!selection.Contains(r)) continue;
-                total[r] = DictGet(total, r) + 1;
-                if (touched.Contains(f)) marked[r] = DictGet(marked, r) + 1;
-            }
-            var prot = new HashSet<int>();
-            int carvable = 0;
-            foreach (var kv in marked) { if (kv.Value >= DictGet(total, kv.Key)) prot.Add(kv.Key); else carvable += kv.Value; }
-            if (carvable == 0) return "can't carve a whole piece — deselect (click empty space) to remove it";
-
             bool IsCarved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused
-                                    && touched.Contains(f) && selection.Contains(PieceMap[f]) && !prot.Contains(PieceMap[f]);
+                                    && touched.Contains(f) && selection.Contains(PieceMap[f]);
 
             // Blobs of connected carved faces.
             var uf = new UnionFind(nF);
@@ -148,6 +132,7 @@ namespace PieceSolver
             });
             var blobRoots = new HashSet<int>();
             for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(uf.Find(f));
+            if (blobRoots.Count == 0) return null;            // nothing under the brush belonged to the selection
 
             // Tally each blob's shared border with each region OUTSIDE the selection (selected pieces excluded,
             // so the carve cannot heal back into the selection it left).
