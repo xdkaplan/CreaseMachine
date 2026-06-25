@@ -3,4 +3,92 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="MainWindow.xaml"
              ShutdownMode="OnMainWindowClose">
+    <Application.Resources>
+        <!-- Dark menus, app-wide. The default WPF menu chrome (popup border + dropdown background) renders
+             light and clashes with the dark UI; retemplate MenuItem + ContextMenu + the in-menu Separator so
+             the File / Window / Help dropdowns AND the right-click piece menu match. Lives in App.Resources
+             (not a Window) so the code-created ContextMenu picks the styles up regardless of inheritance context. -->
+
+        <!-- in-menu separator (scoped to menus via SeparatorStyleKey; standalone Separators are untouched) -->
+        <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}" TargetType="Separator">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Separator">
+                        <Border Height="1" Margin="6,3" Background="#3F3F46" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="MenuItem">
+            <Setter Property="Foreground" Value="#C8C8C8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuIcon" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="MenuGesture" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Path x:Name="Check" Grid.Column="0" Width="10" Height="10" Margin="7,0,0,0"
+                                      VerticalAlignment="Center" Visibility="Collapsed" Stretch="Uniform"
+                                      Data="M0,4 L3,8 L9,0" Stroke="#C8C8C8" StrokeThickness="1.6" />
+                                <ContentPresenter Grid.Column="1" Margin="9,5,9,5" ContentSource="Header"
+                                                  RecognizesAccessKey="True" VerticalAlignment="Center" />
+                                <TextBlock x:Name="GestureText" Grid.Column="2" Margin="16,5,9,5" VerticalAlignment="Center"
+                                           Text="{TemplateBinding InputGestureText}" Foreground="#8A8A8A" />
+                                <Path x:Name="Arrow" Grid.Column="3" Margin="6,0,7,0" VerticalAlignment="Center"
+                                      Visibility="Collapsed" Fill="#C8C8C8" Data="M0,0 L4,4 L0,8 Z" />
+                                <Popup x:Name="PART_Popup" Placement="Right" Focusable="False"
+                                       IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True" PopupAnimation="None">
+                                    <Border Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
+                                            Padding="0,3" Grid.IsSharedSizeScope="True">
+                                        <ItemsPresenter />
+                                    </Border>
+                                </Popup>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="Role" Value="TopLevelHeader">
+                                <Setter TargetName="PART_Popup" Property="Placement" Value="Bottom" />
+                            </Trigger>
+                            <Trigger Property="Role" Value="SubmenuHeader">
+                                <Setter TargetName="Arrow" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="InputGestureText" Value="">
+                                <Setter TargetName="GestureText" Property="Visibility" Value="Collapsed" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#3E3E42" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#6E6E72" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ContextMenu">
+            <Setter Property="Foreground" Value="#C8C8C8" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContextMenu">
+                        <Border Background="#2D2D30" BorderBrush="#3F3F46" BorderThickness="1"
+                                Padding="0,3" Grid.IsSharedSizeScope="True">
+                            <ItemsPresenter />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Application.Resources>
 </Application>

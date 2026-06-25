@@ -79,7 +79,7 @@ namespace PieceSolver
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null) return null;
             int nF = P.Faces.Count;
-            var remove = FullyMarked(touched);
+            var remove = MostlyMarked(touched);
             if (remove.Count == 0) return null;
             bool IsRemoved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused && remove.Contains(PieceMap[f]);
 
@@ -127,33 +127,17 @@ namespace PieceSolver
         // faces belonging to a selected piece are carved. Each connected blob of carved faces is re-homed:
         // donated to its dominant neighbour OUTSIDE the selection (selected pieces are EXCLUDED so a carve can't
         // heal back into the selection it left — that is what makes carving against a small neighbour work), or
-        // — if the blob has no such neighbour — split off as a brand-new island piece. No selected piece is ever
-        // fully consumed: a piece the brush would empty is PROTECTED (its faces are left as a no-op); if every
-        // carved face is protected, the carve is refused. Returns a summary, or null if nothing.
+        // — if the blob has no such neighbour — split off as a brand-new island piece. Carving a selected piece
+        // away entirely is allowed (its faces are absorbed by the neighbour, or become an island) — undo restores
+        // it. Returns a summary, or null if nothing under the brush belonged to the selection.
         public string Carve(HashSet<int> touched, HashSet<int> selection)
         {
             var P = _mesh;
             if (P == null || PieceMap == null || touched == null || selection == null || selection.Count == 0) return null;
             int nF = P.Faces.Count;
 
-            // Per selected piece: total faces vs how many the brush marked. A piece the brush would EMPTY is
-            // PROTECTED — carving it all away would delete it (deselect + Remove for that), so it stays put.
-            var total = new Dictionary<int, int>();
-            var marked = new Dictionary<int, int>();
-            for (int f = 0; f < nF; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int r = PieceMap[f]; if (!selection.Contains(r)) continue;
-                total[r] = DictGet(total, r) + 1;
-                if (touched.Contains(f)) marked[r] = DictGet(marked, r) + 1;
-            }
-            var prot = new HashSet<int>();
-            int carvable = 0;
-            foreach (var kv in marked) { if (kv.Value >= DictGet(total, kv.Key)) prot.Add(kv.Key); else carvable += kv.Value; }
-            if (carvable == 0) return "can't carve a whole piece — deselect (click empty space) to remove it";
-
             bool IsCarved(int f) => f >= 0 && f < nF && !P.Faces[f].IsUnused
-                                    && touched.Contains(f) && selection.Contains(PieceMap[f]) && !prot.Contains(PieceMap[f]);
+                                    && touched.Contains(f) && selection.Contains(PieceMap[f]);
 
             // Blobs of connected carved faces.
             var uf = new UnionFind(nF);
@@ -163,6 +147,7 @@ namespace PieceSolver
             });
             var blobRoots = new HashSet<int>();
             for (int f = 0; f < nF; f++) if (IsCarved(f)) blobRoots.Add(uf.Find(f));
+            if (blobRoots.Count == 0) return null;            // nothing under the brush belonged to the selection
 
             // Tally each blob's shared border with each region OUTSIDE the selection (selected pieces excluded,
             // so the carve cannot heal back into the selection it left).
@@ -435,9 +420,10 @@ namespace PieceSolver
             return new PieceId(mx + 1);
         }
 
-        // The set of regions whose faces are ALL marked (so they read dark red and will be removed). O(F).
-        // Used only by the no-selection "kill & donate" remove path (carving never removes whole pieces).
-        public HashSet<int> FullyMarked(HashSet<int> touched)
+        // The set of regions at least ~90% marked (a big piece needn't be 100% covered to read as intended — the
+        // unmarked sliver is treated as part of it; tiny pieces still need ~all of it). O(F). Used by the no-selection
+        // "kill & donate" delete and the plain multi-select (both act on whole pieces; carving never removes whole pieces).
+        public HashSet<int> MostlyMarked(HashSet<int> touched)
         {
             var result = new HashSet<int>();
             if (touched == null || touched.Count == 0 || PieceMap == null || _mesh == null) return result;
@@ -451,7 +437,8 @@ namespace PieceSolver
                 total[r] = DictGet(total, r) + 1;
                 if (touched.Contains(f)) hit[r] = DictGet(hit, r) + 1;
             }
-            foreach (var kv in total) if (DictGet(hit, kv.Key) == kv.Value) result.Add(kv.Key);
+            // >= 90% of the piece's faces marked (integer-safe: hit/total >= 9/10).
+            foreach (var kv in total) if (DictGet(hit, kv.Key) * 10 >= kv.Value * 9) result.Add(kv.Key);
             return result;
         }
 

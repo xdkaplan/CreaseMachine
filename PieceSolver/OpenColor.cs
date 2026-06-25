@@ -17,8 +17,11 @@ namespace PieceSolver
         // affordance (not applied unless it connects to the active piece by release).
         public static readonly Vector3 Green2 = Hex(0xb2f2bb);
         public static readonly Vector3 Green5 = Hex(0x51cf66);
-        // Indigo 3 — the active-piece selection highlight.
+        // Indigo 2 — plain multi-select "candidate"; Indigo 3 — active-piece selection highlight; Indigo 5 — the
+        // "wholly-painted, will be selected" pop during a multi-select brush (settles to Indigo 3 on release).
+        public static readonly Vector3 Indigo2 = Hex(0xbac8ff);
         public static readonly Vector3 Indigo3 = Hex(0x91a7ff);
+        public static readonly Vector3 Indigo5 = Hex(0x5c7cfa);
         // Gray 4 — the mesh edge overlay; Gray 7 — the crease lines.
         public static readonly Vector3 Gray4 = Hex(0xced4da);
         public static readonly Vector3 Gray7 = Hex(0x495057);

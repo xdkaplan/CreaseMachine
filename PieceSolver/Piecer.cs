@@ -10,15 +10,17 @@ namespace PieceSolver
     // Selection is a SET of pieces, living in the Doc (typed, shared, not undoable). Each modifier splits into
     // a TAP (release under StrokeThresholdPx of the press) and a DRAG (past it -> the brush):
     //   PLAIN — tap: REPLACE the selection with the one piece under the cursor (empty canvas / ESC -> deselect).
-    //           Plain never brushes.
+    //           Drag: MULTI-SELECT — paint faces (Indigo 2); a fully-painted piece pops Indigo 5; on release every
+    //           fully-painted piece REPLACES the selection (settling to the active colour).
     //   SHIFT — tap: ADD that piece to the selection (union). Drag: GROW the whole selection (when nothing is
     //           selected, MINT a new region from the largest connected blob). Provisional — candidates preview
     //           Green 5 (will be added) / Green 2 (a disconnected no-op affordance); commits on release.
     //   CTRL  — tap: REMOVE that piece from the selection. Drag: CARVE faces out of the whole selection (donated
     //           to a neighbour outside the selection, or split off as an island), or — nothing selected — DELETE
     //           whole pieces (healed into the dominant neighbour). Marked faces preview red; commits on release.
-    // Every committing gesture goes through Doc.Run as one transaction (undoable). The Piecer computes the change
-    // and never mutates Real state directly. See docs/DOC-TX-REFACTOR.md and docs/archive/PIECER-REFACTOR.md.
+    // Every committing MUTATION goes through Doc.Run as one transaction (undoable); the plain multi-select only sets
+    // the (Ephemeral) selection, no tx. The Piecer computes the change and never mutates Real state directly.
+    // See docs/DOC-TX-REFACTOR.md and docs/archive/PIECER-REFACTOR.md.
     sealed class Piecer : Editor
     {
         readonly IEditorHost _host;
@@ -52,6 +54,12 @@ namespace PieceSolver
         Dictionary<int, int> _growAssign;  // grow: face -> selected piece its front reached (null for a mint)
         Tx _tx;                     // the open Doc transaction for the live brush stroke (lease + commit vehicle)
 
+        // ---- Plain multi-select brush (only live once _dragging) ----
+        // Selection is Ephemeral (not undoable), so this path opens NO tx — on release the wholly-painted pieces
+        // REPLACE the selection.
+        bool _selecting;            // a plain drag with no selection in progress: paint pieces to select them
+        HashSet<int> _selTouched;   // faces painted during the current select gesture
+
         double _dabAccum;           // screen-px travelled since the last dab (path-spacing accumulator)
         Point _lastPointer;         // previous pointer position, the start of the current stroke segment
 
@@ -63,6 +71,7 @@ namespace PieceSolver
             _armed = false; _dragging = false;
             _removing = false; _carve = false; _touched = null;
             _growActive = false; _growMint = false; _growTouched = null; _growConnected = null; _growAssign = null;
+            _selecting = false; _selTouched = null;
 
             // The piece under the press point (for a tap select / add / remove). -1 if the press missed a face.
             var map = _host.Pattern?.PieceMap;
@@ -74,10 +83,9 @@ namespace PieceSolver
                 return;
             }
 
-            // PLAIN press = SELECT one (replace the whole selection), or deselect on empty canvas. Acts immediately;
-            // plain has no brush, so there is nothing to defer. (Selection.Changed drives the view refresh.)
-            if (_tapPiece >= 0) Sel.Replace(new PieceId(_tapPiece));
-            else if (Sel.Count > 0) Deselect();
+            // PLAIN press = defer (like Shift/Ctrl): a tap selects the one piece under the cursor (empty canvas ->
+            // deselect); a drag MULTI-SELECTS (paint pieces). Either way the result REPLACES the selection on release.
+            _armed = true;
         }
 
         public override void OnPointerMove(Point screen)
@@ -90,6 +98,7 @@ namespace PieceSolver
             }
             if (_removing) BrushStrokeTo(screen);        // Ctrl -> mark faces along the path
             else if (_growActive) GrowStrokeTo(screen);  // Shift -> accumulate + preview (provisional)
+            else if (_selecting) SelectStrokeTo(screen); // plain (no selection) -> paint pieces to select
             _lastPointer = screen;
         }
 
@@ -99,12 +108,15 @@ namespace PieceSolver
             {
                 if (_removing) CommitRemove();
                 else if (_growActive) CommitGrow();
+                else if (_selecting) CommitSelect();
             }
-            else if (_armed && _tapPiece >= 0)
+            else if (_armed)
             {
-                // A TAP with a modifier (plain already acted on press): edit the selection SET by the press piece.
-                if ((_downMods & ModifierKeys.Control) != 0) Sel.Remove(new PieceId(_tapPiece));   // Ctrl tap = remove from selection
-                else if ((_downMods & ModifierKeys.Shift) != 0) Sel.Add(new PieceId(_tapPiece));   // Shift tap = add to selection (union)
+                // A TAP (no drag past threshold): edit the selection by the piece under the press point.
+                if ((_downMods & ModifierKeys.Control) != 0) { if (_tapPiece >= 0) Sel.Remove(new PieceId(_tapPiece)); }   // Ctrl tap = remove
+                else if ((_downMods & ModifierKeys.Shift) != 0) { if (_tapPiece >= 0) Sel.Add(new PieceId(_tapPiece)); }   // Shift tap = add (union)
+                else if (_tapPiece >= 0) Sel.Replace(new PieceId(_tapPiece));   // plain tap = select one (replace)
+                else Deselect();                                                // plain tap on empty canvas = deselect
             }
             _armed = false; _dragging = false;
         }
@@ -116,17 +128,18 @@ namespace PieceSolver
         void BeginBrush()
         {
             _dragging = true;
-            _tx = _host.Doc.OpenTx();   // hold the lease for the whole stroke — foreign Run/Undo/Redo now self-reject
             _lastPointer = _downScreen; _dabAccum = 0;
             if ((_downMods & ModifierKeys.Control) != 0)
             {
+                _tx = _host.Doc.OpenTx();   // mutating stroke: hold the lease — foreign Run/Undo/Redo now self-reject
                 // CTRL drag: a non-empty selection -> CARVE it; nothing selected -> DELETE whole pieces. Just marks.
                 _removing = true; _carve = Sel.Count > 0; _touched = new HashSet<int>();
                 if (_host.PickSurface(_downScreen, out var hit)) MarkFacesUnderBrush(hit);
                 _host.RefreshPieces();
             }
-            else
+            else if ((_downMods & ModifierKeys.Shift) != 0)
             {
+                _tx = _host.Doc.OpenTx();   // mutating stroke: hold the lease
                 // SHIFT drag (provisional): nothing selected -> MINT a new region (the largest connected blob);
                 // a selection -> GROW it (candidates a selected front reaches -> Green 5; the rest Green 2, a no-op
                 // affordance until they connect). Commits on release.
@@ -135,6 +148,14 @@ namespace PieceSolver
                 if (_host.PickSurface(_downScreen, out var hit)) AccumulateGrow(hit);
                 UpdateGrowConnected();
                 if (_host.ShowPieces) _host.RefreshPieces();
+            }
+            else
+            {
+                // PLAIN drag: MULTI-SELECT — paint pieces; on release every wholly-painted piece REPLACES the
+                // selection. Selection is Ephemeral (not undoable), so NO tx is opened.
+                _selecting = true; _selTouched = new HashSet<int>();
+                if (_host.PickSurface(_downScreen, out var hit)) MarkSelectUnderBrush(hit);
+                _host.RefreshPieces();
             }
         }
 
@@ -201,6 +222,20 @@ namespace PieceSolver
             _tx?.Apply(delta); _tx?.Commit(); _tx = null;               // apply (fires Changed -> rebuild) + close the stroke's tx
             if (didMint && !empty) Sel.Replace(minted);                  // mint -> the new piece becomes the selection
             else if (empty && _host.ShowPieces) _host.RefreshPieces();   // no-op: drop the green preview
+        }
+
+        // Plain multi-select commit: the wholly-painted pieces REPLACE the selection. Partially-painted pieces are
+        // left out — you must drag over a piece's whole extent (the same "fully marked" rule the Delete gesture uses).
+        // Selection only (Ephemeral): no delta, no tx.
+        void CommitSelect()
+        {
+            var fully = _host.Pattern.MostlyMarked(_selTouched);   // pieces whose every face was painted
+            _selecting = false; _selTouched = null;               // drop preview state before the rebuild
+            var sel = new HashSet<PieceId>();
+            foreach (int r in fully) sel.Add(new PieceId(r));
+            bool wasEmpty = Sel.Count == 0;
+            Sel.Set(sel);                                         // REPLACE the selection with the fully-painted set (fires Changed -> rebuild)
+            if (sel.Count == 0 && wasEmpty && _host.ShowPieces) _host.RefreshPieces();   // no selection change -> drop the indigo preview manually
         }
 
         // ===================== brush stroke (path-length spaced dabs) =====================
@@ -283,18 +318,50 @@ namespace PieceSolver
             return changed;
         }
 
+        // One plain-select dab: paint every face under the brush into the select set.
+        bool MarkSelectUnderBrush(Vector3 center)
+        {
+            if (_selTouched == null) return false;
+            bool changed = false;
+            foreach (int f in _host.Pattern.FacesUnderBrush(center, _host.BrushWorldRadius))
+                if (_selTouched.Add(f)) changed = true;
+            return changed;
+        }
+
+        // The plain-select stroke: paint faces under the brush along the path (path-length spaced dabs, like the
+        // Ctrl stroke). The selection is computed on mouse-up from the wholly-painted pieces.
+        void SelectStrokeTo(Point b)
+        {
+            double dx = b.X - _lastPointer.X, dy = b.Y - _lastPointer.Y;
+            double seg = Math.Sqrt(dx * dx + dy * dy);
+            if (seg < 1e-6) return;
+            double spacing = _host.BrushSpacingPx(b);
+            double pos = spacing - _dabAccum;
+            bool changed = false;
+            while (pos <= seg)
+            {
+                double t = pos / seg;
+                if (_host.PickSurface(new Point(_lastPointer.X + dx * t, _lastPointer.Y + dy * t), out var hit) && MarkSelectUnderBrush(hit)) changed = true;
+                pos += spacing;
+            }
+            _dabAccum = seg - (pos - spacing);
+            if (changed && _host.ShowPieces) _host.RefreshPieces();
+        }
+
         // ===================== per-face FILL tint (the non-modal piece colouring) =====================
 
-        // Precomputed once per buffer build so FaceFill is O(1) per face (FullyMarked is O(F)).
+        // Precomputed once per buffer build so FaceFill is O(1) per face (MostlyMarked is O(F)).
         HashSet<int> _marked;        // the delete-gesture marked set (null when not removing)
         HashSet<int> _fullyMarked;   // regions wholly marked -> will be deleted (dark red)
+        HashSet<int> _selFully;      // plain-select: regions wholly painted -> read the active colour (will be selected)
 
         public override void FaceFillBegin()
         {
             _marked = (_removing && _touched != null && _touched.Count > 0) ? _touched : null;
             // "fully-marked piece -> dark red" only applies to the no-selection DELETE preview; a carve marks
             // faces (not whole pieces), so a marked selected-piece face is the delete colour.
-            _fullyMarked = (_marked != null && !_carve) ? _host.Pattern.FullyMarked(_touched) : null;
+            _fullyMarked = (_marked != null && !_carve) ? _host.Pattern.MostlyMarked(_touched) : null;
+            _selFully = (_selecting && _selTouched != null && _selTouched.Count > 0) ? _host.Pattern.MostlyMarked(_selTouched) : null;
         }
 
         public override Vector3? FaceFill(int face, int region)
@@ -306,6 +373,10 @@ namespace PieceSolver
                 if (_growConnected != null && _growConnected.Contains(face)) return GrowAdd;
                 if (_growTouched != null && _growTouched.Contains(face)) return GrowPreview;
             }
+            // Plain multi-select preview: a painted face reads Indigo 2 (candidate); once its whole piece is painted
+            // it pops Indigo 5 (will be selected). On release the selection settles to the active colour.
+            if (_selecting && _selTouched != null && _selTouched.Contains(face))
+                return (_selFully != null && _selFully.Contains(region)) ? SelectFull : SelectCandidate;
             // Ctrl-gesture preview on marked faces:
             //   CARVE  -> a SELECTED piece's faces read the DELETE colour (dark red); other faces under the brush
             //             can't be carved, shown in the lighter PRE-SELECT colour as a no-op affordance.
@@ -322,17 +393,18 @@ namespace PieceSolver
         }
 
         // ---- gesture lifecycle ----
-        // A brush stroke is mid-composition iff its tx lease is open. ESC routes here instead of to Deselect.
-        public override bool GesturePending => _tx != null;
+        // Mid-composition iff a mutating stroke's tx lease is open OR a plain multi-select is live. ESC routes here.
+        public override bool GesturePending => _tx != null || _selecting;
 
         // Abort the in-flight stroke (ESC): cancel the tx (nothing was applied during the drag, so it rolls back
         // zero parts) and disarm so the pending mouse-up does nothing; drop the provisional preview.
         public override void CancelGesture()
         {
             _tx?.Cancel(); _tx = null;
-            bool wasBrush = _removing || _growActive;
+            bool wasBrush = _removing || _growActive || _selecting;
             _removing = false; _carve = false; _touched = null;
             _growActive = false; _growMint = false; _growTouched = null; _growConnected = null; _growAssign = null;
+            _selecting = false; _selTouched = null;
             _armed = false; _dragging = false;
             if (wasBrush && _host.ShowPieces) _host.RefreshPieces();
         }
@@ -354,5 +426,9 @@ namespace PieceSolver
         // Shift preview: Green 5 = will be added (mint blob, or a connected grow), Green 2 = disconnected (no-op affordance).
         static readonly Vector3 GrowAdd = OpenColor.Green5;
         static readonly Vector3 GrowPreview = OpenColor.Green2;
+        // Plain multi-select preview: Indigo 2 = a painted candidate; Indigo 5 = a wholly-painted piece (pops; settles
+        // to ActiveRegionColor once it becomes the real selection on release).
+        static readonly Vector3 SelectCandidate = OpenColor.Indigo2;
+        static readonly Vector3 SelectFull = OpenColor.Indigo5;
     }
 }

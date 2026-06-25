@@ -70,6 +70,11 @@ namespace PieceSolver
         System.Windows.Point _rightDownPos;   // where a right-button press started — to tell a click from an orbit-drag
         bool _rightClickArmed;                // a plain right-press that, released without dragging, pops the piece menu
         const double RightClickPx = 6.0;      // right-release within this of the press = a click (menu); beyond = an orbit
+        // Modifier state tracked from key events, NOT read live at mouse-down. Reading Keyboard.Modifiers during
+        // WPF's deferred mouse-input processing can miss a just-pressed Shift/Ctrl (the "Shift+click sometimes
+        // doesn't register" race). Captured in key-event order instead, so a click any time the key is physically
+        // held sees it; resynced on window activation to cover a keyup missed while inactive.
+        ModifierKeys _heldMods = ModifierKeys.None;
         // Brush-footprint preview overlay (the hover circle). The brush INTERACTION itself lives in the
         // Piecer editor; MainWindow only owns the preview dot + picking (exposed to the editor via IEditorHost).
         System.Windows.Point _lastHover;  // last hover position, for the footprint preview
@@ -176,6 +181,14 @@ namespace PieceSolver
             };
             CenterHost.Children.Add(_previewDot);
             _gl.MouseLeave += (s, e) => _previewDot.Visibility = Visibility.Collapsed;
+
+            // 3D|2D folding split: divider drag resizes / stashes a pane; clicking a gutter tab pops it back.
+            CenterDivider.MouseLeftButtonDown += DividerDown;
+            SplitGrid.MouseMove += DividerMove;            // on SplitGrid (stable) so a snap-closed divider doesn't drop the drag
+            SplitGrid.MouseLeftButtonUp += DividerUp;
+            Gutter3D.MouseLeftButtonUp += (s, e) => { _panes = PaneState.Both; ApplyPanes(); };
+            Gutter2D.MouseLeftButtonUp += (s, e) => { _panes = PaneState.Both; ApplyPanes(); };
+            ApplyPanes();
 
             // Load the default mesh as the first journal entry, so recordings are self-contained
             // (they begin with the load). The GL upload itself happens once the context is live.
@@ -287,6 +300,7 @@ namespace PieceSolver
             MenuConsole.Click += (s, e) => ShowConsole(MenuConsole.IsChecked);   // IsCheckable flips first
             PreviewKeyDown += (s, e) =>
             {
+                _heldMods = e.KeyboardDevice.Modifiers;   // track held modifiers so mouse gestures read this, not a stale/early Keyboard.Modifiers
                 if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.Escape && EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_activeEditor.GesturePending) _activeEditor.CancelGesture(); else _activeEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
@@ -304,6 +318,8 @@ namespace PieceSolver
                     ResizeBrush(-1); UpdatePreview(_lastHover); e.Handled = true;
                 }
             };
+            PreviewKeyUp += (s, e) => _heldMods = e.KeyboardDevice.Modifiers;   // clear a released modifier (keeps _heldMods current)
+            Activated += (s, e) => _heldMods = Keyboard.Modifiers;              // resync on focus regain (covers a keyup missed while inactive)
             // (The old hold-Space live-step path is gone — Solve is now the single develop path, async with
             // a progress+cancel modal.)
         }
@@ -1603,14 +1619,14 @@ namespace PieceSolver
             _previewDot.Visibility = Visibility.Collapsed;   // hide the footprint preview while dragging
             if (e.ChangedButton == MouseButton.Right)
             {
-                _drag = (Keyboard.Modifiers & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
+                _drag = (_heldMods & ModifierKeys.Shift) != 0 ? DragMode.Pan : DragMode.Orbit;
                 _rightClickArmed = _drag == DragMode.Orbit;   // a plain (no-Shift) right-click, if it doesn't drag, pops the piece menu
                 _rightDownPos = _lastMouse;
             }
             else if (e.ChangedButton == MouseButton.Left)
             {
                 _drag = DragMode.Edit;
-                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, Keyboard.Modifiers);
+                if (EditorActive) _activeEditor.OnPointerDown(_lastMouse, _heldMods);
             }
             else return;
             _gl.CaptureMouse();   // keep dragging even if the cursor leaves the viewport
@@ -1655,6 +1671,11 @@ namespace PieceSolver
         void OnMouseMove(object sender, MouseEventArgs e)
         {
             var p = e.GetPosition(_gl);
+            if (_rightClickArmed)   // any travel past the threshold cancels the pending menu — even a round trip back to the press point
+            {
+                double rdx = p.X - _rightDownPos.X, rdy = p.Y - _rightDownPos.Y;
+                if (rdx * rdx + rdy * rdy > RightClickPx * RightClickPx) _rightClickArmed = false;
+            }
             if (_drag == DragMode.None)
             {
                 _lastHover = p;
@@ -1683,6 +1704,58 @@ namespace PieceSolver
 
         // Shift+right-drag pan -> the View's camera (speed scales with zoom inside Camera.Pan).
         void PanCamera(float dx, float dy) { _view.Camera.Pan(dx, dy); _view.Rot(); }
+
+        // ===================== Folding 3D|2D split panes =====================
+        // The centre holds two panes — the 3D viewport (CenterHost) and the 2D placeholder. Dragging the divider
+        // to an edge stashes that pane into a thin gutter tab; clicking the gutter pops it back to the width it had
+        // when stashed. Mirrors vzome-playground's createPaneLayout (remembered width = restoreCodeW).
+        enum PaneState { Both, Fold3D, Fold2D }
+        PaneState _panes = PaneState.Both;
+        double _r3D = 0.5;             // 3D-pane share of the split (0..1) when both open — STAR-sized, so the divider
+        double _dragR3D;               //   stays proportional and can't be pushed off-screen when the window resizes.
+        bool _dividerDragging;         // true between divider mousedown and mouseup (capture is held on SplitGrid)
+        const double GutterPx = 30, CollapseAt = 70, DividerPx = 8, MinShare = 0.05;
+
+        void ApplyPanes()
+        {
+            bool both = _panes == PaneState.Both, f3 = _panes == PaneState.Fold3D, f2 = _panes == PaneState.Fold2D;
+            if (f3)      { Col3D.Width = new GridLength(GutterPx);                 Col2D.Width = new GridLength(1, GridUnitType.Star); }
+            else if (f2) { Col3D.Width = new GridLength(1, GridUnitType.Star);     Col2D.Width = new GridLength(GutterPx); }
+            else         { Col3D.Width = new GridLength(_r3D, GridUnitType.Star);  Col2D.Width = new GridLength(1 - _r3D, GridUnitType.Star); }
+            CenterHost.Visibility    = f3 ? Visibility.Collapsed : Visibility.Visible;
+            Gutter3D.Visibility      = f3 ? Visibility.Visible   : Visibility.Collapsed;
+            View2DPane.Visibility    = f2 ? Visibility.Collapsed : Visibility.Visible;
+            Gutter2D.Visibility      = f2 ? Visibility.Visible   : Visibility.Collapsed;
+            CenterDivider.Visibility = both ? Visibility.Visible : Visibility.Collapsed;
+            if (!f3) InvalidateView();   // viewport showing -> nudge a redraw at the new size
+        }
+
+        void DividerDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 2) { _r3D = 0.5; _panes = PaneState.Both; ApplyPanes(); return; }
+            _dragR3D = _r3D;               // remember the pre-drag share, so a stash pops back to it
+            _dividerDragging = true;
+            SplitGrid.CaptureMouse();   // capture the STABLE container, not the divider — hiding it on snap won't drop the drag
+        }
+
+        void DividerMove(object sender, MouseEventArgs e)
+        {
+            if (!_dividerDragging) return;
+            double avail = SplitGrid.ActualWidth - DividerPx;
+            if (avail < 1) return;
+            double nw = e.GetPosition(SplitGrid).X - DividerPx / 2;            // 3D width at the pointer
+            if (nw < CollapseAt)              { _r3D = _dragR3D; _panes = PaneState.Fold3D; }   // stash 3D, pop back to pre-stash share
+            else if (avail - nw < CollapseAt) { _r3D = _dragR3D; _panes = PaneState.Fold2D; }   // stash 2D, keep 3D's share
+            else { _r3D = Math.Max(MinShare, Math.Min(1 - MinShare, nw / avail)); _panes = PaneState.Both; }
+            ApplyPanes();
+        }
+
+        void DividerUp(object sender, MouseButtonEventArgs e)
+        {
+            if (!_dividerDragging) return;
+            _dividerDragging = false;
+            SplitGrid.ReleaseMouseCapture();
+        }
 
         // ===================== Crease brush — host-side helpers (the interaction lives in Piecer) =====================
 
