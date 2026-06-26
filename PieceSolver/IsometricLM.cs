@@ -51,9 +51,16 @@ namespace PieceSolver
         // Run `outerIters` LM iterations on (M, Mp). Weights define the objective (no step size). lambda
         // persists via ref. Returns the raw E_iso (Sum of squared-length mismatches, unweighted) for the
         // convergence readout - same quantity IsometricSolver.Step returns, so the GUI display is parity.
+        // bendSkipEdges (optional): a set of packed vertex-pair keys (min<<32 | max) naming CREASE edges whose
+        // BENDING coupling is removed — the edge-side analogue of the per-vertex `pinned` Dirichlet. Crease
+        // vertices stay welded for position (the iso term still ties the fan), but the bi-Laplacian bending
+        // umbrella drops its across-crease neighbours, so the fold across the crease is free (unpenalised).
+        // This is the engine ask for the whole-mesh coupled curved-crease develop (CURVED-CREASE-DEVELOP.md):
+        // one welded solve, creases free to fold. Only meaningful when wBend > 0; null = no crease (legacy).
         public static double Solve(PlanktonMesh M, PlanktonMesh Mp, Vec3[] M0,
                                    double wIso, double wFair, double wPos, double wScale, bool diffFair, double wBend, bool bendDiff,
-                                   int outerIters, int cgIters, ref double lambda, bool[] pinned = null)
+                                   int outerIters, int cgIters, ref double lambda, bool[] pinned = null,
+                                   System.Collections.Generic.HashSet<long> bendSkipEdges = null)
         {
             int nV = M.Vertices.Count;
             if (nV == 0 || Mp.Vertices.Count != nV) return 0.0;
@@ -74,6 +81,31 @@ namespace PieceSolver
             {
                 used[v] = !M.Vertices[v].IsUnused;
                 nbr[v] = used[v] ? (M.Vertices.GetVertexNeighbours(v) ?? Array.Empty<int>()) : Array.Empty<int>();
+            }
+
+            // BENDING-neighbour lists: identical to `nbr` except across-crease edges are dropped, so the
+            // bi-Laplacian (bending) stencil never spans a crease -> the fold is free. The umbrella + its exact
+            // transpose + the bending diagonal ALL read `bnbr` so the operator stays self-adjoint (FD-gated).
+            // Iso/fairness keep the full `nbr` (the iso term is what welds the fan together). bnbr == nbr when
+            // no crease mask is supplied (legacy: aliased, zero cost).
+            int[][] bnbr = nbr;
+            bool maskBend = bendSkipEdges != null && bendSkipEdges.Count > 0 && wBend > 0.0;
+            if (maskBend)
+            {
+                bnbr = new int[nV][];
+                for (int v = 0; v < nV; v++)
+                {
+                    var nb = nbr[v]; int d = nb.Length;
+                    if (d == 0) { bnbr[v] = Array.Empty<int>(); continue; }
+                    System.Collections.Generic.List<int> keep = null;
+                    for (int k = 0; k < d; k++)
+                    {
+                        int u = nb[k];
+                        long key = ((long)Math.Min(v, u) << 32) | (uint)Math.Max(v, u);
+                        if (bendSkipEdges.Contains(key)) { (keep ??= new System.Collections.Generic.List<int>(nb)).RemoveAll(x => x == u); }
+                    }
+                    bnbr[v] = keep != null ? keep.ToArray() : nb;
+                }
             }
 
             // per-vertex incident-edge CSR: lets J^T r be assembled as a GATHER (each vertex sums its own
@@ -168,7 +200,7 @@ namespace PieceSolver
                 {
                     for (int v = lo; v < hi; v++)
                     {
-                        int bb = 3 * v; var nb = nbr[v]; int d = nb.Length;
+                        int bb = 3 * v; var nb = bnbr[v]; int d = nb.Length;
                         if (!used[v] || d == 0) { outp[bb] = outp[bb + 1] = outp[bb + 2] = 0; continue; }
                         double ax = 0, ay = 0, az = 0;
                         for (int k = 0; k < d; k++) { int u = nb[k]; ax += inp[3 * u]; ay += inp[3 * u + 1]; az += inp[3 * u + 2]; }
@@ -185,10 +217,10 @@ namespace PieceSolver
                     {
                         int bb = 3 * w;
                         double sx = used[w] ? -inp[bb] : 0.0, sy = used[w] ? -inp[bb + 1] : 0.0, sz = used[w] ? -inp[bb + 2] : 0.0;
-                        var nb = nbr[w]; int d = nb.Length;
+                        var nb = bnbr[w]; int d = nb.Length;
                         for (int k = 0; k < d; k++)
                         {
-                            int s = nb[k]; int ds = nbr[s].Length; if (!used[s] || ds == 0) continue;
+                            int s = nb[k]; int ds = bnbr[s].Length; if (!used[s] || ds == 0) continue;
                             double iv = 1.0 / ds; sx += inp[3 * s] * iv; sy += inp[3 * s + 1] * iv; sz += inp[3 * s + 2] * iv;
                         }
                         outp[bb] = sx; outp[bb + 1] = sy; outp[bb + 2] = sz;
@@ -421,9 +453,9 @@ namespace PieceSolver
                 if (sBend > 0.0)   // bending diag estimate: sBend^2*(U^2 self-coeff)^2, so Minv doesn't blow up here
                     for (int v = 0; v < nV; v++)
                     {
-                        if (!used[v]) continue; var nb = nbr[v]; int d = nb.Length; if (d == 0) continue;
-                        double iv = 1.0 / d, u2 = 1.0;                              // (U^2)_vv = 1 + sum_{k in nbr} 1/(d_v d_k)
-                        for (int k = 0; k < d; k++) { int du = nbr[nb[k]].Length; if (du > 0) u2 += iv / du; }
+                        if (!used[v]) continue; var nb = bnbr[v]; int d = nb.Length; if (d == 0) continue;
+                        double iv = 1.0 / d, u2 = 1.0;                              // (U^2)_vv = 1 + sum_{k in bnbr} 1/(d_v d_k)  (bending stencil omits crease edges)
+                        for (int k = 0; k < d; k++) { int du = bnbr[nb[k]].Length; if (du > 0) u2 += iv / du; }
                         double bd = sBend * sBend * u2 * u2;
                         dg[3 * v] += bd; dg[3 * v + 1] += bd; dg[3 * v + 2] += bd;
                     }

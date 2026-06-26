@@ -520,6 +520,16 @@ namespace PieceSolver
             finally { _meshSwitching = false; }
         }
 
+        // ---- whole-mesh coupled curved-crease develop (CURVED-CREASE-DEVELOP.md §2) ----
+        // When a pieced mesh is Solved, the WELDED authoring mesh is developed in ONE coupled solve (not
+        // per-piece): crease vertices stay shared (welded for position; the iso term ties each fan), the
+        // crease edges' BENDING is masked (free fold), and junction vertices where >=3 creases meet are
+        // Dirichlet-locked (cone points can't flatten to one sheet). The display unwelds the result so the
+        // fold renders. These two are captured before the bake and consumed by RunBakeCoupled/SolveToAccuracy.
+        System.Collections.Generic.HashSet<long> _bendSkipEdges;   // crease edges (packed vertex-pair keys) — bending masked
+        bool[] _coneLock;      // per-vertex: true at junctions where >=3 creases meet — Dirichlet-locked (cone points)
+        bool _coupledCrease;   // route RunBake -> RunBakeCoupled (the welded free-crease develop)
+
         // ---- fixed B-spline seam edges (bent-wire pins) ----
         bool[] _pinned;        // per-vertex: true where pinned to a seam wire (Dirichlet during the solve)
         float[] _seamLineF;    // GL_LINES positions for the fitted seam curve (cyan)
@@ -626,9 +636,12 @@ namespace PieceSolver
             // is kept as the Solver Transient _developed and shown). Phase C unwelds-by-CreaseMap instead of
             // cloning when the mesh is pieced. Develop-state is reset for the clone exactly as Revert used to.
             var authoring = _session;
-            // The derived develop mesh: when the mesh is PIECED (>1 painted piece), UNWELD along the creases so
-            // each piece is its own connected component — the per-component bake (RunBakeMulti) then develops the
-            // painted pieces. Otherwise a plain clone (single-patch develop). The authoring mesh is untouched.
+            // The derived develop mesh. A PIECED mesh (>1 painted piece) is developed in ONE WHOLE-MESH COUPLED
+            // solve on the WELDED authoring topology (a plain clone): the crease vertices stay shared so each fan
+            // assembles via topology and the iso term ties it (welded for position), while the crease EDGES'
+            // bending is masked so the fold is free (RunBakeCoupled; CURVED-CREASE-DEVELOP.md §2). The result is
+            // UNWELDED only for DISPLAY (below), so the fold renders. A non-pieced mesh is a plain clone (single-
+            // patch develop) or, for a multi-component FBX solid, the abandoned per-piece path. Authoring untouched.
             var pieceMap = _doc.Pattern?.PieceMap;
             bool pieced = false;
             if (pieceMap != null && pieceMap.Length == authoring.Mesh.Faces.Count)
@@ -640,9 +653,20 @@ namespace PieceSolver
                     if (first < 0) first = pieceMap[f]; else if (pieceMap[f] != first) { pieced = true; break; }
                 }
             }
-            var developMesh = pieced
-                ? CreaseMachine.MeshOps.UnweldByRegion(authoring.Mesh, pieceMap, out _)
-                : TopologyClone(authoring.Mesh);
+            _bendSkipEdges = null; _coneLock = null; _coupledCrease = false;
+            int[] unweldVMap = null;   // display unweld: developed-welded vertex -> unwelded copy index (built in the finally)
+            var developMesh = TopologyClone(authoring.Mesh);   // pieced or single: develop the WELDED topology
+            if (pieced)
+            {
+                // crease edges (between differing pieces) on the welded mesh: bending masked + cone-lock derived.
+                var creaseSet = _doc.Pattern?.CreaseMap?.Value;
+                if (creaseSet != null && creaseSet.Count > 0)
+                {
+                    _bendSkipEdges = new System.Collections.Generic.HashSet<long>(creaseSet);
+                    _coneLock = ConeLockMask(developMesh, _bendSkipEdges);   // >=3 creases meet -> Dirichlet lock (removes cone singularities)
+                    _coupledCrease = true;
+                }
+            }
             _session = new FlowSession(developMesh);
             _hasFlat = false; _flat = null; _M0 = null;
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0; _bffNeeded = true;
@@ -670,7 +694,20 @@ namespace PieceSolver
                 bool developed = !_bakeToken.IsCancellationRequested;
                 if (developed)
                 {
-                    _developed.Supply(_session.Mesh);   // the Solver's Transient = the developed clone
+                    // Coupled curved-crease develop solved the WELDED mesh; UNWELD it for display so the crease
+                    // renders as a real fold (coincident copies, distinct normals). Single/FBX paths show as-is.
+                    PlanktonMesh shown = _session.Mesh;
+                    if (_coupledCrease && pieceMap != null)
+                    {
+                        // Unweld AUTHORING (face+vertex aligned with pieceMap), then stamp the developed positions
+                        // from the welded solve (TopologyClone preserved authoring's vertex indices) via the unweld
+                        // vertex map. shown carries the fold; the welded solve carried the position-tie.
+                        var unwelded = CreaseMachine.MeshOps.UnweldByRegion(authoring.Mesh, pieceMap, out unweldVMap);
+                        for (int v = 0; v < unweldVMap.Length; v++)
+                        { var p = _session.Mesh.Vertices[unweldVMap[v]]; unwelded.Vertices[v].X = p.X; unwelded.Vertices[v].Y = p.Y; unwelded.Vertices[v].Z = p.Z; }
+                        shown = unwelded;
+                    }
+                    _developed.Supply(shown);   // the Solver's Transient = the developed (unwelded-for-display) mesh
                     // Flip to the Solver view: the piece view (ShowPieces) REPLACES the matcap mesh, so the
                     // developed mesh stays hidden behind it unless the Piecer-view decorations come off. Drop the
                     // piece colours + crease wires — DISPLAY only; the Pattern / CreaseMap data survive.
@@ -1131,7 +1168,8 @@ namespace PieceSolver
             var sw = System.Diagnostics.Stopwatch.StartNew();
             const long budgetMs = 100000;   // Solve bake time budget (100s; was 10s) — caps the develop+subdivide loop
             double target = _sim.AccuracyStrainPct;
-            if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) RunBakeMulti(sw, budgetMs, target);
+            if (_coupledCrease) RunBakeCoupled(sw, budgetMs, target);   // pieced -> whole-mesh coupled free-crease develop
+            else if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) RunBakeMulti(sw, budgetMs, target);
             else RunBakeSingle(sw, budgetMs, target);
         }
 
@@ -1154,6 +1192,45 @@ namespace PieceSolver
             _bakeSummary = (double.IsNaN(pct) ? "solved" : "solved " + pct.ToString("0.###") + "%") + "  (" + _session.Mesh.Vertices.Count + " verts)";
         }
 
+        // ===================== whole-mesh coupled curved-crease bake (CURVED-CREASE-DEVELOP.md §2) =====================
+
+        // Develop the WELDED pieced mesh in ONE coupled solve: BFF the whole disk to a flat M', then LM-develop
+        // toward isometry with (a) the crease EDGES' bending masked (_bendSkipEdges -> free fold) and (b) the
+        // cone junctions Dirichlet-locked (_coneLock). Crease vertices stay welded (shared) so the iso term ties
+        // each fan and the panels assemble via topology; the display unwelds the result so the fold renders.
+        // sub0 only (no subdivision in this MVP — the sub0-crease-pinned refinement is deferred).
+        void RunBakeCoupled(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
+        {
+            if (!FlattenPure()) { _bakeSummary = "BFF failed"; return; }
+            SolveToAccuracy(target, sw, budgetMs, _coneLock, _bendSkipEdges);
+            double pct = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
+            _bakeStrain = pct;
+            int locked = 0; if (_coneLock != null) for (int v = 0; v < _coneLock.Length; v++) if (_coneLock[v]) locked++;
+            _bakeSummary = (double.IsNaN(pct) ? "solved" : "solved " + pct.ToString("0.###") + "%")
+                + "  coupled crease (" + (_bendSkipEdges?.Count ?? 0) + " crease edges, " + locked + " cone-locked)  ("
+                + _session.Mesh.Vertices.Count + " verts)";
+        }
+
+        // Cone-lock mask: lock (Dirichlet) any vertex where >=3 crease edges meet — a cone junction can't
+        // flatten to one sheet, so we fix it (matches fixing the corners you'd fix anyway). Counts incident
+        // crease edges per vertex from the packed crease-edge set. Does NOT decouple the problem (panels still
+        // couple through shared panels); it only removes the cone singularities. (CURVED-CREASE-DEVELOP.md §2.)
+        static bool[] ConeLockMask(PlanktonMesh M, System.Collections.Generic.HashSet<long> creaseEdges)
+        {
+            int nV = M.Vertices.Count;
+            var cone = new bool[nV];
+            if (creaseEdges == null || creaseEdges.Count == 0) return cone;
+            var deg = new int[nV];
+            foreach (long key in creaseEdges)
+            {
+                int a = (int)(key >> 32), b = (int)(uint)key;
+                if (a >= 0 && a < nV) deg[a]++;
+                if (b >= 0 && b < nV) deg[b]++;
+            }
+            for (int v = 0; v < nV; v++) if (deg[v] >= 3) cone[v] = true;
+            return cone;
+        }
+
         // Worker-safe flatten: BFF the live mesh into _flat + the anchor M0; NO GL upload (the UI thread
         // uploads after the bake). Mirrors EnsureFlat minus ShowFlat's GPU work.
         bool FlattenPure()
@@ -1169,6 +1246,12 @@ namespace PieceSolver
 
         // ===================== multi-piece (per-component) solve =====================
 
+        // Abandoned in place — superseded by the whole-mesh coupled free-crease develop (CURVED-CREASE-DEVELOP.md).
+        // The painted-piece develop now routes through RunBakeCoupled (welded solve + masked crease bending).
+        // This per-component frozen-boundary path is retained only for genuine multi-component inputs that carry
+        // no PieceMap (e.g. an FBX solid arriving as one component per brep face); its frozen seams over-constrain
+        // and cannot free a crease, which is exactly why the pieced case moved to the coupled solve.
+        //
         // Solve a multi-component mesh (e.g. an FBX solid -> one patch per face): flatten + develop each
         // component independently, then reassemble in place. Each piece's boundary is FROZEN (Dirichlet)
         // during its develop, so the solid stays joined at the shared seams while each face's interior
@@ -1201,10 +1284,14 @@ namespace PieceSolver
             _bakeSummary = flattened + "/" + pieces + " panels  worst strain " + (worst * 100.0).ToString("0.###") + "%  (" + _session.Mesh.Vertices.Count + " verts)";
         }
 
+        // Abandoned in place — superseded by the whole-mesh coupled free-crease develop (CURVED-CREASE-DEVELOP.md).
         // Develop one component to the accuracy target with its boundary FROZEN (Dirichlet) so it stays
         // joined to its neighbours. BFF (the flat) is already computed by the caller.
         void DevelopPiece(PlanktonMesh pc, PlanktonMesh flat, double target, System.Diagnostics.Stopwatch sw, long budgetMs)
         {
+            // Abandoned in place — superseded by the whole-mesh coupled free-crease develop (CURVED-CREASE-DEVELOP.md):
+            // freezing the WHOLE piece boundary over-constrains and cannot free the crease (the coupled path masks
+            // crease-edge bending instead). Still used by the FBX-solid per-component path only.
             var pin = CreaseMachine.MeshOps.BoundaryVertexMask(pc);   // freeze the seam boundary in place
             var m0 = new CreaseMachine.Vec3[pc.Vertices.Count];
             for (int v = 0; v < m0.Length; v++) { var p = pc.Vertices[v]; m0[v] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
@@ -1241,16 +1328,20 @@ namespace PieceSolver
         }
 
         // LM iterations until strain (relErr) <= targetPct, convergence (no progress), or the time budget.
-        void SolveToAccuracy(double targetPct, System.Diagnostics.Stopwatch sw, long budgetMs)
+        // pinOverride/bendSkip (optional): the coupled curved-crease develop passes the cone-lock Dirichlet
+        // pins + the masked crease edges here; the legacy single bake passes neither (B-spline pins as before).
+        void SolveToAccuracy(double targetPct, System.Diagnostics.Stopwatch sw, long budgetMs,
+            bool[] pinOverride = null, System.Collections.Generic.HashSet<long> bendSkip = null)
         {
             if (_flat == null || _M0 == null) return;
+            bool[] pin = pinOverride ?? (_sim.FixBSplineEdges ? _pinned : null);
             double prev = double.MaxValue;
             for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; it++)
             {
                 _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
                     _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight,
                     _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref _lmLambda,
-                    _sim.FixBSplineEdges ? _pinned : null);
+                    pin, bendSkip);
                 double pct = RelErr(_session.Mesh, _flat) * 100.0;
                 if ((it & 7) == 0) _bakeProgress?.Report((-1.0, "developing… strain " + pct.ToString("0.###") + "%  (target " + targetPct.ToString("0.###") + "%)"));
                 if (pct <= targetPct) break;            // reached the accuracy bar
