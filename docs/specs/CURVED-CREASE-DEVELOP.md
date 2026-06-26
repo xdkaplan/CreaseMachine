@@ -30,13 +30,33 @@ free crease — a central panel couples *all* its creases, and `{A,C}` vs `{B,C}
 shared panel `C`. The coupling propagates through shared panels, so the whole connected pieced mesh is one
 coupled problem. (Only a literal 2-panel sheet — one crease, free ends, no junctions — decomposes.)
 
-**Therefore: solve the whole pieced mesh at once.**
-- Crease vertices **shared** (welded *for position*) → the topology assembles every fan automatically.
-- Crease-edge **bending masked** → the fold is free (the iso term still ties the fan; the bending term just
-  doesn't penalise the crease angle).
+**Therefore: solve the whole pieced mesh at once**, crease vertices **shared** (welded *for position*) → the
+topology assembles every fan automatically.
 
-**Engine ask:** add a *per-edge bending mask* to `IsometricLM.Solve` — it already takes a per-vertex
-`pinned` (Dirichlet); this is the edge-side analogue (skip the bending residual on crease edges).
+### Keeping the fold free — DO NOT mask "crease edges" (the original error in this spec)
+
+`IsometricLM`'s two smoothing blocks are **per-VERTEX over the 1-ring, NOT per-edge** (`IsometricLM.cs:23,
+:165`):
+- `fairM(v) = M_v − mean(M neighbours)` — uniform Laplacian fairness (and `fairP` for M′),
+- `bending(v)` = bi-Laplacian `U²`, `U(v) = mean_nbr(v) − v`,
+
+both pulling `v` toward the mean of `GetVertexNeighbours(v)`. At a **welded** crease vertex the 1-ring spans
+**both** panels, so *both* terms average **across the seam → they flatten the fold.** A per-edge bending
+mask does nothing, and masking *bending only* still leaves the fairness Laplacian smoothing the crease away.
+
+To keep the fold, do **one** of:
+
+- **Unweld along the crease** (what the prototype does, `BuildSub` → per-panel meshes) — each crease vertex's
+  1-ring becomes **one-sided**, so neither term can cross the seam *by construction*. Simplest, guaranteed.
+  (You lose the shared-position fan coupling — fine for a single 2-panel sheet; for a real fan use the welded
+  option below.)
+- **Welded + per-VERTEX exclusion:** keep the crease verts shared (so the per-edge `iso` + the shared
+  position still couple the fan) but **zero the residual rows at crease vertices for `fairM`, `fairP`, AND
+  `bending`.** The crease vertex stops being smoothed → the kink survives; the fan stays coupled.
+
+**Engine ask:** a **per-vertex "don't-smooth" mask** on `fairM`/`fairP`/`bending` — `IsometricLM.Solve`
+already takes a per-vertex `pinned` (Dirichlet); add the same-shape mask for "don't apply the smoothing
+residuals here." Also keep `wFair` low/off near the seam (the prototype ran `wFair = 0`, `wBend = 0.6`).
 
 **Do not** keep the current per-piece frozen-boundary path for the free-crease case: `DevelopPiece` →
 `BoundaryVertexMask` freezes the *whole* piece boundary, which over-constrains and **cannot free the
@@ -126,7 +146,7 @@ transient with local incremental refresh, exact-on-demand via the cold Relax.
 - Study prototype: `relax/Relax.cs` (worktree `investigate/seam-tension`) — `CornerAt`, `DevSubAtCrease`,
   `BentWireV`, the unweld/U build.
 - Engine subdivide: `src/MeshOps.cs` `UniformSubdivide`.
-- Develop kernel: `PieceSolver/IsometricLM.cs` (the `pinned` Dirichlet; the per-edge bending mask is the
-  ask).
+- Develop kernel: `PieceSolver/IsometricLM.cs` (the `pinned` Dirichlet; the *per-vertex* don't-smooth mask
+  on `fairM`/`fairP`/`bending` is the ask — see §2; `fairM`/`bending` are per-vertex 1-ring at `:23`/`:165`).
 - Solve / subdivide flow: `PieceSolver/MainWindow.xaml.cs` — `RunBakeMulti`, `SubdivideCompute`,
   `DevelopPiece`, `RebindPattern`.
