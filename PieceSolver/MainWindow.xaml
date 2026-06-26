@@ -301,12 +301,8 @@
                                         <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding IsoWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
                                         <Slider Minimum="0" Maximum="50" Value="{Binding IsoWeight}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
-                                    <DockPanel Margin="0,3,0,0">
-                                        <TextBlock DockPanel.Dock="Left" Text="Fair" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
-                                                   ToolTip="Fairness/smoothing weight. With 'Differential' (below) ON it de-buckles without shrinking (preserves original detail) — the C preset. OFF it's a plain Laplacian (shrinks); leave low or 0." />
-                                        <TextBlock DockPanel.Dock="Right" Width="40" Text="{Binding FairWeight, StringFormat=0.##}" Foreground="#8A8A98" FontSize="11" TextAlignment="Right" VerticalAlignment="Center" />
-                                        <Slider Minimum="0" Maximum="1" Value="{Binding FairWeight}" VerticalAlignment="Center" Margin="6,0" />
-                                    </DockPanel>
+                                    <!-- Fair slider removed: Abandoned, not supported during FairWeight migration (FairWeight hardcoded 0). -->
+
                                     <DockPanel Margin="0,1,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="" Width="62" />
                                         <CheckBox Content="Differential (non-shrinking)" IsChecked="{Binding DiffFair, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center" Margin="6,0"

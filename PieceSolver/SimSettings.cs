@@ -26,7 +26,7 @@ namespace PieceSolver
         // (with Anchor=0 + Scale on, LM develops to relErr ~0 with no shrink, headless-verified). Fair =
         // legacy uniform-Laplacian (shrinks; unneeded under LM - prefer the non-shrinking Smoother below).
         // Anchor = optional dense point-to-point faithfulness pin to the original; 0 = off (default).
-        double _isoWeight = 10.0, _fairWeight = 0.0, _anchorWeight = 0.0, _scaleWeight = 10.0, _bendWeight = 0.6;   // default = preset D
+        double _isoWeight = 10.0, _anchorWeight = 0.0, _scaleWeight = 10.0, _bendWeight = 0.6;   // default = preset D  (FairWeight abandoned — hardcoded 0)
         // Post-LM smoother (IsometricSmoothers): 0 None, 1 Tangential, 2 Taubin. Non-shrinking strain
         // distributors / de-bucklers applied as a filter after each LM step (boundary vertices pinned).
         // None suffices for the near-developable test patches; the smoothers are insurance for buckling-
@@ -53,7 +53,9 @@ namespace PieceSolver
 
         // Isometric patch-solver knobs (drive IsometricLM.Solve + IsometricSmoothers via IsometricStep()).
         public double IsoWeight { get => _isoWeight; set => Set(ref _isoWeight, value); }
-        public double FairWeight { get => _fairWeight; set => Set(ref _fairWeight, value); }
+        // Abandoned, not supported during FairWeight migration — hardcoded 0 so no fairness calcs run
+        // (IsometricLM gates every Fair term on sFair>0). Setter is a no-op (a loaded journal `fair=` is ignored).
+        public double FairWeight { get => 0.0; set { /* Abandoned, not supported during FairWeight migration */ } }
         public double AnchorWeight { get => _anchorWeight; set => Set(ref _anchorWeight, value); }
         public double ScaleWeight { get => _scaleWeight; set => Set(ref _scaleWeight, value); }
         // 2nd-order bending (differential bi-Laplacian) - the anti-wrinkle term, the triangle analog of the
