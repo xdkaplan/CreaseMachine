@@ -14,13 +14,14 @@ and re-tiles it into curvature-aligned **planar-quad (PQ) strips** whose interio
 the rulings. We do **not** implement it; it is the most directly relevant published "rulings →
 flat panels" pipeline for a future fabrication-export stage (see [Relevance](#relevance-to-creasemachine)).
 
-> ✅ **Eq. 1–15 verified** against PDF page screenshots (provided 2026-06-27) — notation and
+> ✅ **Eq. 1–25 verified** against PDF page screenshots (provided 2026-06-27) — notation and
 > equation forms corrected to match the paper exactly (the original draft of this doc was
 > reconstructed from `pdftotext`, which had stripped the math symbols; that introduced wrong
-> notation — `φ/u/ρ/q/c(f)` — now fixed to the paper's `u/γ/s/Γ/w(f)`).
+> notation — `φ/u/ρ/q/c(f)/α,β,γ` — now fixed to the paper's `u/γ/s/Γ/w(f)/ω_a,ω_d,ω_s`).
 > ⚠️ **Still reconstructed from the text layer (renderer unavailable), verify against the PDF:**
-> Eq. 6 (the confidence logistic), Eq. 16–25 (the full problem + Algorithm 1 sub-solves), and
-> the discrete gradient expression. These are flagged inline with *(reconstructed — verify)*.
+> only Eq. 6 (the confidence logistic) and the discrete-gradient expression remain — flagged
+> inline with *(reconstructed — verify)*. Algorithm 1's *step ordering* is from the text layer,
+> but every sub-solve it calls (Eq. 20–25) is verified.
 
 ### Notation (the paper's, as verified)
 
@@ -35,9 +36,9 @@ flat panels" pipeline for a future fabrication-export stage (see [Relevance](#re
 | `Γ = γ²` | the power representation of `γ` (sign-invariant, complex) |
 | `R`, `R⊥` | the ruling power field and its 90° rotation (the alignment target) |
 | `w(f) ∈ [0, 0.8]` | per-face **confidence** weight; `m(f)` face area; `m(e)` edge mass |
-
-*(Heads-up: the paper reuses `γ` for both the field **and** the smoothness weight in Eq. 16;
-context disambiguates.)*
+| `ω_a, ω_d, ω_s` | scalar weights for the align / div / smooth energies (Eq. 16) |
+| `μ_a, μ_s` | step-size normalizers (lowest nonzero generalized eigenvalues) in Eq. 20–21 |
+| `γ_u, γ_d, γ_c` | the iterate after normalize / after div-free projection / after curl-free projection |
 
 ---
 
@@ -260,52 +261,59 @@ constraint:   C sγ = 0                                              (14)
 bounds:       s_low < s < s_high     (they use 0.4 ≤ s ≤ 1.6, Eq. 25) (15)
 ```
 
-### Full problem (Eq. 16–19) *(reconstructed — verify)*
+### Full problem (Eq. 16–19) ✅
 
 ```
-(γ, s, Γ) = argmin   α · E_a(Γ) + β · E_d(γ) + γ_w · E_s(Γ)          (16)
-   s.t.   Γ(f) = γ(f)²    ∀f                                        (17)
-          C( s · γ ) = 0                                            (18)
+(Γ, γ, s) = argmin   ω_a · E_a(Γ) + ω_d · E_d(γ) + ω_s · E_s(Γ)     (16)
+   s.t.   Γ(f) = γ²(f)    ∀f                                        (17)
+          C s γ = 0                                                 (18)
           s_low < s < s_high                                       (19)
 ```
 
-`α, β, γ_w` scalar weights (the paper writes the smoothness weight as `γ`, colliding with the
-field name). Following [Sageman-Furnas 2019], they drive `ε → 0` and `β → 0` so the solution
-converges to a div-free unit field aligned to rulings *away from* planar regions and singularities.
+`ω_a, ω_d, ω_s` are scalar weights. Following [Sageman-Furnas 2019], they anneal weights (drive
+`ω_d, ω_s → 0`) so the solution converges to a divergence-free unit-norm field aligned to rulings
+*away from* planar regions and singularities.
 
-### Algorithm 1 — alternating solve (§5.2) *(reconstructed — verify)*
+### Algorithm 1 — alternating solve (§5.2)
 
-The problem is separable in `γ`, `s`, `Γ`, so they alternate:
+Separable in `Γ`, `γ`, `s`, so they alternate. The **align and smooth steps run in the power
+representation `Γ`**, then convert back to the raw unit field for the projections:
 
 ```
-Initialize  γ₀ = r (estimated rulings),  s = 1,  V_s = V \ (V_boundary ∪ V_crease)
+Initialize  Γ⁰ = R⊥ (ruling power target),  s = 1,  V* = V \ (V_boundary ∪ V_crease)
 repeat  (k = k+1):
-    γ ← ImplicitAlign(γ_{k-1})        # implicit-Euler decrease of E_a            (Eq. 20)
-    γ ← ImplicitSmooth(γ)             # implicit-Euler decrease of E_s            (Eq. 21)
-    γ(f) ← γ(f) / ‖γ(f)‖              # pointwise renormalize (the GL unit term)
-    LocalRawRepresentation(γ)
-    V_s ← UpdateSingularities(γ)      # find current singularities; V_s ⊆ V
-    γ ← ProjectDivFree(γ)             # project onto div-free space               (Eq. 22)
-    s ← ProjectCurlFree(s)            # convex project sγ onto curl-free + bounds (Eq. 23-25)
-    Γ ← PowerRepresentation(γ)        # Γ = γ²
-until  max_f ‖ γ_k(f) − γ_{k-1}(f) ‖ < 1e-3
+    Γ^k      ← ImplicitAlign(Γ^{k-1})       # implicit-Euler step on E_a, in power space  (Eq. 20)
+    Γ^{k'}   ← ImplicitSmooth(Γ^k)          # implicit-Euler step on E_s                  (Eq. 21)
+    γ_u^k    ← LocalRawRepresentation(Γ^{k'}), then renormalize γ_u/‖γ_u‖   # power → unit field
+    V*       ← UpdateSingularities(γ_u^k)   # V*, V_boundary, V_crease ⊆ V
+    γ_d^k    ← ProjectDivFree(γ_u^k)         # project onto div-free space                (Eq. 22)
+    (γ_c^k, s) ← ProjectCurlFree(γ_d^k)      # convex: scale to curl-free + bound s        (Eq. 23-25)
+    Γ        ← PowerRepresentation(·)        # back to power rep for the next iteration
+until  max_f ‖ γ^k(f) − γ^{k-1}(f) ‖ < 1e-3
 ```
 
-The linear sub-solves *(notation aligned to the verified symbols; forms still from the text
-layer — verify)*:
+*(The loop ordering above is from the text layer; the sub-solves it calls — Eq. 20–25 — are
+verified below.)* The linear sub-solves ✅:
 
 ```
-ImplicitAlign:   (M_X + τ_a · A) γ = M_X γ_{k-1} + τ_a · M_X W_X R⊥        (20)  (reconstructed — verify)
-ImplicitSmooth:  (M_X + τ_s · L₂) γ = M_X γ                                (21)  (reconstructed — verify)
-ProjectDivFree:  argmin_{γ'} ‖γ' − γ‖²   s.t.  (D γ')|_{V_s} = 0           (22)
-ProjectCurlFree: argmin_s   ‖s − …‖²     s.t.  C(sγ)=0,  0.4 ≤ s ≤ 1.6     (23-25, convex)
+ImplicitAlign(Γ^{k-1}):
+    ( M_X + (ω_a/μ_a)·∇E_a ) Γ^k = M_X Γ^{k-1} + (ω_a/μ_a)·M_X W_X Γ⁰ ,   ∇E_a = M_X W_X    (20)
+ImplicitSmooth(Γ^k):
+    ( M_X + (ω_s/μ_s)·∇E_s ) Γ^{k'} = M_X Γ^k ,                           ∇E_s = L₂ (Eq. 12) (21)
+ProjectDivFree(γ_u^k):
+    argmin_{γ_d^k} ‖ γ_d^k − γ_u^k ‖²   s.t.  ( D γ_d^k )(V*) = 0                          (22)
+        — D encodes the local principal matching around vertices, applied only at V*.
+ProjectCurlFree(γ_c^k):   (convex)
+    argmin_{γ_c^k, s} ‖ γ_c^k − s·γ_d^k ‖²   s.t.  C γ_c^k = 0,   0.4 ≤ s ≤ 1.6            (23-25)
 ```
+
+`Γ⁰` on the Eq. 20 RHS is the ruling power target `R⊥` (what alignment pulls toward); `μ_a, μ_s`
+are step-size normalizers (the lowest nonzero generalized eigenvalues).
 
 **Step sizes / convergence.** One step size is fixed at `0.1`; the other starts at `0.005` and
-**halves every 30 iterations**; sizes are rescaled by the lowest nonzero generalized eigenvalues
-of the align/smooth operators. Typical convergence: **10–20 iterations** (fields without
-singularities), **40–50** (shapes with planar singularities). The convex `ProjectCurlFree` (CVX
-[Grant–Boyd]) dominates runtime.
+**halves every 30 iterations**; sizes are rescaled by `μ_a, μ_s`. Typical convergence: **10–20
+iterations** (fields without singularities), **40–50** (shapes with planar singularities). The
+convex `ProjectCurlFree` (CVX [Grant–Boyd]) dominates runtime.
 
 ### Integration & meshing (§5.3)
 
