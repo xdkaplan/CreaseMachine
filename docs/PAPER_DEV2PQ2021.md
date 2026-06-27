@@ -14,14 +14,15 @@ and re-tiles it into curvature-aligned **planar-quad (PQ) strips** whose interio
 the rulings. We do **not** implement it; it is the most directly relevant published "rulings →
 flat panels" pipeline for a future fabrication-export stage (see [Relevance](#relevance-to-creasemachine)).
 
-> ✅ **Eq. 1–25 verified** against PDF page screenshots (provided 2026-06-27) — notation and
-> equation forms corrected to match the paper exactly (the original draft of this doc was
-> reconstructed from `pdftotext`, which had stripped the math symbols; that introduced wrong
-> notation — `φ/u/ρ/q/c(f)/α,β,γ` — now fixed to the paper's `u/γ/s/Γ/w(f)/ω_a,ω_d,ω_s`).
-> ⚠️ **Still reconstructed from the text layer (renderer unavailable), verify against the PDF:**
-> only Eq. 6 (the confidence logistic) and the discrete-gradient expression remain — flagged
-> inline with *(reconstructed — verify)*. Algorithm 1's *step ordering* is from the text layer,
-> but every sub-solve it calls (Eq. 20–25) is verified.
+> ✅ **All numbered equations (Eq. 1–25, incl. Eq. 6) verified** against PDF page screenshots
+> (provided 2026-06-27) — notation and equation forms corrected to match the paper exactly (the
+> original draft of this doc was reconstructed from `pdftotext`, which had stripped the math
+> symbols; that introduced wrong notation — `φ/u/ρ/q/c(f)/α,β,γ` and a guessed *logistic* for
+> Eq. 6 — now fixed to the paper's `u/γ/s/Γ/w(f)/ω_a,ω_d,ω_s` and the actual Gaussian-ramp Eq. 6).
+> ⚠️ **One item remains text-reconstructed:** the unnumbered **discrete-gradient** expression in
+> §3 (boilerplate from [Brandt et al. 2017]), flagged inline *(reconstructed — verify)*.
+> Algorithm 1's *step ordering* is from the text layer, but every sub-solve it calls (Eq. 20–25)
+> is verified.
 
 ### Notation (the paper's, as verified)
 
@@ -186,20 +187,22 @@ R(f)  = r(f)²                          (sign-invariant ruling power field)
 R⊥(f) = ( r(f)⊥ )²                     (the same, rotated 90° — the alignment target in Eq. 7)
 ```
 
-### Confidence weights (Eq. 6)
+### Confidence weights (Eq. 6) ✅
 
 Rulings are least reliable in planar/near-planar regions (the min/max curvatures are close and
-noisy) and most reliable in strongly-curved regions. A per-face confidence `w(f) ∈ [0, 0.8]` is a
-**logistic** in the absolute max/min curvatures `|κ₁(f)|, |κ₂(f)|` (eigenvalues of `S(f)`):
+noisy) and most reliable in strongly-curved regions. A per-face **relative confidence** `w(f) ∈
+[0, 0.8]` is attached to each face as a function of the discrete absolute max/min curvatures
+`κ₁(f), κ₂(f)` (the absolute largest/smallest eigenvalues of the shape operator `S(f)`):
 
 ```
-w(f) = 0.8 · σ( a₃ · ( |κ₂(f)| / |κ₁(f)| − ... ) ) ,   a₁=0.8, a₂=−0.9, a₃=5     (6)  (reconstructed — verify)
+w(f) = θ₁ · ( 1 − exp( θ₂ · ( θ₃ · ( κ₁(f) − κ₂(f) ) )² ) ) ,   θ₁ = 0.8,  θ₂ = −0.9,  θ₃ = 5   (6)
 ```
 
-*(The exact logistic argument is garbled in the text layer — only the constants `a₁=0.8,
-a₂=−0.9, a₃=5` and the cap are certain. Verify against the PDF.)* By design `w(f)` caps at
-**0.8** (reached when `|κ₁|, |κ₂|` differ by ≥ 0.5), so the method **never fully trusts** a
-ruling. Boundary faces and crease faces are set to `w(f) = 0`.
+This is a Gaussian-type ramp (the paper's prose calls it a "logistic curve"): when `κ₁ ≈ κ₂`
+(planar / near-planar) the squared term → 0, so `w(f) → 0`; as the curvatures separate (strongly
+curved) it saturates at `θ₁ = 0.8`. The cap **0.8** is effectively reached once `κ₁ − κ₂ ≥ 0.5`
+(then `exp(−0.9·(5·0.5)²) = exp(−5.625) ≈ 0.004`), so the method **never fully trusts** a ruling.
+Boundary faces and crease faces are set to `w(f) = 0`.
 
 **Crease detection** (optional): collect edges whose adjacent face normals differ by more than a
 user threshold; zero the confidence of faces incident to crease vertices. Creases may instead be
