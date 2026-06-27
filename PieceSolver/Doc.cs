@@ -89,7 +89,7 @@ namespace PieceSolver
 
         // Re-point at a fresh Store (mesh load / subdivide / reset) and drop the now-meaningless history +
         // selection + any open tx — deltas reference old face indices, so they cannot survive a re-mesh.
-        public void Rebind(Pattern pattern) { Pattern = pattern; _undo.Clear(); _redo.Clear(); _open = null; Pieces.ClearSilent(); }
+        public void Rebind(Pattern pattern) { _open?.Cancel(); Pattern = pattern; _undo.Clear(); _redo.Clear(); _open = null; Pieces.ClearSilent(); }   // F-9: Cancel (not orphan) any open tx — first, while the OLD Pattern is still in place so its rollback inverts the right mesh (in practice _open is null here: Rebind runs between gestures)
 
         // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
         // SAME mesh, so old deltas reference invalid piece ids). Selection is cleared separately by the caller.
@@ -109,8 +109,10 @@ namespace PieceSolver
         // a long op owns the Doc returns a refused (dead) tx whose Apply/Commit no-op.
         public Tx OpenTx()
         {
-            if (_open != null) { Debug.WriteLine("OpenTx while a tx is open — cancelling the stale one."); _open.Cancel(); }
+            // Gate on Busy FIRST: the stale-tx cancel below calls InvertInternal (mutates Real), so cancelling
+            // before the gate let a rollback slip through during a bake (Busy.Calculating). (review F-8)
             if (State != Busy.None) { Debug.WriteLine($"OpenTx during {State} — refused."); return new Tx(this, alive: false); }
+            if (_open != null) { Debug.WriteLine("OpenTx while a tx is open — cancelling the stale one."); _open.Cancel(); }
             _open = new Tx(this, alive: true);
             return _open;
         }
