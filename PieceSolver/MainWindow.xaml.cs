@@ -132,7 +132,7 @@ namespace PieceSolver
             // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
             _doc.Pieces.Changed += () => { if (_view.Display == DisplaySource.Pieces) RebuildPieces(); };
-            _doc.Changed += () => { RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };
+            _doc.Changed += () => { _developed.Rot(); RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };   // a committed Pattern edit rots the developed result (stale until re-Solve; TAB re-bakes)
             _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
@@ -468,18 +468,22 @@ namespace PieceSolver
                 _renderer.Upload(_session.Mesh);  // authoring / pieces base = the authoring mesh
         }
 
-        // TAB: flip the base view between the (paintable) PATTERN and the Developed result.
+        // TAB: flip the base view between the (paintable) PATTERN and the Developed result. TAB IS the Solve.
         //   Developed -> RebuildPieces(): re-derive the painted pieces and show them (Display = Pieces, or
         //     Authoring when the mesh is unpainted) so you can keep editing. The Pattern/PieceMap survived the
         //     Solve (the develop ran on a derived clone), so painting resumes exactly where you left off.
-        //   Pattern (Pieces/Authoring) -> Developed, but only if a solved result exists (the _developed Transient
-        //     is Fresh); otherwise stay on the pattern (TAB with nothing solved is a no-op).
+        //   Pattern -> Developed: if a FRESH solve exists, show it. If it's STALE (a Pattern edit rotted it via
+        //     Doc.Changed) or was never solved, re-bake (OnSolveAsync) — which supplies _developed + flips to
+        //     Developed itself. So paint -> TAB always shows an up-to-date develop. (No solvable mesh -> stay.)
         void ToggleDevelopedView()
         {
             if (_view.Display == DisplaySource.Developed)
                 RebuildPieces();   // back to the paintable Pattern
             else if (_developed.Peek(out var d) && d != null)
-                _view.Display = DisplaySource.Developed;
+                _view.Display = DisplaySource.Developed;        // fresh solve exists -> just show it
+            else if (!_baking && _session != null && _meshPath != null)
+            { _ = OnSolveAsync(); return; }                    // stale / never solved -> TAB IS the Solve: bake, then it shows Developed
+            // else: nothing solvable -> stay on the pattern
             _meshDirty = true; _pieceDirty = true;   // re-evaluate the base upload + ShowPieces for the new display
             UpdateStatus();
             _gl?.InvalidateVisual();
