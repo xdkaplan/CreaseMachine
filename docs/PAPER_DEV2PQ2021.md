@@ -154,9 +154,10 @@ allowed to *break* across them.
 
 ## 3. Discretization (§3.3, §4)
 
-Input: triangle mesh `M = (V, E, F)`. `u` is a **piecewise-linear vertex function** `u: V → ℝ`;
-`γ`, `∇u`, and the ruling field are **face-based piecewise-constant** tangent fields (this space
-denoted `X`). The mesh is uniformly scaled so **average edge length = 1**.
+Input: triangle mesh `M = (V, E, F)`. `u` is a **piecewise-linear vertex-based function** `u(v),
+v ∈ V`; consequently `r`, `r⊥`, and `∇u` are **face-based piecewise-constant** tangent fields
+(this space denoted `X`; the unit field `γ ∥ ∇u` lives here too). The mesh is uniformly scaled so
+**average edge length = 1**.
 
 Operators (from [Brandt et al. 2017]): conforming gradient `G: V → X`, divergence `D: X → V`,
 non-conforming curl `C: X → E`. For a triangle `f = (i,j,k)` with area `m(f)`:
