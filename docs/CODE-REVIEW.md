@@ -5,6 +5,14 @@ optimizations, leaky abstractions, poorly-defined bounds, unclear contracts,
 inconsistent language. Read-only; nothing was changed during the audit itself.
 **Status as of:** 2026-06-24. Legend: `[x]` done · `[ ]` not yet · `[~]` partial.
 
+> **Re-verified 2026-06-26** in [`docs/reviews/2026-06-26-overnight-architecture-review.md`](reviews/2026-06-26-overnight-architecture-review.md)
+> (§6 reconciles every item's current status). Net: the open *code* hazards are unchanged
+> (#3 `Doc.Run`, #4 statics, #5 BFF, #6/#8 CreaseEngine+BakeRunner, #10 bench-fence+attic),
+> **plus two new HIGH findings** — the Solve bake mutates Doc graph state off the UI thread
+> (single-writer breach) and leaves `Pattern` coupled to the clone after a subdivided Solve.
+> The node-model / vocabulary / journaling Tier-4 items **shipped**; the docs that planned them
+> now lag the code.
+
 **Verdict (unchanged):** the core architecture is genuinely sound — all agents
 confirmed the five-role law holds, self-reject is consistent, the glossary is
 "locked" *in code*. The rot is concentrated in three places: a few small real

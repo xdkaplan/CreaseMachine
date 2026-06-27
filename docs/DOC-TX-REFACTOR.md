@@ -55,14 +55,17 @@ These supersede / extend the [`PIECER-REFACTOR.md`](archive/PIECER-REFACTOR.md) 
   entry** — fine-grained for piece edits, coarse for `load`/`solve`.)*
 - **Command** *(our word)* / **Tool** *(the user's word)* — an invokable action that **computes
   an `IDelta`** from the current Selection + Real state. **Pure: it reads, it does not mutate.**
-  `Merge`, `Delete`, `Carve`, `Grow`, `Mint`.
+  As built: `Merge` and `DelPiece` (in `Commands.cs`). `Carve` / `Grow` / `Mint` / `Delete` are
+  in-place engines on `Pattern`, reused as delta producers via `Pattern.ComputeDelta` (mutate →
+  capture → roll back), not standalone `Commands`.
 - **Run / Undo / Redo** — the Doc's three verbs. `Run(delta)` is the single mutation path
   (the base meaning of "run" in this layer; the CLI/flow `run` is a different layer).
 - **Real vs Transient** — **Real** = authoritative state that lives in Deltas / is `ITxAble`
   (`PieceMap`). **Transient** = derived state that is **refreshed** from Real, never in a Delta
   (`CreaseMap`). The line that decides what is undoable.
 - **refresh** (this doc's older "regen") — re-derive a Transient from Real. `Apply`/`Invert`
-  **rot** the Transient (`RegenCrease`); a *Grown* transient like `CreaseMap` then re-derives
+  **rot** the Transient (`Real.Invalidate()`, the cascade origin; was `RegenCrease`); a *Grown*
+  transient like `CreaseMap` then re-derives
   lazily on read. Never recorded. Full freshness model: [docs/specs/DOC-SPEC.md](specs/DOC-SPEC.md).
 - **Real** — an authored node with identity: **Piece**, **Crease**, and later **Join** / **Tab** /
   **Cone tip** / **Control point**. (Retired names: "Element", "entity". The full node model — Reals in

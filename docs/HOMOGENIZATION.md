@@ -1,5 +1,10 @@
 # Homogenization Audit — docs + architecture vs specs (2026-06-25)
 
+> **Stale snapshot (2026-06-26).** A dated point-in-time audit; the sweep it called for has since
+> landed, so several items below are now FIXED in code/AGENTS (e.g. `RegionsConnected→MergeGroups`,
+> `FullyMarked→MostlyMarked`, `.Set→.Supply`, "journaling out-of-scope" corrected). Treat this as
+> history; for current status see [`reviews/2026-06-26-overnight-architecture-review.md`](reviews/2026-06-26-overnight-architecture-review.md) §6.
+
 **Purpose.** Before building bigger, messier tools, make the approach *homogeneous* — one model,
 one vocabulary, docs that match the code. **Method.** Four read-only investigators, one lens each:
 (1) as-built doc accuracy, (2) vocabulary/naming, (3) architectural pattern coherence, (4) spec

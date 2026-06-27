@@ -200,10 +200,10 @@ reads must `Peek`), because you can't refresh past a not-yet-produced upstream.
 | `Pattern` rots `CreaseMap` + `Geometry` via the `RotDownstream` cascade (I3) | ✓ built |
 | Real/Transient/Ephemeral distinction | ✓ built (AGENTS.md) |
 | Upstream/Downstream edges + `rotDownstream` cascade (`Node`/`Transient`) | ✓ built (I3; wired Pattern→{CreaseMap, Geometry}) |
-| `Grown` / `Supplied` flavor (formalized) | ○ designed |
-| `.Value` throws on stale-Supplied | ○ designed |
+| `Grown` / `Supplied` flavor | ◑ behavioural (the `_grow`-null check in `Transient.cs` picks the flavour); not formalized as distinct types |
+| `.Value` throws on stale-Supplied | ○ designed (today a stale Supplied `.Value` returns the last/`default` value — readers use `Peek`) |
 | `Supply` method (from `Set`) + Grown/Supplied/Grow vocab in `Transient.cs` | ✓ built |
-| Single-writer rule (formalized) | ○ designed (the bake already approximates it) |
+| Single-writer rule (formalized) | ○ designed (rule not enforced; the bake conforms for the Pattern as of the F-1/F-2 fix, [2026-06-26 review](../reviews/2026-06-26-overnight-architecture-review.md)) |
 | `SolvedPiece`, Status, generation guard | ○ designed, deferred |
 
 ## 11. Glossary
