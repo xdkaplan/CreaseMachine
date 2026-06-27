@@ -117,12 +117,17 @@ namespace PieceSolver
             return _open;
         }
 
-        // One-shot mutation = open + apply + commit, atomically (for button commands like Merge — no gesture).
-        // Returns false if rejected (not Ready) or empty, so the caller can skip its follow-up (e.g. reselect).
+        // One-shot mutation = a transaction in one call: open -> apply -> commit. SUGAR over OpenTx/Apply/Commit,
+        // NOT a parallel commit path — every mutation is a tx, so undo-bundling / journaling / Changed all run
+        // through the one place (CloseTx). For no-gesture button commands (Merge, DelPiece); a gesture opens its
+        // own tx and Apply()s across the stroke instead. Returns false if rejected (not Ready: mid-gesture /
+        // baking) or the delta is empty, so the caller can skip its follow-up (e.g. reselect).
         public bool Run(IDelta d)
         {
             if (!Ready || d == null || (d is PieceDelta { Empty: true }) || (d is CompositeDelta { Empty: true })) return false;
-            ApplyInternal(d); _undo.Push(d); _redo.Clear(); RecordOps(d); Changed?.Invoke();
+            using var tx = OpenTx();   // Ready -> a live tx (the single guard); Dispose auto-cancels if Commit is somehow skipped
+            tx.Apply(d);               // apply live (mutate + repaint) + record the part
+            tx.Commit();               // bundle into one undo unit + journal
             return true;
         }
 
