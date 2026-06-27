@@ -14,13 +14,30 @@ and re-tiles it into curvature-aligned **planar-quad (PQ) strips** whose interio
 the rulings. We do **not** implement it; it is the most directly relevant published "rulings →
 flat panels" pipeline for a future fabrication-export stage (see [Relevance](#relevance-to-creasemachine)).
 
-> ⚠️ **Transcribed from the arXiv text layer, NOT visually verified.** The PDF image
-> renderer (poppler) was unavailable in this environment, so equations were reconstructed
-> from `pdftotext -layout` output (which **drops Unicode math, sub/superscripts, primes, and
-> operator glyphs**) plus standard discrete-differential-geometry conventions. **The prose
-> and algorithm structure are faithful; the equations are best-effort reconstructions and
-> must be re-checked against the PDF before being relied on for implementation.** Equation
-> numbers match the paper. Uncertain spots are flagged inline with *(reconstructed — verify)*.
+> ✅ **Eq. 1–15 verified** against PDF page screenshots (provided 2026-06-27) — notation and
+> equation forms corrected to match the paper exactly (the original draft of this doc was
+> reconstructed from `pdftotext`, which had stripped the math symbols; that introduced wrong
+> notation — `φ/u/ρ/q/c(f)` — now fixed to the paper's `u/γ/s/Γ/w(f)`).
+> ⚠️ **Still reconstructed from the text layer (renderer unavailable), verify against the PDF:**
+> Eq. 6 (the confidence logistic), Eq. 16–25 (the full problem + Algorithm 1 sub-solves), and
+> the discrete gradient expression. These are flagged inline with *(reconstructed — verify)*.
+
+### Notation (the paper's, as verified)
+
+| Symbol | Meaning |
+|---|---|
+| `u` | the **scalar field** being designed; its level sets are the rulings |
+| `w` | the dependent orthogonal coordinate (generating-curve direction) — *not* a confidence |
+| `p(u)`, `r(u)` | generating curve / ruling direction in the parameterization (Eq. 1) |
+| `γ` | the unit **2-direction field** (defined up to sign), `γ ∥ ∇u`, `γ = ∇u/‖∇u‖` |
+| `γ⊥` | `γ` rotated 90° (the ruling-aligned direction) |
+| `s(p) > 0` | the **density** of `u`'s level sets; `sγ` is the integrable (curl-free) field |
+| `Γ = γ²` | the power representation of `γ` (sign-invariant, complex) |
+| `R`, `R⊥` | the ruling power field and its 90° rotation (the alignment target) |
+| `w(f) ∈ [0, 0.8]` | per-face **confidence** weight; `m(f)` face area; `m(e)` edge mass |
+
+*(Heads-up: the paper reuses `γ` for both the field **and** the smoothness weight in Eq. 16;
+context disambiguates.)*
 
 ---
 
@@ -31,12 +48,13 @@ flat panels" pipeline for a future fabrication-export stage (see [Relevance](#re
 - **Output:** a curvature-aligned **PQ-strip mesh** — long planar quad strips in the curved
   (torsal) regions whose chordal edges are **exact straight rulings**, plus big planar polygons
   for the flat regions. Curved folds and creases handled without explicit segmentation.
-- **How:** fit a scalar field `φ` on the mesh whose level sets are straight and align to the
-  locally-estimated rulings. The straight-level-set condition = *the normalized gradient of `φ`
-  is divergence-free*. This is nonlinear/high-order, so they **factor it** into (a) a directional-
-  field optimization and (b) fitting `φ` to that field — making it tractable.
-- **Key trick:** design only one coordinate (`φ`, the ruling foliation); let the orthogonal
-  coordinate be dependent. Singularities, flat regions, and curved folds emerge automatically
+- **How:** fit a scalar field `u` whose level sets are straight and align to the locally-estimated
+  rulings. The straight-level-set condition = *the normalized gradient of `u` is divergence-free*
+  (`div(∇u/‖∇u‖)=0`). This is nonlinear/high-order, so they **factor it** into (a) a directional-
+  field optimization (for `γ`) and (b) fitting the density `s` / integrating to `u` — making it
+  tractable.
+- **Key trick:** design only one coordinate (`u`, the ruling foliation); let the orthogonal
+  coordinate `w` be dependent. Singularities, flat regions, and curved folds emerge automatically
   from the field design — no manual domain decomposition.
 
 ---
@@ -57,98 +75,97 @@ developable is a union of patches `S = ∪ Sᵢ`, each either:
 - **Point singularities** (cone apexes, index 1) — locally non-developable. They **remove the
   apex vertex + incident faces** before running, optionally re-adding in post.
 
-### Conjugate-net parameterization (Eq. 1)
+### Conjugate-net parameterization (Eq. 1) ✅
 
-A torsal patch is parameterized as
+A torsal patch `Sᵢ` is parameterized in coordinates `(u, w)` as
 
 ```
-S(u, v) = c(u) + v · r(u)                                            (1)
+Sᵢ(u, w) = p(u) + w · r(u)                                          (1)
 ```
 
-- `c(u): ℝ → ℝ³` — a **generating curve**.
+- `p(u): ℝ → ℝ³` — a **generating curve**.
 - `r(u): ℝ → S²` — the **ruling direction**.
-- Fixing `u` and sweeping `v` traces a straight line → the **ruling**. So **the level sets of `u`
-  are the rulings.** Developability ⟺ the Gauss map is constant along each ruling: `N(u,v) = N(u)`.
+- Fixing `u` and sweeping `w` traces a straight line → the **ruling**. So **the level sets of `u`
+  are the rulings.** Developability ⟺ the Gauss map is constant along each ruling.
 
-The rulings are the **minimum-curvature lines**. Choosing `c(u)` as a max-curvature line makes
-`(u,v)` a **principal curvature-line parameterization** (rulings ⟂ generating curves). Enforcing
-`φ` continuous across patches (and allowing singularities to emerge) gives a single **conjugate
-net** for the whole surface `S`; singularities, on a `C²` surface, must sit in **planar regions**.
+The rulings are the **minimum-curvature lines**. Choosing `p(u)` as a max-curvature line makes
+`(u,w)` a **principal curvature-line parameterization** (rulings ⟂ generating curves). Enforcing
+`u` continuous across patches (and allowing singularities to emerge) gives a single **conjugate
+net** for the whole surface; singularities, on a `C²` surface, must sit in **planar regions**.
 
-**Order of symmetry.** They design the **2²-symmetric** variant (the `u` and `v` roles stay
-distinct — `u`-level-sets are rulings, `v` the dependent generating coordinate), rather than the
-4-symmetric "let `u,v` intermix" used for generic PQ meshing [Diamanti 2014; Liu 2011]. **They
-design only `φ` (≈ `u`)** — the ruling foliation — and let the orthogonal coordinate be dependent.
+**Order of symmetry.** They design the **2²-symmetric** variant (the `u` and `w` roles stay
+distinct), not the 4-symmetric "let the two coords intermix" used for generic PQ meshing
+[Diamanti 2014; Liu 2011]. **They design only `u`** — the ruling foliation — and let `w` be
+dependent.
 
 ---
 
-## 2. Ruling fields — the core characterization (§3.2)
+## 2. Ruling fields — the core characterization (§3.2) ✅
 
-Let `φ` be the scalar field whose level sets are the rulings. `∇φ` is orthogonal to those level
-sets. The **geodesic curvature** of the level sets is
-
-```
-κ_g(level set) = div( ∇φ / |∇φ| )            [do Carmo 1976]
-```
-
-Because the level sets are rulings — extrinsically flat, hence **geodesics** on the developable —
-their geodesic curvature is zero. Define the **unit field** `u = ∇φ / |∇φ|` (orthogonal to the
-ruling directions). Then, away from singularities and creases:
+`γ` is a unit tangent **2-direction field** (defined up to sign). Align it with `r⊥` (the ruling
+direction rotated 90°), so that it is parallel to the gradient of the scalar field:
 
 ```
-div(u)  =  ∇·( ∇φ / |∇φ| )  =  0                                    (3)
+∇u ∥ γ                                                              (2)
 ```
 
-→ **`u` is a divergence-free unit vector field.** This is the central condition: *straight level
-sets ⟺ divergence-free normalized gradient.*
-
-**Integrability up to a scalar (Eq. 4).** To recover `φ` from `u`, there must exist a positive
-**density** `ρ(p) > 0` such that `ρ·u` is a gradient (curl-free):
+Away from singularities and creases, the straight-level-set condition is then exactly that `γ` is
+a **divergence-free unit field**:
 
 ```
-curl( ρ · u ) = 0,     ρ(p) > 0                                     (4)   (reconstructed — verify)
+∇·γ = ∇·( ∇u / ‖∇u‖ ) = 0                                          (3)
 ```
 
-`ρ` is the **density of the level sets** at `p` — it varies naturally where rulings fan out (e.g.
-a cone). So the design splits into: find a div-free unit field `u`, and a density `ρ` making `ρu`
-integrable; then integrate to `φ`.
+(`γ` is divergence-free because the level sets of `u` are rulings — extrinsically flat geodesics
+on the developable, so they have zero geodesic curvature, and `κ_g = div(∇u/‖∇u‖)`.)
+
+**Integrability up to a scalar (Eq. 4).** To recover `u` from `γ`, there must exist a positive
+**density** `s(p) > 0` making `sγ` curl-free (a gradient):
+
+```
+∇ × ( s · γ ) = 0,     s(p) > 0   ∀p ∈ S                            (4)
+```
+
+`s` is the **density of `u`'s level sets** — it varies naturally where rulings fan out (e.g. a
+cone). So the design splits: find a div-free unit field `γ`, and a density `s` making `sγ`
+integrable; then integrate to `u`.
 
 **Ruling-alignment via the second fundamental form (Eq. 5).** Being a geodesic field is *not
-sufficient* — rulings are extrinsic (they depend on the shape operator), so `u` must be pinned to
+sufficient* — rulings are extrinsic (they depend on the shape operator), so `γ` must be pinned to
 the actual rulings. With second fundamental form `II`:
 
 ```
-⟨ II · ∇φ , ∇φ ⟩  =  0                                              (5)   (reconstructed — verify)
+∀p ∈ S,    II( γ⊥(p), γ⊥(p) ) = 0                                   (5)
 ```
 
-**Singularities & combing.** `u` is a **2-direction field** (defined up to sign), so divergence/
-curl need a local *combing* (consistent sign choice) to apply. Singularity indices are integer
+**Singularities & combing.** `γ` is a 2-direction field (defined up to sign), so divergence/curl
+need a local *combing* (consistent sign choice) to apply. Singularity indices are integer
 multiples of **½**. Only two singularity types occur: **(a)** cone apexes (index 1, removed up
-front); **(b)** singularities **inside planar regions** (index ½), where they reconcile the
-orientations of neighboring torsal patches. Level sets bend near planar-region singularities —
-harmless, since planar regions become one big polygon anyway.
+front); **(b)** singularities **inside planar regions** (index ½), reconciling neighboring torsal
+patches' orientations. Level sets bend near planar-region singularities — harmless, since planar
+regions become one big polygon anyway.
 
 **Creases.** Rulings on the two patches meeting at a crease generally meet at an angle, not a
-straight line. So they **do not require `u` to be divergence-free near creases** — the field is
+straight line. So they **do not require `γ` to be divergence-free near creases** — the field is
 allowed to *break* across them.
 
 ---
 
 ## 3. Discretization (§3.3, §4)
 
-Input: triangle mesh `M = (V, E, F)`. `φ` is a **piecewise-linear vertex function** `φ: V → ℝ`;
-`u`, `∇φ`, and the ruling field are **face-based piecewise-constant** tangent fields (this space
+Input: triangle mesh `M = (V, E, F)`. `u` is a **piecewise-linear vertex function** `u: V → ℝ`;
+`γ`, `∇u`, and the ruling field are **face-based piecewise-constant** tangent fields (this space
 denoted `X`). The mesh is uniformly scaled so **average edge length = 1**.
 
 Operators (from [Brandt et al. 2017]): conforming gradient `G: V → X`, divergence `D: X → V`,
-non-conforming curl `C: X → E`. For a triangle `f = (i,j,k)` with area `a(f)`:
+non-conforming curl `C: X → E`. For a triangle `f = (i,j,k)` with area `m(f)`:
 
 ```
-(G φ)(f) = (1 / 2 a(f)) · ( φ_i · eᵢ^⊥ + φ_j · eⱼ^⊥ + φ_k · eₖ^⊥ )    (reconstructed — verify)
+(G u)(f) = (1 / 2 m(f)) · ( u_i · eᵢ^⊥ + u_j · eⱼ^⊥ + u_k · eₖ^⊥ )   (reconstructed — verify)
 ```
 
-A discrete PQ mesh sampled from the `u,v` level sets of a conjugate net has faces planar **to
-second order** [Liu et al. 2006]; curvature-line sampling gives **circular** quads (discrete
+A discrete PQ mesh sampled from the level sets of a conjugate net has faces planar **to second
+order** [Liu et al. 2006]; curvature-line sampling gives **circular** quads (discrete
 curvature-line nets [Bobenko–Suris]). Torsal patches → **PQ strips** (each quad = two boundary
 curve segments + two straight rulings). Planar patches → **big flat polygons** (the non-straight
 level sets there lie in the plane, so they can be straightened freely). If the singularity-index
@@ -163,24 +180,24 @@ operator** `S(f)` [De Goes et al. 2020]. Known only up to sign → use a **power
 to kill the sign:
 
 ```
-q_r(f) = r(f)²                          (sign-invariant ruling power field)
-q_r^⊥(f) = ( r(f)^⊥ )²                  (the same, rotated 90°)
+R(f)  = r(f)²                          (sign-invariant ruling power field)
+R⊥(f) = ( r(f)⊥ )²                     (the same, rotated 90° — the alignment target in Eq. 7)
 ```
 
 ### Confidence weights (Eq. 6)
 
 Rulings are least reliable in planar/near-planar regions (the min/max curvatures are close and
-noisy) and most reliable in strongly-curved regions. A per-face confidence `c(f) ∈ [0, 0.8]` is a
+noisy) and most reliable in strongly-curved regions. A per-face confidence `w(f) ∈ [0, 0.8]` is a
 **logistic** in the absolute max/min curvatures `|κ₁(f)|, |κ₂(f)|` (eigenvalues of `S(f)`):
 
 ```
-c(f) = 0.8 · σ( a₃ · ( |κ₂(f)| / |κ₁(f)| − ... ) ) ,   a₁=0.8, a₂=−0.9, a₃=5     (6)  (reconstructed — verify)
+w(f) = 0.8 · σ( a₃ · ( |κ₂(f)| / |κ₁(f)| − ... ) ) ,   a₁=0.8, a₂=−0.9, a₃=5     (6)  (reconstructed — verify)
 ```
 
-*(The exact logistic argument is garbled in extraction — only the constants `a₁=0.8, a₂=−0.9,
-a₃=5` and the cap are certain. Verify against the PDF.)* By design `c(f)` caps at **0.8** (reached
-when `|κ₁|, |κ₂|` differ by ≥ 0.5), so the method **never fully trusts** a ruling. Boundary faces
-and crease faces are set to `c(f) = 0`.
+*(The exact logistic argument is garbled in the text layer — only the constants `a₁=0.8,
+a₂=−0.9, a₃=5` and the cap are certain. Verify against the PDF.)* By design `w(f)` caps at
+**0.8** (reached when `|κ₁|, |κ₂|` differ by ≥ 0.5), so the method **never fully trusts** a
+ruling. Boundary faces and crease faces are set to `w(f) = 0`.
 
 **Crease detection** (optional): collect edges whose adjacent face normals differ by more than a
 user threshold; zero the confidence of faces incident to crease vertices. Creases may instead be
@@ -190,110 +207,116 @@ prescribed by the user.
 
 ## 4. Optimization (§5)
 
-Precompute per face: shape operator `S(f)`, ruling `r(f)`, the power fields `q_r(f) = r(f)²` and
-`q_r^⊥(f)`, and confidences `c(f)`. Mass matrices: `M_X` (face areas) and `M_E` (edge masses,
-each = half the summed dual-edge lengths). The unknowns are the unit field `u(f)`, its power
-representation `q(f) = u(f)²`, the density `ρ(f)`, and (after integration) `φ`.
+Precompute per face: shape operator `S(f)`, ruling `r(f)`, the power fields `R(f), R⊥(f)`, and
+confidences `w(f)`. Mass matrices: `M_X` (face areas) and `M_E` (edge masses, each = half the
+summed dual-edge lengths). Unknowns: the unit field `γ(f)`, its power representation `Γ(f) =
+γ(f)²`, the density `s(f)`, and (after integration) `u`.
 
-### Energy terms
+### Energy terms ✅ (Eq. 7–15 verified)
 
-**Alignment (Eq. 7–8)** — pull the power field to the (rotated) ruling power field, weighted by
-area and confidence:
+**Alignment (Eq. 7–8)** — pull the power field `Γ` to the rotated ruling power field `R⊥`,
+weighted by area and confidence:
 
 ```
-E_align(q) = Σ_f  a(f) · c(f) · | q(f) − q_r(f) |²
-           = ( q − q_r )ᴴ  C_X  ( q − q_r )                          (7,8)
+E_a(Γ) = Σ_{f∈F}  m(f) · w(f) · ‖ Γ(f) − R⊥(f) ‖²                    (7)
+       = ( Γ − R⊥ )ᴴ  M_X W_X  ( Γ − R⊥ )                           (8)
 ```
 
-(`C_X` = diagonal of per-face confidences; `q, q_r` are `|F|×1` complex; note the conjugate
-transpose `ᴴ`.)
+`W_X` = diagonal of per-face confidences; `Γ, R⊥` are `|F|×1` complex; note the conjugate
+transpose `ᴴ`.
 
 **Unit-norm, divergence-free (Eq. 9)** — a **Ginzburg–Landau** term [Viertel–Osting 2019;
 Sageman-Furnas 2019]:
 
 ```
-E_div(u) = Σ_V | (D u)(·) |²  +  (1 / 2ε²) · Σ_f a(f) · ( |u(f)|² − 1 )²     (9)  (reconstructed — verify)
+E_d(γ) = Σ_{v∈V} ‖ D γ(v) ‖²  +  (1 / ε²) · Σ_{f∈F} ( ‖γ(f)‖² − 1 )²    (9)
 ```
 
-As `ε → 0`, this minimizes the divergence of a unit-norm field after excising radius-`ε` balls
-around singularities → it **naturally locates singularities inside planar regions**.
+*(The PDF render of the double-well term is small; the squared `(‖γ‖²−1)²` form is the standard
+Ginzburg–Landau double-well [Viertel–Osting 2019] and is what drives `‖γ‖→1`. Coefficient is
+`1/ε²`.)* As `ε → 0`, this minimizes the divergence of a unit-norm field after excising radius-`ε`
+balls around singularities → it **naturally locates singularities inside planar regions**.
 
 **Smoothness (Eq. 10–12)** — power-field smoothness across each interior edge `e = (f,g)`:
 
 ```
-per-edge:   | q(f) · ē_f²  −  q(g) · ē_g² |²                          (10)
-E_smooth(q) = Σ_e ( 1 − c(e) ) · | q(f) ē_f² − q(g) ē_g² |²           (11)
-            = ‖ S q ‖²                                               (12)
+per-edge:   ‖ Γ(f) · ē_f²  −  Γ(g) · ē_g² ‖²                          (10)
+E_s(Γ) = Σ_{e∈E} m(e) · ( 1 − w(e) ) · ‖ Γ(f) ē_f² − Γ(g) ē_g² ‖²    (11)
+       = Γᴴ L₂ Γ ,     L₂ = G_Eᴴ M_E ( I − W_E ) G_E                 (12)
 ```
 
-where `ē_f` is the conjugate complex representation of edge `e` in face `f`'s basis, and
-`c(e) = ½( c(f) + c(g) )`. Low-confidence (near-planar) regions get *more* smoothing.
+- `ē_f` = conjugate of `e_f`, the complex representation of edge `e` in face `f`'s basis.
+- **`w(e) = w(f) + w(g)`** (the **sum** of the two face confidences) — so low-confidence
+  (near-planar) regions get *more* smoothing via `(1 − w(e))`.
+- `G_E` stacks the per-edge differences `Γ(f)ē_f² − Γ(g)ē_g²` from Eq. (10); `W_E` is the diagonal
+  of edge confidences.
 
-**Integrability (Eq. 13–15)** — measure curl of the **scaled** field `ρu` and constrain it to
+**Integrability (Eq. 13–15)** — measure the curl of the **scaled** field `sγ` and constrain it to
 zero, with density bounds:
 
 ```
-E_int / constraint:   C( ρ · u ) = 0                                 (13,14)
-bounds:               ρ_low < ρ < ρ_high     (they use 0.4 ≤ ρ ≤ 1.6) (15,25)
+(C sγ)(e) = ⟨ s(f)γ(f) − s(g)γ(g) , e ⟩                              (13)
+constraint:   C sγ = 0                                              (14)
+bounds:       s_low < s < s_high     (they use 0.4 ≤ s ≤ 1.6, Eq. 25) (15)
 ```
 
-### Full problem (Eq. 16–19)
+### Full problem (Eq. 16–19) *(reconstructed — verify)*
 
 ```
-(u, ρ, q) = argmin   α · E_align(q) + β · E_div(u) + γ · E_smooth(q)   (16)
-   s.t.   q(f) = u(f)²    ∀f                                          (17)
-          curl( ρ · u ) = 0                                          (18)
-          ρ_low < ρ < ρ_high                                         (19)
+(γ, s, Γ) = argmin   α · E_a(Γ) + β · E_d(γ) + γ_w · E_s(Γ)          (16)
+   s.t.   Γ(f) = γ(f)²    ∀f                                        (17)
+          C( s · γ ) = 0                                            (18)
+          s_low < s < s_high                                       (19)
 ```
 
-`α, β, γ` scalar weights. Following [Sageman-Furnas 2019], they drive `ε → 0` and `β → 0` so the
-solution converges to a div-free unit field aligned to rulings *away from* planar regions and
-singularities.
+`α, β, γ_w` scalar weights (the paper writes the smoothness weight as `γ`, colliding with the
+field name). Following [Sageman-Furnas 2019], they drive `ε → 0` and `β → 0` so the solution
+converges to a div-free unit field aligned to rulings *away from* planar regions and singularities.
 
-### Algorithm 1 — alternating solve (§5.2)
+### Algorithm 1 — alternating solve (§5.2) *(reconstructed — verify)*
 
-The problem is separable in `u`, `ρ`, `q`, so they alternate:
+The problem is separable in `γ`, `s`, `Γ`, so they alternate:
 
 ```
-Initialize  u₀ = r (estimated rulings),  ρ = 1,  V_s = V \ (V_boundary ∪ V_crease)
+Initialize  γ₀ = r (estimated rulings),  s = 1,  V_s = V \ (V_boundary ∪ V_crease)
 repeat  (k = k+1):
-    u ← ImplicitAlign(u_{k-1})        # implicit-Euler decrease of E_align       (Eq. 20)
-    u ← ImplicitSmooth(u)             # implicit-Euler decrease of E_smooth       (Eq. 21)
-    u(f) ← u(f) / |u(f)|              # pointwise renormalize (the GL unit term)
-    LocalRawRepresentation(u)
-    V_s ← UpdateSingularities(u)      # find current singularities; V_s ⊆ V
-    u ← ProjectDivFree(u)             # project onto div-free space               (Eq. 22)
-    ρ ← ProjectCurlFree(ρ)            # convex project ρu onto curl-free + bounds (Eq. 23-25)
-    q ← PowerRepresentation(u)        # q = u²
-until  max_f | u_k(f) − u_{k-1}(f) | < 1e-3
+    γ ← ImplicitAlign(γ_{k-1})        # implicit-Euler decrease of E_a            (Eq. 20)
+    γ ← ImplicitSmooth(γ)             # implicit-Euler decrease of E_s            (Eq. 21)
+    γ(f) ← γ(f) / ‖γ(f)‖              # pointwise renormalize (the GL unit term)
+    LocalRawRepresentation(γ)
+    V_s ← UpdateSingularities(γ)      # find current singularities; V_s ⊆ V
+    γ ← ProjectDivFree(γ)             # project onto div-free space               (Eq. 22)
+    s ← ProjectCurlFree(s)            # convex project sγ onto curl-free + bounds (Eq. 23-25)
+    Γ ← PowerRepresentation(γ)        # Γ = γ²
+until  max_f ‖ γ_k(f) − γ_{k-1}(f) ‖ < 1e-3
 ```
 
-The linear sub-solves:
+The linear sub-solves *(notation aligned to the verified symbols; forms still from the text
+layer — verify)*:
 
 ```
-ImplicitAlign:   (M_X + τ_a · A) u = M_X u_{k-1} + τ_a · C_X q_r          (20)  (reconstructed — verify)
-ImplicitSmooth:  (M_X + τ_s · L_s) u = M_X u ,   L_s = the matrix of (12)  (21)
-ProjectDivFree:  argmin_{u'} ‖u' − u‖²   s.t.  (D u')|_{V_s} = 0          (22)
-ProjectCurlFree: argmin_ρ   ‖ρ − ...‖²   s.t.  C(ρu)=0,  0.4 ≤ ρ ≤ 1.6    (23-25, convex)
+ImplicitAlign:   (M_X + τ_a · A) γ = M_X γ_{k-1} + τ_a · M_X W_X R⊥        (20)  (reconstructed — verify)
+ImplicitSmooth:  (M_X + τ_s · L₂) γ = M_X γ                                (21)  (reconstructed — verify)
+ProjectDivFree:  argmin_{γ'} ‖γ' − γ‖²   s.t.  (D γ')|_{V_s} = 0           (22)
+ProjectCurlFree: argmin_s   ‖s − …‖²     s.t.  C(sγ)=0,  0.4 ≤ s ≤ 1.6     (23-25, convex)
 ```
 
 **Step sizes / convergence.** One step size is fixed at `0.1`; the other starts at `0.005` and
-**halves every 30 iterations** (to make the alternation with renormalization converge); sizes are
-rescaled by the lowest nonzero generalized eigenvalues of the align/smooth operators. *(Which
-size is which is ambiguous in extraction — verify.)* Typical convergence: **10–20 iterations**
-(fields without singularities), **40–50** (shapes with planar singularities). The convex
-`ProjectCurlFree` (CVX [Grant–Boyd]) dominates runtime.
+**halves every 30 iterations**; sizes are rescaled by the lowest nonzero generalized eigenvalues
+of the align/smooth operators. Typical convergence: **10–20 iterations** (fields without
+singularities), **40–50** (shapes with planar singularities). The convex `ProjectCurlFree` (CVX
+[Grant–Boyd]) dominates runtime.
 
 ### Integration & meshing (§5.3)
 
-With an integrable `ρu`, integrate to `φ` using an **off-the-shelf seamless integrator**
+With an integrable `sγ`, integrate to `u` using an **off-the-shelf seamless integrator**
 (Directional [Vaxman 2017]): cut the mesh to a topological disk with singularities on the
-boundary; extract a corner-based `φ`, seamless across cuts via integer translations; configure it
+boundary; extract a corner-based `u`, seamless across cuts via integer translations; configure it
 to produce **½ℤ values around singularities** so level sets avoid meeting there (which subdivides
-planar polygons). Then **trace the integer level sets of `φ`** and **collapse all non-boundary
-valence-2 vertices** → this straightens the polylines (negligible effect in torsal regions where
-they're already straight; in planar regions the level sets become chords between boundary
-vertices). Result: PQ strips in curved regions, large polygons in flat regions.
+planar polygons). Then **trace the integer level sets of `u`** and **collapse all non-boundary
+valence-2 vertices** → this straightens the polylines (negligible in torsal regions where they're
+already straight; in planar regions the level sets become chords between boundary vertices).
+Result: PQ strips in curved regions, large polygons in flat regions.
 
 ---
 
@@ -313,7 +336,7 @@ vertices). Result: PQ strips in curved regions, large polygons in flat regions.
   mean angular error 2.24° → 1.19° → 0.52° at 10k/40k/160k faces) — *despite* noisy estimated
   input rulings (analytical-vs-input mean ≈ 3.4° → 1.0°).
 - **Robustness:** handles random vertex displacement up to **12.5%** of avg edge length cleanly;
-  at **25%** needs a larger `β` (some fine detail lost). Robust across a range of `β, γ`.
+  at **25%** needs a larger `β` (some fine detail lost). Robust across a range of `β, γ_w`.
 - **Generality demonstrated:** curved folds (two folds, Fig. 18), D-forms & sphericons & other
   creased shapes [Tang 2016; Jiang 2020], glued constructions with cone apexes, non-disk topology,
   interactive editing with **dynamic connectivity** (re-run after each deformation; combinatorics
@@ -348,8 +371,9 @@ precisely because it occupies the niche our pipeline *doesn't*:
   the **normal covariance** (Stein/Grinspun/Crane). The shape-operator min-eigenvector is a
   candidate if we ever want a per-face ruling estimate for export or for a straight-ruling term.
 - **Creases break the field.** Their handling — *do not enforce div-free across creases; let the
-  field break* — maps cleanly onto our **piece/crease** model (`Pattern`/`CreaseMap`): creases are
-  exactly where the ruling foliation should be discontinuous.
+  field break* (and zero the confidence `w(f)` on crease faces) — maps cleanly onto our
+  **piece/crease** model (`Pattern`/`CreaseMap`): creases are exactly where the ruling foliation
+  should be discontinuous.
 - **Planar singularities = polygons.** Their automatic index-½ singularity in flat regions →
   a polygon is the principled answer to "how do flat patches tile," which our piecing currently
   leaves as an arbitrary triangulation.
