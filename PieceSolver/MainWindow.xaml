@@ -302,6 +302,15 @@
                                         <Slider Minimum="0" Maximum="50" Value="{Binding IsoWeight}" VerticalAlignment="Center" Margin="6,0" />
                                     </DockPanel>
                                     <!-- Fair slider removed: Abandoned, not supported during FairWeight migration (FairWeight hardcoded 0). -->
+                                    <!-- Crease coupling mode (exploratory compare; CURVED-CREASE-DEVELOP.md §2). Naming TBD; remove the loser. -->
+                                    <DockPanel Margin="0,3,0,0">
+                                        <TextBlock DockPanel.Dock="Left" Text="Crease" Width="62" Foreground="#C8C8C8" FontSize="11" VerticalAlignment="Center"
+                                                   ToolTip="Pieced-develop crease mode. Coupled: one welded solve, crease vertices not smoothed (free fold, panels meet). Free-float: unweld, pin only the crease corners (panels develop independently → they gap / overlap along the creases)." />
+                                        <ComboBox SelectedIndex="{Binding CreaseMode}" VerticalAlignment="Center" Margin="6,0" FontSize="11">
+                                            <ComboBoxItem Content="Coupled" />
+                                            <ComboBoxItem Content="Free-float" />
+                                        </ComboBox>
+                                    </DockPanel>
 
                                     <DockPanel Margin="0,1,0,0">
                                         <TextBlock DockPanel.Dock="Left" Text="" Width="62" />

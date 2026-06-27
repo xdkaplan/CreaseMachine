@@ -56,6 +56,11 @@ namespace PieceSolver
         // Abandoned, not supported during FairWeight migration — hardcoded 0 so no fairness calcs run
         // (IsometricLM gates every Fair term on sFair>0). Setter is a no-op (a loaded journal `fair=` is ignored).
         public double FairWeight { get => 0.0; set { /* Abandoned, not supported during FairWeight migration */ } }
+        // Crease coupling mode for the PIECED develop (CURVED-CREASE-DEVELOP.md §2). Exploratory compare —
+        // 0 = Coupled  (welded solve; crease verts excluded from smoothing -> free fold, panels meet),
+        // 1 = Free-float (unweld; pin crease corners only -> panels develop independently, gap/intersect).
+        int _creaseMode = 0;
+        public int CreaseMode { get => _creaseMode; set => Set(ref _creaseMode, value); }
         public double AnchorWeight { get => _anchorWeight; set => Set(ref _anchorWeight, value); }
         public double ScaleWeight { get => _scaleWeight; set => Set(ref _scaleWeight, value); }
         // 2nd-order bending (differential bi-Laplacian) - the anti-wrinkle term, the triangle analog of the

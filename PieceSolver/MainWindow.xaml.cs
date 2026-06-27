@@ -521,14 +521,19 @@ namespace PieceSolver
         }
 
         // ---- whole-mesh coupled curved-crease develop (CURVED-CREASE-DEVELOP.md §2) ----
-        // When a pieced mesh is Solved, the WELDED authoring mesh is developed in ONE coupled solve (not
-        // per-piece): crease vertices stay shared (welded for position; the iso term ties each fan), the
-        // crease edges' BENDING is masked (free fold), and junction vertices where >=3 creases meet are
-        // Dirichlet-locked (cone points can't flatten to one sheet). The display unwelds the result so the
-        // fold renders. These two are captured before the bake and consumed by RunBakeCoupled/SolveToAccuracy.
-        System.Collections.Generic.HashSet<long> _bendSkipEdges;   // crease edges (packed vertex-pair keys) — bending masked
+        // When a pieced mesh is Solved, the develop uses one of two modes (SimSettings.CreaseMode;
+        // CURVED-CREASE-DEVELOP.md §2). COUPLED (0): the WELDED authoring mesh in ONE coupled solve — crease
+        // vertices stay shared (welded for position; the iso term ties each fan), but they are excluded from
+        // smoothing per-VERTEX (_noSmooth -> free fold), and junctions where >=3 creases meet are Dirichlet-
+        // locked (_coneLock; cone points can't flatten). The display unwelds the result so the fold renders.
+        // FREE-FLOAT (1): the mesh is UNWELDED per panel, only the crease CORNERS are pinned (_cornerPin), and
+        // each panel develops independently -> panels gap/overlap along the creases. These are captured before
+        // the bake and consumed by RunBakeCoupled / RunBakeFreeFloat.
+        bool[] _noSmooth;      // per-vertex: crease vertices excluded from smoothing (Coupled — the free fold)
         bool[] _coneLock;      // per-vertex: true at junctions where >=3 creases meet — Dirichlet-locked (cone points)
-        bool _coupledCrease;   // route RunBake -> RunBakeCoupled (the welded free-crease develop)
+        bool _coupledCrease;   // route RunBake -> coupled / free-float develop (a pieced mesh with creases)
+        bool _freeFloat;       // route RunBake -> RunBakeFreeFloat (unweld + corner-pin)
+        bool[] _cornerPin;     // per-vertex (UNWELDED indexing): crease corners — Dirichlet pin (Free-float)
 
         // ---- fixed B-spline seam edges (bent-wire pins) ----
         bool[] _pinned;        // per-vertex: true where pinned to a seam wire (Dirichlet during the solve)
@@ -653,20 +658,37 @@ namespace PieceSolver
                     if (first < 0) first = pieceMap[f]; else if (pieceMap[f] != first) { pieced = true; break; }
                 }
             }
-            _bendSkipEdges = null; _coneLock = null; _coupledCrease = false;
+            _noSmooth = null; _coneLock = null; _coupledCrease = false; _freeFloat = false; _cornerPin = null;
             int[] unweldVMap = null;   // display unweld: developed-welded vertex -> unwelded copy index (built in the finally)
-            var developMesh = TopologyClone(authoring.Mesh);   // pieced or single: develop the WELDED topology
+            PlanktonMesh developMesh = null;
             if (pieced)
             {
-                // crease edges (between differing pieces) on the welded mesh: bending masked + cone-lock derived.
                 var creaseSet = _doc.Pattern?.CreaseMap?.Value;
                 if (creaseSet != null && creaseSet.Count > 0)
                 {
-                    _bendSkipEdges = new System.Collections.Generic.HashSet<long>(creaseSet);
-                    _coneLock = ConeLockMask(developMesh, _bendSkipEdges);   // >=3 creases meet -> Dirichlet lock (removes cone singularities)
-                    _coupledCrease = true;
+                    if (_sim.CreaseMode == 1)
+                    {
+                        // FREE-FLOAT: unweld per panel; pin ONLY the crease CORNERS (crease-graph nodes, degree != 2 —
+                        // junctions + boundary endpoints). Each panel develops independently -> gap/intersect along
+                        // the creases. (CURVED-CREASE-DEVELOP.md §2 Free-float.)
+                        developMesh = CreaseMachine.MeshOps.UnweldByRegion(authoring.Mesh, pieceMap, out unweldVMap);
+                        var cornerW = CornerMask(creaseSet, authoring.Mesh.Vertices.Count);
+                        _cornerPin = new bool[developMesh.Vertices.Count];
+                        for (int u = 0; u < unweldVMap.Length; u++) if (unweldVMap[u] < cornerW.Length && cornerW[unweldVMap[u]]) _cornerPin[u] = true;
+                        _freeFloat = true; _coupledCrease = true;
+                    }
+                    else
+                    {
+                        // COUPLED: develop the WELDED topology; crease vertices excluded from smoothing per-VERTEX
+                        // (_noSmooth -> free fold), cone junctions Dirichlet-locked. (CURVED-CREASE-DEVELOP.md §2.)
+                        developMesh = TopologyClone(authoring.Mesh);
+                        _noSmooth = CreaseVertMask(creaseSet, authoring.Mesh.Vertices.Count);
+                        _coneLock = ConeLockMask(developMesh, creaseSet);
+                        _coupledCrease = true;
+                    }
                 }
             }
+            if (developMesh == null) developMesh = TopologyClone(authoring.Mesh);   // single / non-pieced: plain clone
             _session = new FlowSession(developMesh);
             _hasFlat = false; _flat = null; _M0 = null;
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0; _bffNeeded = true;
@@ -696,8 +718,10 @@ namespace PieceSolver
                 {
                     // Coupled curved-crease develop solved the WELDED mesh; UNWELD it for display so the crease
                     // renders as a real fold (coincident copies, distinct normals). Single/FBX paths show as-is.
+                    // FREE-FLOAT solved the UNWELDED mesh directly, so _session.Mesh already carries the fold/gaps —
+                    // show it as-is. COUPLED solved the WELDED mesh, so unweld for display so the crease renders.
                     PlanktonMesh shown = _session.Mesh;
-                    if (_coupledCrease && pieceMap != null)
+                    if (_coupledCrease && !_freeFloat && pieceMap != null)
                     {
                         // Unweld AUTHORING (face+vertex aligned with pieceMap), then stamp the developed positions
                         // from the welded solve (TopologyClone preserved authoring's vertex indices) via the unweld
@@ -1168,7 +1192,8 @@ namespace PieceSolver
             var sw = System.Diagnostics.Stopwatch.StartNew();
             const long budgetMs = 100000;   // Solve bake time budget (100s; was 10s) — caps the develop+subdivide loop
             double target = _sim.AccuracyStrainPct;
-            if (_coupledCrease) RunBakeCoupled(sw, budgetMs, target);   // pieced -> whole-mesh coupled free-crease develop
+            if (_freeFloat) RunBakeFreeFloat(sw, budgetMs, target);     // pieced -> unweld + corner-pin (panels develop independently)
+            else if (_coupledCrease) RunBakeCoupled(sw, budgetMs, target);   // pieced -> whole-mesh coupled free-crease develop
             else if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) RunBakeMulti(sw, budgetMs, target);
             else RunBakeSingle(sw, budgetMs, target);
         }
@@ -1202,12 +1227,13 @@ namespace PieceSolver
         void RunBakeCoupled(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
         {
             if (!FlattenPure()) { _bakeSummary = "BFF failed"; return; }
-            SolveToAccuracy(target, sw, budgetMs, _coneLock, _bendSkipEdges);
+            SolveToAccuracy(target, sw, budgetMs, _coneLock, _noSmooth);
             double pct = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
             _bakeStrain = pct;
             int locked = 0; if (_coneLock != null) for (int v = 0; v < _coneLock.Length; v++) if (_coneLock[v]) locked++;
+            int creaseVerts = 0; if (_noSmooth != null) for (int v = 0; v < _noSmooth.Length; v++) if (_noSmooth[v]) creaseVerts++;
             _bakeSummary = (double.IsNaN(pct) ? "solved" : "solved " + pct.ToString("0.###") + "%")
-                + "  coupled crease (" + (_bendSkipEdges?.Count ?? 0) + " crease edges, " + locked + " cone-locked)  ("
+                + "  coupled crease (" + creaseVerts + " crease verts, " + locked + " cone-locked)  ("
                 + _session.Mesh.Vertices.Count + " verts)";
         }
 
@@ -1229,6 +1255,79 @@ namespace PieceSolver
             }
             for (int v = 0; v < nV; v++) if (deg[v] >= 3) cone[v] = true;
             return cone;
+        }
+
+        // Crease-vertex mask (Coupled): every vertex incident to a crease edge — excluded from smoothing so the
+        // welded fold is free (CURVED-CREASE-DEVELOP.md §2 welded + per-vertex). Packed crease keys -> per-vertex.
+        static bool[] CreaseVertMask(System.Collections.Generic.HashSet<long> creaseEdges, int nV)
+        {
+            var m = new bool[nV];
+            if (creaseEdges != null) foreach (long key in creaseEdges)
+            { int a = (int)(key >> 32), b = (int)(uint)key; if (a >= 0 && a < nV) m[a] = true; if (b >= 0 && b < nV) m[b] = true; }
+            return m;
+        }
+
+        // Crease-CORNER mask (Free-float): the NODES of the crease graph — vertices whose incident-crease-edge
+        // count != 2 (junctions >=3, boundary/dangling endpoints =1). Degree-2 crease-curve interiors stay free.
+        static bool[] CornerMask(System.Collections.Generic.HashSet<long> creaseEdges, int nV)
+        {
+            var deg = new int[nV];
+            if (creaseEdges != null) foreach (long key in creaseEdges)
+            { int a = (int)(key >> 32), b = (int)(uint)key; if (a >= 0 && a < nV) deg[a]++; if (b >= 0 && b < nV) deg[b]++; }
+            var m = new bool[nV];
+            for (int v = 0; v < nV; v++) if (deg[v] >= 1 && deg[v] != 2) m[v] = true;
+            return m;
+        }
+
+        // ===================== free-float (unweld + corner-pin) bake (CURVED-CREASE-DEVELOP.md §2) =====================
+
+        // Develop the UNWELDED pieced mesh with ONLY the crease corners pinned: split into per-panel components,
+        // BFF + develop each independently (one-sided 1-rings -> no smoothing crosses a seam by construction),
+        // pinning just the crease corners (_cornerPin, unwelded indexing) so panels are tacked at the nodes but
+        // float along the creases -> they gap / overlap. sub0 only (no subdivision in this compare MVP).
+        void RunBakeFreeFloat(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
+        {
+            var comps = CreaseMachine.MeshOps.SplitComponents(_session.Mesh, out var vmaps);
+            int pieces = comps.Count, flattened = 0, freePanels = 0; double worst = 0;
+            var flatCombined = TopologyClone(_session.Mesh);
+            double xoff = 0;
+            for (int c = 0; c < comps.Count && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; c++)
+            {
+                var pc = comps[c];
+                if (!Bff.TryFlatten(pc, out var flat, out var log)) { if (!string.IsNullOrWhiteSpace(log)) _bakeLog.Add("panel " + c + ": " + log.TrimEnd()); continue; }
+                var vmap = vmaps[c];
+                var pin = new bool[pc.Vertices.Count]; int np = 0;
+                for (int local = 0; local < vmap.Length && local < pin.Length; local++)
+                    if (_cornerPin != null && vmap[local] < _cornerPin.Length && _cornerPin[vmap[local]]) { pin[local] = true; np++; }
+                if (np == 0) freePanels++;
+                DevelopComponent(pc, flat, np > 0 ? pin : null, target, sw, budgetMs);
+                for (int v = 0; v < vmap.Length; v++) { var p = pc.Vertices[v]; _session.Mesh.Vertices[vmap[v]].X = p.X; _session.Mesh.Vertices[vmap[v]].Y = p.Y; _session.Mesh.Vertices[vmap[v]].Z = p.Z; }
+                xoff = PlaceFlatPiece(flat, flatCombined, vmap, xoff);
+                double e = RelErr(pc, flat); if (e > worst) worst = e; flattened++;
+                _bakeProgress?.Report(((c + 1.0) / comps.Count, "panel " + (c + 1) + "/" + comps.Count + "  ·  worst " + (worst * 100.0).ToString("0.##") + "%"));
+            }
+            _flat = flatCombined; _hasFlat = true; _bffNeeded = false;
+            _bakeStrain = worst * 100.0;
+            _bakeSummary = flattened + "/" + pieces + " panels  free-float (corner-pinned"
+                + (freePanels > 0 ? ", " + freePanels + " unanchored" : "") + ")  worst strain "
+                + (worst * 100.0).ToString("0.###") + "%  (" + _session.Mesh.Vertices.Count + " verts)";
+        }
+
+        // Develop one component to the accuracy target with a given Dirichlet pin (null = unanchored). Supported
+        // path (the corner-pinned free-float develop) — distinct from the abandoned whole-boundary DevelopPiece.
+        void DevelopComponent(PlanktonMesh pc, PlanktonMesh flat, bool[] pin, double target, System.Diagnostics.Stopwatch sw, long budgetMs)
+        {
+            var m0 = new CreaseMachine.Vec3[pc.Vertices.Count];
+            for (int v = 0; v < m0.Length; v++) { var p = pc.Vertices[v]; m0[v] = new CreaseMachine.Vec3(p.X, p.Y, p.Z); }
+            double lam = 0, prev = double.MaxValue;
+            for (int it = 0; it < 800 && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; it++)
+            {
+                IsometricLM.Solve(pc, flat, m0, _sim.IsoWeight, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight, _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref lam, pin);
+                double pct = RelErr(pc, flat) * 100.0;
+                if (pct <= target) break;
+                if (prev - pct < 1e-5) break;
+                prev = pct;
+            }
         }
 
         // Worker-safe flatten: BFF the live mesh into _flat + the anchor M0; NO GL upload (the UI thread
@@ -1328,10 +1427,11 @@ namespace PieceSolver
         }
 
         // LM iterations until strain (relErr) <= targetPct, convergence (no progress), or the time budget.
-        // pinOverride/bendSkip (optional): the coupled curved-crease develop passes the cone-lock Dirichlet
-        // pins + the masked crease edges here; the legacy single bake passes neither (B-spline pins as before).
+        // pinOverride/noSmoothOverride (optional): the coupled curved-crease develop passes the cone-lock
+        // Dirichlet pins + the per-vertex crease no-smooth mask here; the legacy single bake passes neither
+        // (B-spline pins as before).
         void SolveToAccuracy(double targetPct, System.Diagnostics.Stopwatch sw, long budgetMs,
-            bool[] pinOverride = null, System.Collections.Generic.HashSet<long> bendSkip = null)
+            bool[] pinOverride = null, bool[] noSmoothOverride = null)
         {
             if (_flat == null || _M0 == null) return;
             bool[] pin = pinOverride ?? (_sim.FixBSplineEdges ? _pinned : null);
@@ -1341,7 +1441,7 @@ namespace PieceSolver
                 _lastEIso = IsometricLM.Solve(_session.Mesh, _flat, _M0,
                     _sim.IsoWeight * _isoResFactor, _sim.FairWeight, _sim.AnchorWeight, _sim.ScaleWeight,
                     _sim.DiffFair, _sim.BendWeight, _sim.BendDiff, 4, LmCgIters, ref _lmLambda,
-                    pin, bendSkip);
+                    pin, noSmoothOverride);
                 double pct = RelErr(_session.Mesh, _flat) * 100.0;
                 if ((it & 7) == 0) _bakeProgress?.Report((-1.0, "developing… strain " + pct.ToString("0.###") + "%  (target " + targetPct.ToString("0.###") + "%)"));
                 if (pct <= targetPct) break;            // reached the accuracy bar
