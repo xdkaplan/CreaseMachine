@@ -293,7 +293,7 @@ namespace PieceSolver
             PreviewKeyDown += (s, e) =>
             {
                 _heldMods = e.KeyboardDevice.Modifiers;   // track held modifiers so mouse gestures read this, not a stale/early Keyboard.Modifiers
-                // TAB toggles the base view between Authoring and Developed. WPF treats Tab as focus traversal, so
+                // TAB toggles the base view between the paintable Pattern and Developed. WPF treats Tab as focus traversal, so
                 // we intercept it in PreviewKeyDown (window-level). Gated off a focused text control so a future
                 // editable field keeps Tab; today there are none, so this is effectively a window-level toggle.
                 if (e.Key == Key.Tab && Keyboard.Modifiers == ModifierKeys.None && !(Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase))
@@ -468,15 +468,18 @@ namespace PieceSolver
                 _renderer.Upload(_session.Mesh);  // authoring / pieces base = the authoring mesh
         }
 
-        // TAB: flip the base view between Authoring and Developed. From Developed -> Authoring. From
-        // Authoring/Pieces -> Developed only if a solved result exists (the _developed Transient is Fresh);
-        // otherwise land on Authoring (so TAB with nothing solved is a clean no-op-ish that shows authoring).
+        // TAB: flip the base view between the (paintable) PATTERN and the Developed result.
+        //   Developed -> RebuildPieces(): re-derive the painted pieces and show them (Display = Pieces, or
+        //     Authoring when the mesh is unpainted) so you can keep editing. The Pattern/PieceMap survived the
+        //     Solve (the develop ran on a derived clone), so painting resumes exactly where you left off.
+        //   Pattern (Pieces/Authoring) -> Developed, but only if a solved result exists (the _developed Transient
+        //     is Fresh); otherwise stay on the pattern (TAB with nothing solved is a no-op).
         void ToggleDevelopedView()
         {
             if (_view.Display == DisplaySource.Developed)
-                _view.Display = DisplaySource.Authoring;
-            else
-                _view.Display = (_developed.Peek(out var d) && d != null) ? DisplaySource.Developed : DisplaySource.Authoring;
+                RebuildPieces();   // back to the paintable Pattern
+            else if (_developed.Peek(out var d) && d != null)
+                _view.Display = DisplaySource.Developed;
             _meshDirty = true; _pieceDirty = true;   // re-evaluate the base upload + ShowPieces for the new display
             UpdateStatus();
             _gl?.InvalidateVisual();
