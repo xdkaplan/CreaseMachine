@@ -1287,7 +1287,14 @@ namespace PieceSolver
             }
 
             _session.Subdivide();                            // refine M
-            RebindPattern();                                 // 1->4 renumbers verts/faces -> rewrap the partition on the new mesh
+            // Rewrap the live Doc Pattern on the new mesh ONLY for an interactive subdivide. During a Solve
+            // bake _session is a throwaway develop clone the Pattern must NOT follow: rebinding here ran on the
+            // worker thread (off-thread Doc-graph mutation — single-writer breach) AND left _doc.Pattern wrapping
+            // the discarded clone after the bake, whose null PieceMap then re-Seeded and silently destroyed the
+            // painted partition. The bake develops _session.Mesh directly and never reads the Pattern, so skip it
+            // while baking; the authoring Pattern stays coupled to the authoring mesh across the whole bake.
+            // (docs/reviews/2026-06-26-overnight-architecture-review.md F-1/F-2)
+            if (!_baking) RebindPattern();                   // 1->4 renumbers verts/faces -> rewrap the partition on the new mesh
             if (hadFlat)
             {
                 _flat = MeshOps.UniformSubdivide(_flat);     // refine M' identically -> alignment preserved

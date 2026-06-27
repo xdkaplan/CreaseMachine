@@ -33,6 +33,24 @@ namespace PieceSolver
         bool Selected(int piece) => piece >= 0 && Sel.Contains(new PieceId(piece));
         HashSet<int> SelIds() { var s = new HashSet<int>(); foreach (var p in Sel.Items) s.Add(p.Value); return s; }
 
+        // Drop any selected piece id no longer present in the partition. A carve can consume a whole selected
+        // piece (all its faces donated to neighbours / new islands), leaving the selection pointing at an id
+        // that's gone — which over-counts Sel.Count + the context-menu header and would ride a phantom into the
+        // next Merge/DelPiece. (Merge/DelPiece reset their own selection; grow/mint preserve-or-replace it, and
+        // SplitDisconnected keeps the selected id on the largest island — so carve is the one gesture that orphans
+        // an id.) Only re-Sets (fires Changed -> rebuild) when something was actually dropped. (review F-7)
+        void PruneSelection()
+        {
+            if (Sel.Count == 0) return;
+            var map = _host.Pattern?.PieceMap;
+            if (map == null) return;
+            var live = new HashSet<int>();
+            for (int i = 0; i < map.Length; i++) if (map[i] >= 0) live.Add(map[i]);
+            var keep = new List<PieceId>();
+            foreach (var p in Sel.Items) if (live.Contains(p.Value)) keep.Add(p);
+            if (keep.Count != Sel.Count) Sel.Set(keep);
+        }
+
         // ---- gesture arming (tap vs drag, decided by travel from the press point) ----
         const double StrokeThresholdPx = 10.0;   // press-to-brush threshold: a Shift/Ctrl release under it is a TAP
         ModifierKeys _downMods;                   // modifiers latched at press (a brush keys off these, not live mods)
@@ -189,6 +207,7 @@ namespace PieceSolver
             _removing = false; _carve = false; _touched = null;          // drop preview state before the rebuild
             if (log != null) _host.Doc.Comment(log);   // gesture summary -> the event log (canonical), not Console-only
             _tx?.Apply(delta); _tx?.Commit(); _tx = null;               // apply (fires Changed -> rebuild) + close the stroke's tx
+            PruneSelection();                                            // a carve can fully consume a selected piece -> drop the orphaned id (F-7)
             if (empty && _host.ShowPieces) _host.RefreshPieces();        // refused / no-op: no Changed fired -> drop the red preview
         }
 
