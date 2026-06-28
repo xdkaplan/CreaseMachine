@@ -251,9 +251,11 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
   [`docs/DOC-TX-REFACTOR.md`](docs/DOC-TX-REFACTOR.md) (the Doc / undo-redo layer) for the models +
   glossary + roadmap. The vocabulary below is shared by both.
   - **`Doc`** (`Doc.cs`) — the **orchestrator**. Owns the Store(s), the typed `Selection<T>`(s), and the
-    undo/redo stacks, and gatekeeps every piece mutation through `Run` / `OpenTx` / `Undo` / `Redo`
-    (`Run(delta)` = open + `Store.Apply` + push undo + clear redo → `Changed`; it's one-shot sugar over a
-    transaction). A gesture brackets its edit with **`OpenTx()` … `Tx.Apply`/`Commit`/`Cancel`** — **one tx
+    undo/redo stacks, and gatekeeps every piece mutation through `OpenTx` / `Undo` / `Redo`. **Every mutation
+    is a transaction:** `OpenTx → Apply → Run` (`Tx.Run()` finalizes — bundle into one undo unit + journal;
+    formerly `Commit`). There is no one-shot `Doc.Run`; a button command writes the same three lines as a
+    gesture (`using var tx = doc.OpenTx(); tx.Apply(delta); tx.Run();`). A gesture brackets its edit with
+    **`OpenTx()` … `Tx.Apply`/`Run`/`Cancel`** — **one tx
     at a time**, accumulating into one undo unit (`CompositeDelta`). Mutating entry points **self-reject when
     `!Ready`** (a `Tx` is open, or a long op set `Busy` — e.g. the bake's `EnterBusy(Calculating)`), so a
     competing `Ctrl+Z` mid-stroke is a clean no-op; ESC cancels an in-flight stroke (`Editor.CancelGesture`).
@@ -288,7 +290,7 @@ dotnet build PieceSolver/PieceSolver.csproj -c Release && PieceSolver/bin/Releas
     empty); Ctrl tap = remove from selection, Ctrl drag = carve (delete whole pieces when empty). `M`
     merges; `Del` / `Backspace` deletes the selected pieces (donating each to its neighbour); a no-drag
     right-click pops a context menu (count header · Merge · Delete); `Ctrl+Z` / `Ctrl+Y` undo/redo. Every
-    committing gesture is one `Doc.Run` transaction; the
+    committing gesture is one transaction (`OpenTx → Apply → Run`); the
     Piecer computes deltas, no geometry moves.
   - **`IEditorHost`** — the narrow interface an editor talks to its host through (mesh, `Pattern`, **`Doc`**,
     picking, brush footprint, view-refresh hooks) rather than the whole window. **The `View`

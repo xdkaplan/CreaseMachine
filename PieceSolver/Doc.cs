@@ -27,8 +27,8 @@ namespace PieceSolver
     enum Busy { None, Calculating, Opening }
 
     // An open transaction — the scope a tool brackets its edit with. ONE at a time (enforced by the Doc). While
-    // open it holds the lease (foreign Run/Undo/Redo self-reject); the tool composes its delta(s) and Apply()s
-    // them (live), then Commit() bundles the lot into one undo unit, or Cancel() rolls them back. Disposing an
+    // open it holds the lease (a foreign OpenTx/Undo/Redo self-rejects); the tool composes its delta(s) and Apply()s
+    // them (live), then Run() bundles the lot into one undo unit + journals it, or Cancel() rolls them back. Disposing an
     // un-closed Tx warns + auto-cancels (so a leaked / ESC-mashed gesture can't strand the Doc). See
     // docs/DOC-TX-REFACTOR.md.
     sealed class Tx : IDisposable
@@ -48,12 +48,12 @@ namespace PieceSolver
             _doc.ApplyLive(d);
             _parts.Add(d);
         }
-        public void Commit() { if (_closed) return; _closed = true; if (_alive) _doc.CloseTx(this, commit: true); }
+        public void Run()    { if (_closed) return; _closed = true; if (_alive) _doc.CloseTx(this, commit: true); }   // finalize the tx: bundle the parts into one undo unit + journal (the canonical tool shape: OpenTx -> Apply -> Run)
         public void Cancel() { if (_closed) return; _closed = true; if (_alive) _doc.CloseTx(this, commit: false); }
         public void Dispose()
         {
             if (_closed) return;
-            Debug.WriteLine("Tx disposed without Commit/Cancel — auto-cancelling.");
+            Debug.WriteLine("Tx disposed without Run/Cancel — auto-cancelling.");
             Cancel();
         }
     }
@@ -117,19 +117,10 @@ namespace PieceSolver
             return _open;
         }
 
-        // One-shot mutation = a transaction in one call: open -> apply -> commit. SUGAR over OpenTx/Apply/Commit,
-        // NOT a parallel commit path — every mutation is a tx, so undo-bundling / journaling / Changed all run
-        // through the one place (CloseTx). For no-gesture button commands (Merge, DelPiece); a gesture opens its
-        // own tx and Apply()s across the stroke instead. Returns false if rejected (not Ready: mid-gesture /
-        // baking) or the delta is empty, so the caller can skip its follow-up (e.g. reselect).
-        public bool Run(IDelta d)
-        {
-            if (!Ready || d == null || (d is PieceDelta { Empty: true }) || (d is CompositeDelta { Empty: true })) return false;
-            using var tx = OpenTx();   // Ready -> a live tx (the single guard); Dispose auto-cancels if Commit is somehow skipped
-            tx.Apply(d);               // apply live (mutate + repaint) + record the part
-            tx.Commit();               // bundle into one undo unit + journal
-            return true;
-        }
+        // (No Doc.Run one-shot — removed. EVERY mutation is a transaction: open a Tx, Apply the delta(s), Run()
+        //  it. Button commands (Merge, DelPiece) use the same explicit shape as a gesture:
+        //      using var tx = doc.OpenTx(); tx.Apply(delta); tx.Run();
+        //  Gate on `doc.Ready` first if you need to branch on busy/mid-gesture.)
 
         public void Undo() { if (!Ready || _undo.Count == 0) return; var d = _undo.Pop(); InvertInternal(d); _redo.Push(d); Record("undo"); Changed?.Invoke(); }
         public void Redo() { if (!Ready || _redo.Count == 0) return; var d = _redo.Pop(); ApplyInternal(d); _undo.Push(d); Record("redo"); Changed?.Invoke(); }

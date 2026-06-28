@@ -935,13 +935,11 @@ namespace PieceSolver
             var involved = new System.Collections.Generic.HashSet<int>();              // pieces touched (from ∪ to)
             foreach (var o in delta.Ops) { involved.Add(o.From); involved.Add(o.To); }
             _doc.Comment($"merge {involved.Count} pieces, {delta.Ops.Count} faces");   // label the otherwise-opaque setpiece block
-            if (_doc.Run(delta))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
-            {
-                var survivors = new System.Collections.Generic.HashSet<PieceId>();
-                foreach (var g in groups.Values) survivors.Add(new PieceId(g));   // merged survivors + untouched singletons
-                _doc.Pieces.Set(survivors);
-            }
-            else _doc.Comment("merge: busy — finish the current action first");
+            if (!_doc.Ready) { _doc.Comment("merge: busy — finish the current action first"); return; }   // mid-stroke / baking
+            using (var tx = _doc.OpenTx()) { tx.Apply(delta); tx.Run(); }   // explicit transaction: open -> apply -> run
+            var survivors = new System.Collections.Generic.HashSet<PieceId>();
+            foreach (var g in groups.Values) survivors.Add(new PieceId(g));   // merged survivors + untouched singletons
+            _doc.Pieces.Set(survivors);
         }
 
         // Delete the selected pieces as one undoable transaction: each is healed into its dominant surviving
@@ -957,9 +955,9 @@ namespace PieceSolver
             var delta = Commands.DelPiece(_doc.Pattern, ids);
             if (delta.Empty) { _doc.Comment("delpiece: nothing to delete (no surviving neighbour)"); return; }
             _doc.Comment($"delpiece {ids.Count} pieces, {delta.Ops.Count} faces");   // label the otherwise-opaque setpiece block
-            if (_doc.Run(delta))   // self-rejects if the Doc isn't Ready (mid-stroke / baking)
-                _doc.Pieces.Clear();   // the pieces are gone -> clear the selection
-            else _doc.Comment("delpiece: busy — finish the current action first");
+            if (!_doc.Ready) { _doc.Comment("delpiece: busy — finish the current action first"); return; }   // mid-stroke / baking
+            using (var tx = _doc.OpenTx()) { tx.Apply(delta); tx.Run(); }   // explicit transaction: open -> apply -> run
+            _doc.Pieces.Clear();   // the pieces are gone -> clear the selection
         }
 
         // Drop the cached proposal + overlay + editable selection + preview geometry + apex cache (fresh

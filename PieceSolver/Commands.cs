@@ -3,7 +3,8 @@ using System.Collections.Generic;
 namespace PieceSolver
 {
     // Commands: pure functions that read Selection + Real state and COMPUTE an IDelta (they never mutate —
-    // Doc.Run applies the result). The user calls these "Tools"; we call them Commands. See DOC-TX-REFACTOR.md.
+    // the caller's tx applies it: tx.Apply(delta) → tx.Run()). The user calls these "Tools"; we call them
+    // Commands. See DOC-TX-REFACTOR.md.
     static class Commands
     {
         // Merge each selected piece into its connected-component survivor (Pattern.MergeGroups): every adjacent
@@ -22,7 +23,7 @@ namespace PieceSolver
         // "kill & donate" op, i.e. the same Pattern.Delete a Ctrl-drag runs with nothing selected, but driven
         // from the selection instead of a brush footprint. touched = every face of the selected pieces, so
         // Delete's MostlyMarked returns exactly the selection; ComputeDelta captures the heal as one rolled-back
-        // delta for Doc.Run. Empty when a selected blob has no surviving neighbour (e.g. the whole mesh
+        // delta for the tx to apply. Empty when a selected blob has no surviving neighbour (e.g. the whole mesh
         // selected) — there's nothing to donate to, so nothing moves.
         public static PieceDelta DelPiece(Pattern p, HashSet<int> selection)
         {

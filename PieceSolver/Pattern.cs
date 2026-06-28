@@ -370,7 +370,7 @@ namespace PieceSolver
         // ===================== transactions (ITxAble) =====================
 
         // Apply / Invert a PieceDelta to the Real state (PieceMap), then regen the Transient view (CreaseMap).
-        // The single persistent writer of PieceMap (driven only by Doc.Run / Redo / Undo). See DOC-TX-REFACTOR.md.
+        // The single persistent writer of PieceMap (driven only by a committed tx — Tx.Apply→Tx.Run / Redo / Undo). See DOC-TX-REFACTOR.md.
         public void Apply(IDelta d)
         {
             if (PieceMap == null || !(d is PieceDelta pd)) return;
@@ -385,7 +385,7 @@ namespace PieceSolver
         }
 
         // Run an in-place mutator, capture the net PieceMap change as a delta, then ROLL BACK — leaving Real and
-        // Transient unchanged. The returned delta is what Doc.Run applies for real. Lets the intricate in-place
+        // Transient unchanged. The returned delta is what the tx applies for real (tx.Apply → tx.Run). Lets the intricate in-place
         // ops (Delete / Carve / Grow / Mint + SplitDisconnected) be reused verbatim as delta-producing Commands.
         public PieceDelta ComputeDelta(Action mutate)
         {
@@ -395,7 +395,7 @@ namespace PieceSolver
             var ops = new List<Op>();
             int n = Math.Min(before.Length, PieceMap.Length);
             for (int f = 0; f < n; f++) if (PieceMap[f] != before[f]) ops.Add(new Op(f, before[f], PieceMap[f]));
-            PieceMap = before; Invalidate();               // roll Real + Transient back; Doc.Run re-applies the delta
+            PieceMap = before; Invalidate();               // roll Real + Transient back; the tx re-applies the delta for real
             return new PieceDelta(ops);
         }
 

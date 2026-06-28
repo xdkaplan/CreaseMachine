@@ -142,15 +142,17 @@ sealed class Doc
     public bool Ready => State == Busy.None && _open == null;   // is a NEW mutation/tx allowed right now
 
     public Tx OpenTx();                                     // open the one tx (lease); stale -> warn+cancel; busy -> dead tx
-    public bool Run(IDelta d);                              // one-shot = open+apply+commit; self-rejects if !Ready
+    // (no one-shot Doc.Run — every mutation opens a Tx: tx.Apply(delta) then tx.Run() to finalize, or Cancel())
     public void Undo();  public void Redo();               // self-reject if !Ready
     public void EnterBusy(Busy r); public void ExitBusy(); // a long op (bake/open) takes/releases the Doc
 }
 ```
 
-**Mutating entry points SELF-REJECT when `!Ready`** — the guard lives inside `Run`/`Undo`/`Redo`/`OpenTx`,
+**Mutating entry points SELF-REJECT when `!Ready`** — the guard lives inside `OpenTx`/`Undo`/`Redo`,
 not at the call sites, so callers never have to remember to check and a rejected call is a clean no-op
-(each delta is all-or-nothing). `Run` is one-shot sugar for `OpenTx → Apply → Commit`.
+(each delta is all-or-nothing). **Every mutation is a transaction:** `OpenTx → Apply → Run` (`Tx.Run()`
+finalizes — bundle + journal; formerly `Commit`). There is **no** one-shot `Doc.Run` — a button command
+writes the same three lines as a gesture: `using var tx = doc.OpenTx(); tx.Apply(delta); tx.Run();`.
 
 `Selection<T>` (lives in the Doc; the Editor mutates it; **not** on the undo stack):
 
@@ -199,7 +201,7 @@ static PieceDelta Merge(Pattern p, Dictionary<int,int> groups)   // groups = p.M
 }
 ```
 
-Wiring: `M` does `var g = pattern.MergeGroups(ids); var d = Merge(pattern, g); if (doc.Run(d)) doc.Pieces.Set(g.Values)`
+Wiring: `M` does `var g = pattern.MergeGroups(ids); var d = Merge(pattern, g); if (doc.Ready) { using var tx = doc.OpenTx(); tx.Apply(d); tx.Run(); doc.Pieces.Set(g.Values); }`
 — the selection collapses to the survivors (merged clusters + untouched singletons). Undo/Redo on
 `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z`.
 
@@ -214,15 +216,15 @@ A gesture brackets its edit with an explicit **transaction scope** so an interle
 an in-flight edit (e.g. `Ctrl+Z` mid-carve — plausible, since carve already holds `Ctrl`):
 
 - **`OpenTx()`** opens the **one** transaction (a lease). While it's open the Doc isn't `Ready`, so foreign
-  `Run`/`Undo`/`Redo`/`OpenTx` **self-reject**. The tool composes its delta privately during the drag
-  (Real state untouched — preview only), then at mouse-up `tx.Apply(delta)` (applies live) + `tx.Commit()`.
+  `OpenTx`/`Undo`/`Redo` **self-reject**. The tool composes its delta privately during the drag
+  (Real state untouched — preview only), then at mouse-up `tx.Apply(delta)` (applies live) + `tx.Run()`.
 - **One transaction at a time** — a stale open tx is a leak → debug-warn + auto-cancel; a `Tx` disposed
-  without Commit/Cancel auto-cancels. **ESC** mid-stroke → `tx.Cancel()` (rolls back any applied parts;
+  without Run/Cancel auto-cancels. **ESC** mid-stroke → `tx.Cancel()` (rolls back any applied parts;
   during a brush drag that's zero, since the brush applies only at commit) + disarm the gesture.
-- **A tx accumulates** — `Apply` may be called multiple times; `Commit` bundles them into one
+- **A tx accumulates** — `Apply` may be called multiple times; `Run()` bundles them into one
   `CompositeDelta` = **one undo unit** (invert runs the parts in reverse). The brush only ever commits one
   delta, but the capability is there for future macro/multi-step tools (and is parallel-friendly).
-- **Long ops own the Doc too** — `EnterBusy(Calculating)` around the bake makes `Run`/`Undo`/`Redo`
+- **Long ops own the Doc too** — `EnterBusy(Calculating)` around the bake makes `OpenTx`/`Undo`/`Redo`
   self-reject while the worker owns the mesh. `Ready == State == None && no open tx`. (`Save` is an atomic
   read on the UI thread and a gesture leaves Real state at a committed snapshot, so reads never block.)
 
@@ -235,7 +237,7 @@ opened and closed" is the seam where a clean ordering guard drops in.
 2. **Undo/redo only in v1.** ~~Journaling piecing is deferred.~~ **Superseded (2026-06-24):**
    journaling is now the **op-log** (see the Revision). No separate forward-command log — the one
    op-log serves undo + redo + journal + replay + persist.
-3. **The Command computes the delta; `Doc.Run(delta)` applies it.** `store.Apply` is the sole writer.
+3. **The Command computes the delta; the tx applies it** — `tx.Apply(delta)` then `tx.Run()`. `store.Apply` is the sole writer.
 4. **Real / Transient** is the undoable boundary. Transient (`CreaseMap`) regens after Apply/Invert.
 5. **Selection lives in the Doc, typed (`Selection<T>`), and is NOT undoable.** Nor is the view/camera.
 6. **Merge fuses connected components.** Each adjacent cluster of selected pieces merges into one
@@ -427,7 +429,7 @@ unified `EventLog` drives Save, but the `_undo` / `_redo` stacks were kept rathe
 cursor); Slice B is parked for the solver-refactor agent.
 
 ### Slice A — Doc owns the journal; piece edits journal as ops; Console = the op-log — **DONE**
-- The **Doc** owns the op-log (`_log` / `EventLog` / `Record` / `Comment`). On `Run` / `tx.Commit` the
+- The **Doc** owns the op-log (`_log` / `EventLog` / `Record` / `Comment`). On `tx.Run` (commit) the
   committed delta's ops serialize to `setpiece {faces} from to` (grouped by `from→to` transition) and
   stream into the log via `Record`.
 - **`#`-comment split:** `Doc.Comment` is the comment channel (auto-`#`); op/command echoes are bare.
