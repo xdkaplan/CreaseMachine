@@ -37,6 +37,7 @@ namespace PieceSolver
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         string _meshPath;            // source mesh path, so Revert can reload the input from disk
         string _docPath;             // current .obj DOCUMENT path (Ctrl+S target); set by Open / Save As. Distinct from _meshPath (Revert source / import).
+        bool _dirty;                 // unsaved document state (a piece edit / new partition since the last Save/Open); gates the discard prompt
         bool _glInit, _meshDirty, _reframe, _rulingsDirty;   // _reframe: re-fit camera next upload; _rulingsDirty: recompute ruling overlay
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
@@ -135,7 +136,7 @@ namespace PieceSolver
             // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
             _doc.Pieces.Changed += () => { if (_view.Display == DisplaySource.Pieces) RebuildPieces(); };
-            _doc.Changed += () => { InvalidateDeveloped(); RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };   // a committed Pattern edit rots the developed result (stale until re-Solve; TAB re-bakes)
+            _doc.Changed += () => { _dirty = true; InvalidateDeveloped(); RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };   // a committed Pattern edit rots the developed result (stale until re-Solve; TAB re-bakes) + dirties the document
             _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
@@ -144,7 +145,7 @@ namespace PieceSolver
             // reused) unless the app itself is shutting down.
             _console = new ConsoleWindow();
             _console.Closing += (s, e) => { if (!_shuttingDown) { e.Cancel = true; _console.Hide(); MenuConsole.IsChecked = false; } };
-            Closing += (s, e) => _shuttingDown = true;
+            Closing += (s, e) => { if (!_shuttingDown && !ConfirmDiscard()) { e.Cancel = true; return; } _shuttingDown = true; };
 
             _gl = new GLWpfControl();
             // The viewport IS the editor's host (IEditorHost): display + camera + picking + brush footprint live on
@@ -241,7 +242,7 @@ namespace PieceSolver
             MenuOpen.Click += (s, e) => OpenDocument();          // File > Open a grouped-OBJ document (restores the partition)
             MenuSave.Click += (s, e) => SaveDocument(false);     // File > Save the DOCUMENT (welded authoring mesh + partition groups)
             MenuSaveAs.Click += (s, e) => SaveDocument(true);
-            MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
+            MenuRevert.Click += (s, e) => { if (ConfirmDiscard()) Execute(StudioCommand.Revert(), record: true); };   // File > Revert (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
             PresetAButton.Click += (s, e) => _sim.ApplyPreset('A');
@@ -309,7 +310,7 @@ namespace PieceSolver
                     ToggleDevelopedView(); e.Handled = true;
                 }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
-                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
+                else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { if (ConfirmDiscard()) Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveDocument(false); e.Handled = true; }   // Ctrl+S = save the document
                 else if (e.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control) { OpenDocument(); e.Handled = true; }       // Ctrl+O = open a document
                 else if (e.Key == Key.Escape && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_view.ActiveEditor.GesturePending) _view.ActiveEditor.CancelGesture(); else _view.ActiveEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
@@ -461,6 +462,7 @@ namespace PieceSolver
             _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;   // new mesh -> re-freeze iso scale + LM damping on next flatten
             _bffNeeded = true;        // new mesh -> BFF must (re)run before the sim can step
             Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
+            _dirty = false;           // a freshly-loaded/reverted/imported mesh is clean
             RefreshSeamDisplay();     // show the fitted seam wires immediately if Fix B-spline edges is on
             _gl?.InvalidateVisual();
         }
@@ -905,6 +907,7 @@ namespace PieceSolver
                     RebuildPieces();   // _camModal now false -> recolour to neutral (via the editor's FaceFill); creases stay committed
                     _doc.Comment($"creases committed: {_creaseCount} edge(s) at {_sim.CreaseAngleDeg:0.#} deg");
                     Title = "PieceSolver — " + _creaseCount + " creases committed";
+                    _dirty = true;   // a partition now exists -> unsaved document state
                 },
                 onCancel: () =>
                 {
@@ -1825,6 +1828,7 @@ namespace PieceSolver
         // journaled as a `load` op. FBX preserves Rhino's unwelded seam topology (one component per brep face).
         void ImportMesh()
         {
+            if (!ConfirmDiscard()) return;
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
                 Filter = "Mesh (*.stl;*.fbx;*.obj)|*.stl;*.fbx;*.obj|STL (*.stl)|*.stl|FBX (*.fbx)|*.fbx|OBJ (*.obj)|*.obj|All files (*.*)|*.*",
@@ -1857,8 +1861,21 @@ namespace PieceSolver
             catch (Exception ex) { _doc.Comment("export failed: " + ex.Message); }
         }
 
+        // Prompt to save unsaved document state before a destructive action (Open / Import / Revert / quit).
+        // Returns false to ABORT (user chose Cancel, or cancelled the Save dialog). No-op when not dirty.
+        bool ConfirmDiscard()
+        {
+            if (!_dirty) return true;
+            var r = System.Windows.MessageBox.Show("Save changes to the current document?", "CreaseStudio",
+                System.Windows.MessageBoxButton.YesNoCancel, System.Windows.MessageBoxImage.Question);
+            if (r == System.Windows.MessageBoxResult.Cancel) return false;
+            if (r == System.Windows.MessageBoxResult.Yes) { SaveDocument(false); return !_dirty; }   // proceed only if the Save actually wrote (dialog not cancelled)
+            return true;   // No -> discard
+        }
+
         void OpenDocument()
         {
+            if (!ConfirmDiscard()) return;
             var dlg = new Microsoft.Win32.OpenFileDialog
             {
                 Filter = "CreaseStudio document (*.obj)|*.obj|All files (*.*)|*.*",
@@ -1897,6 +1914,7 @@ namespace PieceSolver
             RebuildPieces();                     // derive CreaseMap, build piece buffers, Display = Pieces
             RefreshSeamDisplay();
             Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
+            _dirty = false;                      // a freshly-opened document is clean
             _gl?.InvalidateVisual();
         }
 
@@ -1922,7 +1940,7 @@ namespace PieceSolver
             try
             {
                 MeshIO.WriteObj(mesh, _doc.Pattern?.PieceMap, path);   // welds coincident seam verts + emits g piece_<id> groups
-                _docPath = path;
+                _docPath = path; _dirty = false;
                 Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
                 _doc.Comment("saved " + System.IO.Path.GetFileName(path) + " (" + mesh.Vertices.Count + " verts)");
             }
