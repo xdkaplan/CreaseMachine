@@ -13,8 +13,9 @@ namespace PieceSolver
     // the camera (n.z >= 0), so a globally-inward mesh or mixed winding can't read as "reversed".
     sealed class MeshView : IDisposable
     {
-        int _vao, _vboPos, _vboNrm, _ebo, _prog;
-        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp, _uEdge, _uEdgeColor;
+        int _vao, _vboPos, _vboNrm, _vboFaceN, _ebo, _prog;
+        int _uMvp, _uView, _uNormalMat, _uMatcap, _uHasMatcap, _uSharpness, _uFacetExp, _uEdge, _uEdgeColor, _uUseFaceN;
+        bool _useFaceN;       // last Upload supplied a per-face normal (@3) — n-gon/PQ mesh; faceting blends to it
         int _uNoise, _uLicMode, _uNoiseFreq, _uLicStep, _uFieldMax, _uLicStrength, _uLicTaps, _uCurvMin, _uCurvMax;
         int _uNeutral, _uEnv, _uHasShade, _uUseMatcap, _uShine;   // Shine: neutral+environment default-shading blend
         int _tex;
@@ -69,6 +70,7 @@ namespace PieceSolver
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNormal;
 layout(location=2) in vec3 aField;    // per-vertex direction field (model space, length = strength)
+layout(location=3) in vec3 aFaceN;    // per-FACE normal (n-gon/PQ meshes) -> the facet-end normal
 uniform mat4 uMvp;
 uniform mat4 uView;
 uniform mat3 uNormalMat;
@@ -76,12 +78,14 @@ out vec3 vN;
 out vec3 vViewPos;
 out vec3 vField;
 out vec3 vModelPos;
+out vec3 vFaceN;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
     vN = uNormalMat * aNormal;            // smooth (averaged) normal -> view space
     vViewPos = (uView * vec4(aPos, 1.0)).xyz;   // view-space position, for the faceted normal
     vField = aField;                      // interpolated across the triangle; re-normalized per fragment
     vModelPos = aPos;                     // object-space position, for sampling the solid noise (LIC)
+    vFaceN = uNormalMat * aFaceN;         // per-face normal -> view space (used when uUseFaceN==1)
 }";
 
         const string FRAG = @"#version 330 core
@@ -89,11 +93,13 @@ in vec3 vN;
 in vec3 vViewPos;
 in vec3 vField;
 in vec3 vModelPos;
+in vec3 vFaceN;
 out vec4 FragColor;
 uniform sampler2D uMatcap;
 uniform sampler3D uNoise;     // solid blue-noise volume, GL_REPEAT-wrapped
 uniform int uHasMatcap;
 uniform float uSharpness;     // 0 = smooth (averaged normal), 1 = faceted (per-face normal)
+uniform int uUseFaceN;        // 1 = facet to the per-FACE normal attribute (n-gon/PQ); 0 = screen-space per-triangle
 uniform float uFacetExp;      // response curve: blend = pow(sharpness, exp). 1 = linear
 uniform int uEdge;            // 1 = edge/wireframe pass -> output solid uEdgeColor
 uniform vec3 uEdgeColor;
@@ -115,7 +121,9 @@ void main() {
     if (uEdge == 1) { FragColor = vec4(uEdgeColor, 1.0); return; }
     vec3 sn = normalize(vN);
     // Geometric face normal from screen-space derivatives = the 'unwelded' normal, for free.
-    vec3 fn = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
+    // Facet-end normal: the per-FACE normal for n-gon/PQ meshes (so a quad's false diagonal never shows), else
+    // the screen-space per-triangle normal (fine for triangle meshes — they have no false diagonal).
+    vec3 fn = (uUseFaceN == 1) ? normalize(vFaceN) : normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
     if (dot(fn, sn) < 0.0) fn = -fn;       // align with the smooth normal before blending
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
     vec3 n = normalize(mix(sn, fn, s));
@@ -176,6 +184,7 @@ void main() {
             _uHasMatcap = GL.GetUniformLocation(_prog, "uHasMatcap");
             _uSharpness = GL.GetUniformLocation(_prog, "uSharpness");
             _uFacetExp = GL.GetUniformLocation(_prog, "uFacetExp");
+            _uUseFaceN = GL.GetUniformLocation(_prog, "uUseFaceN");
             _uEdge = GL.GetUniformLocation(_prog, "uEdge");
             _uEdgeColor = GL.GetUniformLocation(_prog, "uEdgeColor");
             _uNoise = GL.GetUniformLocation(_prog, "uNoise");
@@ -421,19 +430,35 @@ void main() {
             Center = (bb0 + bb1) * 0.5f;
             Radius = MathF.Max(1e-4f, (bb1 - bb0).Length * 0.5f);
 
-            // Faceting: a mesh with n-gon faces (Dev2PQ PQ strips) renders FLAT PER-FACE — split verts, one
-            // Newell normal per face — so the triangulation's diagonal ("false edge") is invisible while the real
-            // quad-boundary edges stay crisp. An all-triangle mesh keeps smooth averaged-normal shading.
+            // Shared averaged (smooth) vertex normals — face Newell normals accumulated to each face's verts.
+            // This is the Facet=0 (smooth) end for BOTH paths.
+            var nrm = new Vector3[used];
+            for (int f = 0; f < P.Faces.Count; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f);
+                if (fv == null || fv.Length < 3) continue;
+                int n = fv.Length; bool ok = true;
+                for (int k = 0; k < n; k++) if (map[fv[k]] < 0) { ok = false; break; }
+                if (!ok) continue;
+                Vector3 fn = Vector3.Zero;
+                for (int k = 0; k < n; k++) { var a = pos[map[fv[k]]]; var b = pos[map[fv[(k + 1) % n]]]; fn.X += (a.Y - b.Y) * (a.Z + b.Z); fn.Y += (a.Z - b.Z) * (a.X + b.X); fn.Z += (a.X - b.X) * (a.Y + b.Y); }
+                for (int k = 0; k < n; k++) nrm[map[fv[k]]] += fn;
+            }
+
+            // Faceting: the Facet slider blends smooth (averaged @1) -> faceted. For an n-gon mesh (Dev2PQ strips)
+            // the faceted end is a PER-FACE normal (@3) over SPLIT verts, so it's per-QUAD — the triangulation's
+            // diagonal ("false edge") never shows at any Facet, while real quad edges stay crisp. A triangle mesh
+            // keeps shared verts + the shader's screen-space (per-triangle) facet normal, and keeps the LIC field.
             bool hasNgon = false;
             for (int f = 0; f < P.Faces.Count; f++)
             { if (!P.Faces[f].IsUnused) { var ff = P.Faces.GetFaceVertices(f); if (ff != null && ff.Length > 3) { hasNgon = true; break; } } }
 
-            float[] posF; float[] nrmF; uint[] indices;
+            float[] posF; float[] nrmF; float[] faceF; uint[] indices;
             if (hasNgon)
             {
-                // FLAT PER-FACE: each face's corners become its OWN verts, all carrying the face's normal. The
-                // intra-face diagonal shares that normal (invisible); face boundaries are split (real edges show).
-                var pl = new List<float>(); var nl = new List<float>(); var il = new List<uint>();
+                // SPLIT per face: each vert carries the smooth averaged normal (@1) AND the face's Newell normal (@3).
+                var pl = new List<float>(); var nl = new List<float>(); var fl = new List<float>(); var il = new List<uint>();
                 var cp = new Vector3[8];
                 for (int f = 0; f < P.Faces.Count; f++)
                 {
@@ -444,20 +469,25 @@ void main() {
                     bool ok = true;
                     for (int k = 0; k < n; k++) { int mi = map[fv[k]]; if (mi < 0) { ok = false; break; } cp[k] = pos[mi]; }
                     if (!ok) continue;
-                    Vector3 fn = Vector3.Zero;   // Newell's normal — robust for n-gons + slightly non-planar quads
+                    Vector3 fn = Vector3.Zero;   // per-face Newell normal (the facet end)
                     for (int k = 0; k < n; k++) { var a = cp[k]; var b = cp[(k + 1) % n]; fn.X += (a.Y - b.Y) * (a.Z + b.Z); fn.Y += (a.Z - b.Z) * (a.X + b.X); fn.Z += (a.X - b.X) * (a.Y + b.Y); }
                     fn = fn.LengthSquared > 1e-20f ? Vector3.Normalize(fn) : Vector3.UnitZ;
                     int baseV = pl.Count / 3;
-                    for (int k = 0; k < n; k++) { pl.Add(cp[k].X); pl.Add(cp[k].Y); pl.Add(cp[k].Z); nl.Add(fn.X); nl.Add(fn.Y); nl.Add(fn.Z); }
-                    for (int k = 1; k + 1 < n; k++) { il.Add((uint)baseV); il.Add((uint)(baseV + k)); il.Add((uint)(baseV + k + 1)); }   // fan (diagonal hidden by the shared normal)
+                    for (int k = 0; k < n; k++)
+                    {
+                        int mi = map[fv[k]]; Vector3 sn = nrm[mi].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[mi]) : Vector3.UnitZ;
+                        pl.Add(cp[k].X); pl.Add(cp[k].Y); pl.Add(cp[k].Z);
+                        nl.Add(sn.X); nl.Add(sn.Y); nl.Add(sn.Z);
+                        fl.Add(fn.X); fl.Add(fn.Y); fl.Add(fn.Z);
+                    }
+                    for (int k = 1; k + 1 < n; k++) { il.Add((uint)baseV); il.Add((uint)(baseV + k)); il.Add((uint)(baseV + k + 1)); }
                 }
-                posF = pl.ToArray(); nrmF = nl.ToArray(); indices = il.ToArray();
-                _vMap = null; _usedCount = posF.Length / 3;   // split verts -> the per-original-vertex field/LIC is N/A (SetField no-ops)
+                posF = pl.ToArray(); nrmF = nl.ToArray(); faceF = fl.ToArray(); indices = il.ToArray();
+                _vMap = null; _usedCount = posF.Length / 3; _useFaceN = true;   // split verts -> LIC field N/A (SetField no-ops)
             }
             else
             {
-                // All-triangle mesh: smooth area-weighted vertex normals over shared verts. No winding re-orient;
-                // the fragment shader orients each normal toward the camera.
+                // All-triangle mesh: shared verts + averaged normals; faceting via the shader's screen-space normal.
                 var tris = new List<(int a, int b, int c)>(P.Faces.Count);
                 for (int f = 0; f < P.Faces.Count; f++)
                 {
@@ -467,9 +497,6 @@ void main() {
                     int a = map[fv[0]]; if (a < 0) continue;
                     for (int k = 1; k + 1 < fv.Length; k++) { int b = map[fv[k]], c = map[fv[k + 1]]; if (b < 0 || c < 0) continue; tris.Add((a, b, c)); }
                 }
-                var nrm = new Vector3[used];
-                foreach (var (a0, b0, c0) in tris)
-                { Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn; }
                 posF = new float[used * 3]; nrmF = new float[used * 3];
                 for (int i = 0; i < used; i++)
                 {
@@ -479,11 +506,11 @@ void main() {
                 }
                 indices = new uint[tris.Count * 3];
                 for (int t = 0; t < tris.Count; t++) { indices[t * 3] = (uint)tris[t].a; indices[t * 3 + 1] = (uint)tris[t].b; indices[t * 3 + 2] = (uint)tris[t].c; }
-                _vMap = map; _usedCount = used;
+                faceF = null; _vMap = map; _usedCount = used; _useFaceN = false;
             }
             _indexCount = indices.Length;
 
-            if (_vao == 0) { _vao = GL.GenVertexArray(); _vboPos = GL.GenBuffer(); _vboNrm = GL.GenBuffer(); _ebo = GL.GenBuffer(); }
+            if (_vao == 0) { _vao = GL.GenVertexArray(); _vboPos = GL.GenBuffer(); _vboNrm = GL.GenBuffer(); _vboFaceN = GL.GenBuffer(); _ebo = GL.GenBuffer(); }
             GL.BindVertexArray(_vao);
             GL.BindBuffer(BufferTarget.ArrayBuffer, _vboPos);
             GL.BufferData(BufferTarget.ArrayBuffer, posF.Length * sizeof(float), posF, BufferUsageHint.DynamicDraw);
@@ -493,6 +520,14 @@ void main() {
             GL.BufferData(BufferTarget.ArrayBuffer, nrmF.Length * sizeof(float), nrmF, BufferUsageHint.DynamicDraw);
             GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
             GL.EnableVertexAttribArray(1);
+            if (_useFaceN)   // per-face normal @3 (n-gon/PQ): the faceted end of the Facet blend
+            {
+                GL.BindBuffer(BufferTarget.ArrayBuffer, _vboFaceN);
+                GL.BufferData(BufferTarget.ArrayBuffer, faceF.Length * sizeof(float), faceF, BufferUsageHint.DynamicDraw);
+                GL.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+                GL.EnableVertexAttribArray(3);
+            }
+            else GL.DisableVertexAttribArray(3);
             GL.BindBuffer(BufferTarget.ElementArrayBuffer, _ebo);
             GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Length * sizeof(uint), indices, BufferUsageHint.DynamicDraw);
             // The field VBO (@2) is sized to the PREVIOUS vertex count; disable it until SetField
@@ -598,6 +633,7 @@ void main() {
             GL.UniformMatrix3(_uNormalMat, false, ref normalMat);
             GL.Uniform1(_uSharpness, Sharpness);
             GL.Uniform1(_uFacetExp, FacetExp);
+            GL.Uniform1(_uUseFaceN, _useFaceN ? 1 : 0);
             GL.Uniform1(_uHasMatcap, _hasMatcap ? 1 : 0);
             if (_hasMatcap)
             {
