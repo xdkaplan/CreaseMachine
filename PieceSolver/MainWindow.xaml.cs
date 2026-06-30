@@ -540,7 +540,7 @@ namespace PieceSolver
         bool[] _coneLock;      // per-vertex: true at junctions where >=3 creases meet — Dirichlet-locked (cone points)
         bool _coupledCrease;   // route RunBake -> coupled / free-float develop (a pieced mesh with creases)
         bool _freeFloat;       // route RunBake -> RunBakeFreeFloat (unweld + corner-pin)
-        PlanktonMesh _freeFloatResult;  // assembled per-panel free-float result (a panel = its Dev2PQ remesh if PQSuccess, else its developed mesh); non-null only when >=1 panel PQ'd — else the stamped _session.Mesh is shown
+        PlanktonMesh _pqResult;  // the develop result shown instead of _session.Mesh when Dev2PQ produced one — the single PQ remesh (RunBakeSingle) or the assembled per-panel PQ/developed mix (RunBakeFreeFloat); null = show _session.Mesh
         bool[] _cornerPin;     // per-vertex (UNWELDED indexing): crease corners — Dirichlet pin (Free-float)
 
         // ---- fixed B-spline seam edges (bent-wire pins) ----
@@ -666,7 +666,7 @@ namespace PieceSolver
                     if (first < 0) first = pieceMap[f]; else if (pieceMap[f] != first) { pieced = true; break; }
                 }
             }
-            _noSmooth = null; _coneLock = null; _coupledCrease = false; _freeFloat = false; _cornerPin = null; _freeFloatResult = null;
+            _noSmooth = null; _coneLock = null; _coupledCrease = false; _freeFloat = false; _cornerPin = null; _pqResult = null;
             int[] unweldVMap = null;   // display unweld: developed-welded vertex -> unwelded copy index (built in the finally)
             PlanktonMesh developMesh = null;
             if (pieced)
@@ -728,10 +728,10 @@ namespace PieceSolver
                     // renders as a real fold (coincident copies, distinct normals). Single/FBX paths show as-is.
                     // FREE-FLOAT solved the UNWELDED mesh directly, so _session.Mesh already carries the fold/gaps —
                     // show it as-is. COUPLED solved the WELDED mesh, so unweld for display so the crease renders.
-                    // FREE-FLOAT with PQ: the assembled per-panel result (mixed PQ/developed topology). Without PQ
-                    // (or any other path): _session.Mesh, which the coupled branch may then unweld.
-                    PlanktonMesh shown = (_freeFloat && _freeFloatResult != null) ? _freeFloatResult : _session.Mesh;
-                    if (_coupledCrease && !_freeFloat && pieceMap != null)
+                    // Dev2PQ produced the result (a single PQ remesh, or the assembled per-panel mix) -> show it.
+                    // Else _session.Mesh, which the coupled branch may then unweld for the fold.
+                    PlanktonMesh shown = _pqResult ?? _session.Mesh;
+                    if (_pqResult == null && _coupledCrease && !_freeFloat && pieceMap != null)
                     {
                         // Unweld AUTHORING (face+vertex aligned with pieceMap), then stamp the developed positions
                         // from the welded solve (TopologyClone preserved authoring's vertex indices) via the unweld
@@ -1200,10 +1200,10 @@ namespace PieceSolver
             var sw = System.Diagnostics.Stopwatch.StartNew();
             const long budgetMs = 100000;   // Solve bake time budget (100s; was 10s) — caps the develop+subdivide loop
             double target = _sim.AccuracyStrainPct;
-            if (_freeFloat) RunBakeFreeFloat(sw, budgetMs, target);     // pieced -> unweld + corner-pin (panels develop independently)
-            else if (_coupledCrease) RunBakeCoupled(sw, budgetMs, target);   // pieced -> whole-mesh coupled free-crease develop
-            else if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) RunBakeMulti(sw, budgetMs, target);
-            else RunBakeSingle(sw, budgetMs, target);
+            if (_freeFloat) { _bakeLog.Add("bake path: FREE-FLOAT (unweld + corner-pin; Dev2PQ per panel)"); RunBakeFreeFloat(sw, budgetMs, target); }
+            else if (_coupledCrease) { _bakeLog.Add("bake path: COUPLED crease (welded, sub0; no Dev2PQ)"); RunBakeCoupled(sw, budgetMs, target); }
+            else if (CreaseMachine.MeshOps.ComponentCount(_session.Mesh) > 1) { _bakeLog.Add("bake path: MULTI-component (per-piece subdivide; no Dev2PQ)"); RunBakeMulti(sw, budgetMs, target); }
+            else { _bakeLog.Add("bake path: SINGLE patch (Dev0 -> Dev2PQ -> subdiv " + _sim.SubdivLevel + ")"); RunBakeSingle(sw, budgetMs, target); }
         }
 
         // Single-component bake (NURBS surface): flatten once, develop to accuracy, subdivide + re-develop.
@@ -1211,13 +1211,35 @@ namespace PieceSolver
         {
             if (_sim.FixBSplineEdges) SetupSeamPins();
             if (!FlattenPure()) { _bakeSummary = "BFF failed"; return; }
-            SolveToAccuracy(target, sw, budgetMs);
+            SolveToAccuracy(target, sw, budgetMs);   // Dev0 (settled)
+            double dev0 = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
+            _bakeLog.Add("Dev0 settled: " + (double.IsNaN(dev0) ? "" : dev0.ToString("0.###") + "% strain, ") + _session.Mesh.Vertices.Count + " verts");
+
+            // Dev0 settled -> attempt Dev2PQ BEFORE subdividing (5s timeout, no deviance metric — a result IS the
+            // success). PQSuccess => the PQ remesh IS Dev0 and the Dev1..DevN subdivide chain is cancelled.
+            // Crash/hang/empty -> fall back to the subdivide chain. (dev2pq/DEV2PQ-INTEGRATION.md)
+            _bakeProgress?.Report((-1.0, "Dev2PQ… (5s)"));
+            bool pqOk = Dev2PQ.TryDev2PQ(_session.Mesh, 5000, out var pq, out var pqlog);
+            _bakeLog.Add("Dev2PQ: " + (string.IsNullOrWhiteSpace(pqlog) ? (pqOk ? "ok" : "no result") : pqlog.Trim()));
+            if (pqOk)
+            {
+                int pqf = 0; for (int f = 0; f < pq.Faces.Count; f++) if (!pq.Faces[f].IsUnused) pqf++;
+                _pqResult = pq;
+                _bakeLog.Add("Dev2PQ PQSuccess -> using as Dev0; cancelling Dev1.." + _sim.SubdivLevel);
+                _bakeStrain = double.NaN;
+                _bakeSummary = "PQSuccess (Dev2PQ: " + pq.Vertices.Count + " verts, " + pqf + " PQ faces) — subdivision skipped";
+                return;
+            }
+            _bakeLog.Add("Dev2PQ: no PQ -> subdividing (Dev1.." + _sim.SubdivLevel + ")");
+
             int levels = _sim.SubdivLevel;
             for (int lvl = 0; lvl < levels && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; lvl++)
             {
                 SubdivideCompute();
                 if (_sim.FixBSplineEdges) SetupSeamPins();
                 SolveToAccuracy(target, sw, budgetMs);
+                double dpct = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
+                _bakeLog.Add("Dev" + (lvl + 1) + ": " + (double.IsNaN(dpct) ? "" : dpct.ToString("0.###") + "% strain, ") + _session.Mesh.Vertices.Count + " verts");
                 _bakeProgress?.Report(((lvl + 2.0) / (levels + 1.0), "subdiv " + (lvl + 1) + "/" + levels));
             }
             double pct = (_hasFlat && _flat != null) ? RelErr(_session.Mesh, _flat) * 100.0 : double.NaN;
@@ -1325,10 +1347,10 @@ namespace PieceSolver
             // If any panel PQ'd, the result mixes topologies (PQ polygons + developed tris), so assemble the
             // per-panel results into one mesh. If none PQ'd, the stamped _session.Mesh stays the result (keeps the
             // flat<->3D index alignment intact). (dev2pq/DEV2PQ-INTEGRATION.md)
-            _freeFloatResult = (pqCount > 0) ? CombineMeshes(results) : null;
+            _pqResult = (pqCount > 0) ? CombineMeshes(results) : null;
             _flat = flatCombined; _hasFlat = true; _bffNeeded = false;
             _bakeStrain = worst * 100.0;
-            int outVerts = (_freeFloatResult ?? _session.Mesh).Vertices.Count;
+            int outVerts = (_pqResult ?? _session.Mesh).Vertices.Count;
             _bakeSummary = flattened + "/" + pieces + " panels  free-float (corner-pinned"
                 + (freePanels > 0 ? ", " + freePanels + " unanchored" : "") + ")  " + pqCount + "/" + flattened + " PQ"
                 + "  worst strain " + (worst * 100.0).ToString("0.###") + "%  (" + outVerts + " verts)";
