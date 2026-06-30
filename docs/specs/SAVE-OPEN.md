@@ -1,7 +1,7 @@
 # File > Save / File > Open — neutral grouped-OBJ document
 
-> **Status: SPEC — not yet implemented.** No File > Open / Save / Save As menu items and no document
-> round-trip exist yet (only Import + Export do). This is the plan.
+> **Status: BUILT 2026-06-30** (Phases 1–3). `MeshIO` welded grouped-OBJ round-trip + bench gate;
+> File > Open (Ctrl+O) / Save (Ctrl+S) / Save As; unsaved-changes prompt on Open/Import/Revert/close.
 >
 > **Supersedes** this doc's earlier design (a self-contained `.crease` **JSON snapshot**). The decision was
 > re-opened in a 2026-06-30 brainstorm and redirected to a **neutral, interop-first** format: the document is
