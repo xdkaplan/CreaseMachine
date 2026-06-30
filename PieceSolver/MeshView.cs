@@ -427,10 +427,17 @@ void main() {
             {
                 if (P.Faces[f].IsUnused) continue;
                 int[] fv = P.Faces.GetFaceVertices(f);
-                if (fv.Length != 3) continue;
-                int a = map[fv[0]], b = map[fv[1]], c = map[fv[2]];
-                if (a < 0 || b < 0 || c < 0) continue;
-                tris.Add((a, b, c));
+                if (fv == null || fv.Length < 3) continue;
+                // Fan-triangulate n-gons (Dev2PQ strips are quads/polygons): (0,1,2),(0,2,3),… from corner 0.
+                // A triangle (len 3) yields exactly one tri — unchanged from before.
+                int a = map[fv[0]];
+                if (a < 0) continue;
+                for (int k = 1; k + 1 < fv.Length; k++)
+                {
+                    int b = map[fv[k]], c = map[fv[k + 1]];
+                    if (b < 0 || c < 0) continue;
+                    tris.Add((a, b, c));
+                }
             }
 
             // Area-weighted averaged vertex normals -> smooth shading. No winding re-orientation: the
