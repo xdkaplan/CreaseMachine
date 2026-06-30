@@ -990,7 +990,7 @@ namespace PieceSolver
         // (Re)create the Pattern companion so it always wraps the CURRENT live mesh. Called wherever the
         // mesh object changes (load / reset / subdivide); the maps come up null (a fresh partition), which is
         // exactly what ClearProposedCreases would set them to anyway.
-        void RebindPattern() => _doc.Rebind(new Pattern(_session?.Mesh));   // Doc re-points + drops history/selection; Pattern lives only on the Doc now
+        void RebindPattern() => _doc.Rebind(new Pattern(_session?.Mesh, _doc.MintId));   // Doc re-points + drops history/selection; Pattern lives only on the Doc now
 
         // Merge the selected pieces as a single undoable transaction. Each ADJACENT cluster fuses into one piece
         // (survivor = min id); isolated selected pieces are left as-is. Refused only if no two selected pieces

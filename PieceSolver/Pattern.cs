@@ -13,6 +13,7 @@ namespace PieceSolver
     sealed class Pattern : Real, ITxAble
     {
         readonly PlanktonMesh _mesh;
+        readonly Func<int> _mint;   // the Doc's single id source (Doc.MintId); null in detached/test use -> max+1 fallback
 
         public override string Name => "Pattern";
         // DERIVED display geometry: the per-piece-tinted SPLIT render buffers (Pos/Nrm/Col/Dist/Edge) the View
@@ -37,9 +38,9 @@ namespace PieceSolver
         // first multi-level edge in the refresh graph (a PieceMap change rots CreaseMap, which rots this in turn).
         public readonly Transient<RenderData> CreaseLines;
 
-        public Pattern(PlanktonMesh mesh)
+        public Pattern(PlanktonMesh mesh, Func<int> mint = null)
         {
-            _mesh = mesh;
+            _mesh = mesh; _mint = mint;
             CreaseMap = new Transient<HashSet<long>>(DeriveCreases);
             AddDownstream(CreaseMap);   // refresh-graph edges: both derive from PieceMap, so a PieceMap change rots both
             AddDownstream(_geometry);
@@ -171,7 +172,7 @@ namespace PieceSolver
             });
 
             // Target per blob: dominant neighbour outside the selection, else a fresh piece id (island).
-            int nextId = NewPieceId().Value, islands = 0;
+            int islands = 0;
             var target = new Dictionary<int, int>();
             foreach (int blob in blobRoots)
             {
@@ -181,7 +182,7 @@ namespace PieceSolver
                     foreach (var nb in d) if (nb.Value > domC) { domC = nb.Value; dom = nb.Key; }
                     target[blob] = dom;
                 }
-                else { target[blob] = nextId++; islands++; }
+                else { target[blob] = NewPieceId().Value; islands++; }   // each island = a fresh global id (no local ++)
             }
 
             int carved = 0;
@@ -221,7 +222,6 @@ namespace PieceSolver
                 if (!pieceBlobs.TryGetValue(r, out var lst)) { lst = new List<int>(); pieceBlobs[r] = lst; }
                 if (!lst.Contains(root)) lst.Add(root);
             }
-            int nextId = NewPieceId().Value;
             bool changed = false;
             foreach (var kv in pieceBlobs)
             {
@@ -230,7 +230,7 @@ namespace PieceSolver
                 int keep = blobs[0], keepSize = DictGet(blobSize, blobs[0]);
                 foreach (int b in blobs) { int s = DictGet(blobSize, b); if (s > keepSize) { keepSize = s; keep = b; } }
                 var newIdFor = new Dictionary<int, int>();
-                foreach (int b in blobs) if (b != keep) newIdFor[b] = nextId++;   // largest keeps the id; others get fresh ids
+                foreach (int b in blobs) if (b != keep) newIdFor[b] = NewPieceId().Value;   // largest keeps the id; others get fresh global ids
                 for (int f = 0; f < nF; f++)
                 {
                     if (P.Faces[f].IsUnused || PieceMap[f] != kv.Key) continue;
@@ -438,7 +438,8 @@ namespace PieceSolver
         // than growing an existing one. Ids only need to be unique; gaps from fully-overwritten pieces are fine.
         public PieceId NewPieceId()
         {
-            int mx = -1;
+            if (_mint != null) return new PieceId(_mint());   // the Doc's monotonic global id source (never reuses a freed id)
+            int mx = -1;                                       // detached/test fallback (no Doc): max+1, which CAN reuse a freed max
             if (PieceMap != null) for (int i = 0; i < PieceMap.Length; i++) if (PieceMap[i] > mx) mx = PieceMap[i];
             return new PieceId(mx + 1);
         }
