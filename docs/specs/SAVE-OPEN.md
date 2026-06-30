@@ -1,103 +1,118 @@
-# File > Save / File > Open — document serialize / deserialize
+# File > Save / File > Open — neutral grouped-OBJ document
 
-> **Status: SPEC — not yet implemented.** No `DocumentIO.cs`, no File > Save / Save As / Open menu items,
-> and no `.crease` round-trip exist yet; only the Ctrl+O / Ctrl+S shortcut reservations (Decision 5) have
-> landed. This is the plan, not a description of built behaviour.
+> **Status: SPEC — not yet implemented.** No File > Open / Save / Save As menu items and no document
+> round-trip exist yet (only Import + Export do). This is the plan.
+>
+> **Supersedes** this doc's earlier design (a self-contained `.crease` **JSON snapshot**). The decision was
+> re-opened in a 2026-06-30 brainstorm and redirected to a **neutral, interop-first** format: the document is
+> a **plain grouped `.obj`** carrying mesh + partition and *nothing app-specific*. (History of the JSON plan
+> is in git.) Vocabulary/decisions settled live (propose→accept; the user's call).
 
-A real round-trip: **Save** writes the document to disk, **Open** restores it. The just-merged op-log
-"Save" is **one-way** (it serializes the in-effect piece ops, but Open/replay is unwired — and pure replay
-is blocked: Propose isn't journaled, so the seeded partition can't rebuild, and op ids are session-local).
-This spec makes the round-trip robust by saving **state, not a recipe**.
-
-Sequel to [`DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md) (Real/Transient/Ephemeral) and
-[`SOLVER-PHASE.md`](../archive/SOLVER-PHASE.md). Two parts: **Design Note** + **Implementation Plan**.
+Sequel to [`DOC-TX-REFACTOR.md`](../DOC-TX-REFACTOR.md) (Real/Transient/Ephemeral). Two parts: **Design
+Note** + **Implementation Plan**.
 
 ---
 
 # Part 1 — Design Note
 
-## The principle: save Real, regen Transient, discard Ephemeral
+## The principle: neutral for as long as we can
 
-This is the third thing the Real/Transient/Ephemeral line governs (the other two: undo, regen). The document
-file is **exactly the Real state**:
+The guiding constraint (the brainstorm's first decision) is **interop-first**: prefer an open interchange
+format other tools (Rhino, Blender, MeshLab) read, and keep a proprietary surface at **zero** for as long as
+the data can be expressed neutrally. A CreaseStudio document is therefore a **plain `.obj`** — it opens
+anywhere as an ordinary grouped mesh; only CreaseStudio also reads the partition out of it.
 
-- **Real → serialized:** the **mesh** (geometry + topology), the **`Pattern.PieceMap`** (the partition), and
-  the **params** (Accuracy, Subdiv level, Crease ∠, the bake/iso settings). *(Later, when they become Real:
-  crease types `separate`/`join`, seam B-splines.)*
-- **Transient → NOT serialized, regenerated on Open:** `CreaseMap` (regen from `PieceMap`), the developed
-  PieceMesh, the flat panels, overlays. (You re-Solve to get the develop back — or, later, the optional
-  "save with caches" knob embeds it.)
-- **Ephemeral → discarded:** selection, camera, active phase. Open starts fresh.
+This rides the Real/Transient/Ephemeral line (the third thing it governs, after undo + regen), but trimmed
+by the interop constraint and the "params aren't document state" decision:
 
-## Why a self-contained snapshot, not journal-replay
+- **Saved (Real, minus params):** the **authoring mesh** (geometry + exact topology) and the
+  **`Pattern.PieceMap`** (the partition), encoded as OBJ **face groups**.
+- **NOT saved — params:** Accuracy, Subdiv level, Crease ∠, iso/bend/anchor/scale weights, seam-pin. These
+  are treated as **app/session preferences, not document state** (Decision 3). Open uses whatever the UI
+  currently holds. *(Consequence, accepted: reopening + Solving may develop differently than at save time.)*
+- **NOT saved — Transient:** `CreaseMap` (regen from `PieceMap`), the developed PieceMesh + per-piece
+  `SolvedPiece` cache, the flat panels, overlays. Re-Solve regenerates; the cache rebuilds.
+- **Discarded — Ephemeral:** selection, camera, active phase. Open starts fresh.
 
-Two candidate formats:
+## The format: a plain grouped `.obj`
 
-| | **(A) Snapshot** (recommended) | **(B) Journal-replay** |
-|---|---|---|
-| Save | the Real state: embedded mesh + `PieceMap` + params | `load <path>` + the `setpiece` op-lines + params |
-| Open | read state → rebuild Doc + regen Transients | re-`load` the source, **re-Propose**, re-apply ops |
-| Self-contained? | **yes** (mesh embedded) | no — depends on the source file at `<path>` |
-| Needs deterministic Propose? | **no** — saves the *result* (`PieceMap`) | **yes** — replays edits *onto* the seed (the blocker) |
-| Needs stable GUIDs? | **no** — the file is internally index-consistent | yes — op ids are session-local today |
-| Speed | fast | slow (re-runs the flow on Open) |
-| Human-readable / scriptable | less (it's state) | **yes** (it's a script) |
-
-**Snapshot wins for document persistence** precisely because it stores the *result*, sidestepping all three
-known gaps (Propose-determinism, id-stability, source-file dependency). We save `PieceMap` directly, so a
-re-Propose is never needed and the indices are self-consistent within the file.
-
-**The `.journal` op-log keeps its own job** — it's the **replay / scripting / CLI-parity** artifact (and the
-live undo stream), not the document format. So reframe: **File > Save/Open = the document snapshot**; the
-op-log/journal becomes **Export/Replay Journal** (the Console's existing Save button / a separate menu).
-Two artifacts, two purposes — don't conflate them. (If scripting later needs to rebuild pieces, *that's* when
-Propose gets journaled + GUIDs land; the document round-trip doesn't wait on it.)
-
-## The format
-
-A single self-contained file (`*.crease` — own extension so it's distinct from `.journal` and from mesh
-imports). **JSON** for v1 (System.Text.Json, PieceSolver is net8): human-inspectable, versioned, easy.
-
-```jsonc
-{
-  "version": 1,
-  "source": "Unwelded.fbx",          // provenance only (the mesh is embedded; not loaded from here)
-  "vertices": [x,y,z, x,y,z, ...],   // flat double[] (nV*3)
-  "faces":    [a,b,c, a,b,c, ...],   // flat int[] (nF*3); triangles (quads triangulate on import)
-  "pieceMap": [p, p, ...],           // int[] (nF) — the partition (Real)
-  "params":   { "accuracyPct": 1.0, "subdivLevel": 1, "creaseAngleDeg": 10, "iso": 1.0, "fair": ..., "anchor": ..., "bend": ..., "fixEdges": false, "seamRatio": ... }
-}
+```obj
+# faces written UNWELDED — coincident seam verts stay separate (FBX-style topology survives; reader never merges)
+v 0.0 0.0 0.0
+v 1.0 0.0 0.0
+...
+g piece_0
+f 1 2 3
+f 1 3 4
+g piece_5            # the stable MintId id is the group token: piece_<id>
+f 5 6 7
+...
 ```
 
-The embedded mesh stores vertices + face-index triples explicitly, so it **preserves exact topology**,
-including FBX-style **unwelded seams** (coincident-but-separate verts → one component per piece). An STL
-re-weld would lose that — which is the other reason not to "just save an STL + a sidecar."
+- **Pieces = OBJ face groups**, one `g piece_<id>` per piece, emitted before that piece's faces. `<id>` is the
+  stable `MintId` id (so identity round-trips within a session; ids may still be renumbered on a later load —
+  the accepted session-only-identity stance). Group token is **`g`** (the standard face-group idiom), chosen
+  over `o` / `usemtl` / a `# piece` comment.
+- **Unwelded fidelity:** we own the writer, so it emits the mesh's vertices as-is (no merge) → an unwelded
+  authoring mesh (per-piece components, FBX solids) reproduces exactly; a welded one stays welded. The reader
+  adds verts/faces verbatim and never re-welds. This is *the* reason OBJ-with-groups beats "an STL + a
+  sidecar" (STL re-welds).
+- **Extension: plain `.obj`.** Opening it in Rhino/Blender/MeshLab yields the mesh as a grouped object; those
+  tools ignore nothing they can't use (it's all valid OBJ). CreaseStudio recognizes its own files by the
+  `piece_` groups — no custom extension, no magic header.
+- **No params, no app metadata in the file** → it is a *pure* OBJ. Zero proprietary surface.
 
-## Round-trip
+## Save captures the authoring document; Export captures the developed result
 
-- **Save:** `mesh = _session.Mesh`, `pieceMap = _pattern.PieceMap`, `params = _sim` → write JSON.
-- **Open:** read JSON → build `PlanktonMesh` (Vertices.Add + Faces.AddFace) → `new FlowSession(mesh)` →
-  `RebindPattern()` → `_pattern.PieceMap = saved` → `RegenCrease()` (Transients regen) → restore `_sim`
-  params → upload + frame. Selection/camera/`_developed` start fresh (Ephemeral/Transient).
+Two distinct verbs, two purposes (don't conflate):
+
+- **Save** = the **authoring mesh + partition** — the reopenable document (so you keep editing). The
+  developed result is never in a Save (it's Transient; re-Solve).
+- **Export** (already built) = the **developed / flat** geometry as OBJ/STL — the fabrication deliverable.
+
+Both happen to write OBJ; they differ in *what* (authoring+groups vs developed) and *why* (reopen vs fab).
+
+## Open vs Import — kept separate (Decision 4)
+
+Because the document is just an OBJ, Open and Import are mechanically close, but they stay **distinct verbs by
+intent**:
+
+- **Open** — load a CreaseStudio document: parse `g piece_<id>` → `PieceMap`, land in the **Piecing phase**
+  with the partition restored. A plain OBJ with no `piece_` groups opens as a single unpieced mesh. Sets the
+  current document path.
+- **Import** — bring in **raw geometry** (STL / FBX / plain OBJ) to start a **new** piecing from scratch:
+  geometry only, any groups ignored, → Propose. Does **not** set the document path (untitled).
+
+## The neutrality boundary (named, deferred)
+
+The file stays pure-OBJ until a **Real appears that OBJ can't express** — **crease identity** (creases as
+first-class objects, not derived) and **seam B-splines**. At that point we revisit, preferring to keep the
+neutral OBJ *unpolluted* (a sidecar, or a proprietary container that *embeds* the OBJ) over stuffing
+non-neutral data into comments — consistent with the "don't save params in the file" stance. Until then there
+is no proprietary surface at all.
+
+The one-way **`.journal`** op-log Save stays exactly as-is — the separate **replay / scripting / CLI-parity**
+artifact (and live undo stream), not the document format. (Closing journal *replay* = its own effort, gated
+on Propose-journaling.)
 
 ## Decisions
 
-1. **File > Save/Open serialize the Real state as a self-contained snapshot** (embedded mesh + `PieceMap` +
-   params). Robust round-trip; no re-Propose, no GUID dependency, no source-file dependency.
-2. **`.crease` JSON** (v1), with a `version` field for forward migration.
-3. **Transients regenerate on Open; Ephemeral starts fresh.** The developed mesh is *not* saved (re-Solve) —
-   a "save with caches" knob is the deferred optional extra.
-4. **The op-log/`.journal` stays the replay/scripting artifact**, reframed as Export/Replay Journal — *not*
-   File > Save. (Closing the journal-replay gap = a separate effort, gated on Propose-journaling + GUIDs.)
-5. **Menu/shortcuts:** `File > Open…` (**Ctrl+O**, the document), `Import…` (mesh — STL/FBX/OBJ, the one just
-   added; **move it off Ctrl+O** since Open is the more primary verb), `Save` (**Ctrl+S**) / `Save As…`,
-   `Revert`, then Export/Replay Journal under Window or File.
+1. **Interop-first:** the document is a neutral file for as long as the data can be expressed neutrally; zero
+   proprietary surface until forced.
+2. **Format = plain grouped `.obj`** — mesh (unwelded-faithful) + partition as `g piece_<id>` face groups.
+3. **Params are NOT saved** — app/session preferences, not document state. Open uses current UI values.
+4. **Open vs Import kept separate** — Open restores a grouped-OBJ document (partition); Import loads raw
+   geometry (STL/FBX/OBJ) to start a new piecing.
+5. **Save = authoring + partition; Export = developed/flat** (existing). Two verbs, two purposes.
+6. **Group token `g piece_<id>`** (stable MintId id), over `o` / `usemtl` / comment encodings.
+7. **Menu/shortcuts:** `File > Open…` (**Ctrl+O**), `Save` (**Ctrl+S**) / `Save As…`, `Import…` (move **off**
+   Ctrl+O), `Revert`, `Export…` (existing). The Console's `.journal` Save/Load stays where it is.
 
 ## Non-goals (deferred)
 
-Unifying the document format with the journal · serializing crease types / seam B-splines (add to the schema
-when they become Real) · embedding the developed PieceMesh as a cache · binary/compressed format · stable
-GUIDs (the snapshot doesn't need them).
+Crease-identity / seam-B-spline serialization (the neutrality boundary) · embedding the developed PieceMesh /
+`SolvedPiece` cache · binary/compressed format · unifying the document with the `.journal` · params-in-file
+(explicitly rejected) · stable cross-session ids (session-only stance).
 
 ---
 
@@ -105,32 +120,36 @@ GUIDs (the snapshot doesn't need them).
 
 Build-green per step; one commit each.
 
-### Phase 1 — `DocumentIO` (pure serialize / deserialize)
-- `PieceSolver/DocumentIO.cs`: `Save(string path, PlanktonMesh mesh, int[] pieceMap, DocParams p)` and
-  `Load(string path, out PlanktonMesh mesh, out int[] pieceMap, out DocParams p)` over the JSON schema
-  above (System.Text.Json). `DocParams` = a small POCO mirroring the saved `_sim` fields.
-- A version check on Load (reject/upgrade unknown versions with a clear message).
-- **Headless-ish sanity** (a tiny round-trip test, or a `crease`-CLI hook): Save a mesh + a 2-piece
-  `pieceMap` → Load → assert verts/faces/pieceMap identical and topology (component count) preserved.
+### Phase 1 — engine: OBJ groups round-trip (shared `src/MeshIO.cs`)
+- **Write:** add an optional `int[] pieceMap` to `WriteObj` (overload) — emit `g piece_<id>` before each
+  piece's face run (group faces by id; ascending id order). With no `pieceMap`, behaviour is unchanged
+  (today's plain WriteObj). Verts stay unwelded (already the behaviour).
+- **Read:** `LoadObj` parses `g <name>` lines; when a name matches `piece_<int>`, assign that id to subsequent
+  faces → produce an `out int[] pieceMap` (faces before any group, or a non-`piece_` group, → a default id 0).
+  Plain OBJs (no groups) → all-zero `pieceMap` (single piece) / or signal "no partition."
+- **Round-trip test** (headless / CLI hook): a mesh + a 2-piece `pieceMap` → Write → Load → assert
+  verts/faces/`pieceMap` identical and component count (unweld) preserved. This is the gate.
 
-### Phase 2 — wire File > Open / Save / Save As
-- **Save / Save As:** `SaveFileDialog` (`*.crease`) → `DocumentIO.Save(path, _session.Mesh, _pattern.PieceMap,
-  DocParams.From(_sim))`. Track the current doc path so `Ctrl+S` re-saves silently, `Save As` always prompts.
-- **Open:** `OpenFileDialog` (`*.crease`) → `DocumentIO.Load` → set `_session`/`_meshPath`-equivalent →
-  `RebindPattern` → `_pattern.PieceMap = loaded` → `RegenCrease` → apply params to `_sim` → upload + `_reframe`
-  → activate the Piecer (post-load you're in the Piecing phase with the restored partition).
-- Reshuffle shortcuts per Decision 5 (Open = Ctrl+O; Import drops Ctrl+O).
+### Phase 2 — app: File > Open / Save / Save As (PieceSolver)
+- **Save / Save As:** `SaveFileDialog` (`*.obj`) → `MeshIO.WriteObj(path, authoringMesh, pieceMap)`. Track the
+  current document path so `Ctrl+S` re-saves silently; `Save As` always prompts + retargets the path.
+- **Open:** `OpenFileDialog` (`*.obj`) → `MeshIO.LoadObj(path, out mesh, out pieceMap)` → `new FlowSession` →
+  `RebindPattern()` → set `Pattern.PieceMap` → regen Transients → activate the Piecer with the restored
+  partition → upload + frame. Sets the document path. (Selection/camera/develop start fresh.)
+- **Import:** keep the existing mesh import (STL/FBX/OBJ → geometry, → Propose); **move it off Ctrl+O**; it
+  leaves the document untitled.
 
 ### Phase 3 — polish
-- Title-bar dirty marker + "save before Open/Revert/quit?" prompt (since the document now has unsaved state).
-- Error handling: corrupt/old file, face/vertex-count mismatch (reject cleanly).
+- Title-bar **dirty marker** (`*`) + **"save changes?"** prompt on Open / Import / Revert / quit.
+- Error handling: unreadable/short OBJ, group/face mismatch → reject cleanly with a Console message.
 
 ### Deferred (named)
-- Reframe the op-log Save → "Export Journal" + wire journal **replay** (needs Propose-journaling + GUIDs).
-- Crease-types/seams in the schema (when Real). Optional develop-cache embed. Binary format if files get big.
+- Crease-identity / seam serialization at the neutrality boundary (sidecar or embedding container).
+- Optional develop-cache embed · binary format if files get big · journal *replay*.
 
 ## Verification & risks
-- Each step builds 0/0 + launches; Phase 1's round-trip test is the gate (Save→Load→identical).
-- **Topology fidelity** is the main risk: the embedded mesh must reproduce *exact* face/vertex indexing so
-  `PieceMap` stays index-coupled (and unwelded seams survive). The round-trip test covers it.
-- No engine/solver changes → bench checksums unaffected. The document Save/Open is PieceSolver-only (net8).
+- Each step builds 0/0 + launches; Phase 1's round-trip test is the gate.
+- **Topology fidelity** is the main risk: the writer must emit, and the reader reproduce, *exact* vertex/face
+  indexing so `PieceMap` stays index-coupled and unwelded seams survive. The round-trip test covers it.
+- No engine/solver math changes → bench checksums unaffected. Document Save/Open is PieceSolver-only (net8)
+  plus the shared `MeshIO` OBJ group support (also usable from the CLI).
