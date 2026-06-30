@@ -540,6 +540,7 @@ namespace PieceSolver
         bool[] _coneLock;      // per-vertex: true at junctions where >=3 creases meet — Dirichlet-locked (cone points)
         bool _coupledCrease;   // route RunBake -> coupled / free-float develop (a pieced mesh with creases)
         bool _freeFloat;       // route RunBake -> RunBakeFreeFloat (unweld + corner-pin)
+        PlanktonMesh _freeFloatResult;  // assembled per-panel free-float result (a panel = its Dev2PQ remesh if PQSuccess, else its developed mesh); non-null only when >=1 panel PQ'd — else the stamped _session.Mesh is shown
         bool[] _cornerPin;     // per-vertex (UNWELDED indexing): crease corners — Dirichlet pin (Free-float)
 
         // ---- fixed B-spline seam edges (bent-wire pins) ----
@@ -665,7 +666,7 @@ namespace PieceSolver
                     if (first < 0) first = pieceMap[f]; else if (pieceMap[f] != first) { pieced = true; break; }
                 }
             }
-            _noSmooth = null; _coneLock = null; _coupledCrease = false; _freeFloat = false; _cornerPin = null;
+            _noSmooth = null; _coneLock = null; _coupledCrease = false; _freeFloat = false; _cornerPin = null; _freeFloatResult = null;
             int[] unweldVMap = null;   // display unweld: developed-welded vertex -> unwelded copy index (built in the finally)
             PlanktonMesh developMesh = null;
             if (pieced)
@@ -727,7 +728,9 @@ namespace PieceSolver
                     // renders as a real fold (coincident copies, distinct normals). Single/FBX paths show as-is.
                     // FREE-FLOAT solved the UNWELDED mesh directly, so _session.Mesh already carries the fold/gaps —
                     // show it as-is. COUPLED solved the WELDED mesh, so unweld for display so the crease renders.
-                    PlanktonMesh shown = _session.Mesh;
+                    // FREE-FLOAT with PQ: the assembled per-panel result (mixed PQ/developed topology). Without PQ
+                    // (or any other path): _session.Mesh, which the coupled branch may then unweld.
+                    PlanktonMesh shown = (_freeFloat && _freeFloatResult != null) ? _freeFloatResult : _session.Mesh;
                     if (_coupledCrease && !_freeFloat && pieceMap != null)
                     {
                         // Unweld AUTHORING (face+vertex aligned with pieceMap), then stamp the developed positions
@@ -1293,8 +1296,9 @@ namespace PieceSolver
         void RunBakeFreeFloat(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
         {
             var comps = CreaseMachine.MeshOps.SplitComponents(_session.Mesh, out var vmaps);
-            int pieces = comps.Count, flattened = 0, freePanels = 0; double worst = 0;
+            int pieces = comps.Count, flattened = 0, freePanels = 0, pqCount = 0; double worst = 0;
             var flatCombined = TopologyClone(_session.Mesh);
+            var results = new System.Collections.Generic.List<PlanktonMesh>();   // per-panel 3D result: the Dev2PQ remesh if PQSuccess, else the developed component
             double xoff = 0;
             for (int c = 0; c < comps.Count && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; c++)
             {
@@ -1305,17 +1309,29 @@ namespace PieceSolver
                 for (int local = 0; local < vmap.Length && local < pin.Length; local++)
                     if (_cornerPin != null && vmap[local] < _cornerPin.Length && _cornerPin[vmap[local]]) { pin[local] = true; np++; }
                 if (np == 0) freePanels++;
-                DevelopComponent(pc, flat, np > 0 ? pin : null, target, sw, budgetMs);
+                DevelopComponent(pc, flat, np > 0 ? pin : null, target, sw, budgetMs);   // Dev0 (settled)
                 for (int v = 0; v < vmap.Length; v++) { var p = pc.Vertices[v]; _session.Mesh.Vertices[vmap[v]].X = p.X; _session.Mesh.Vertices[vmap[v]].Y = p.Y; _session.Mesh.Vertices[vmap[v]].Z = p.Z; }
                 xoff = PlaceFlatPiece(flat, flatCombined, vmap, xoff);
                 double e = RelErr(pc, flat); if (e > worst) worst = e; flattened++;
-                _bakeProgress?.Report(((c + 1.0) / comps.Count, "panel " + (c + 1) + "/" + comps.Count + "  ·  worst " + (worst * 100.0).ToString("0.##") + "%"));
+                // Dev0 settled -> attempt Dev2PQ (5s timeout, no deviance metric — a result IS the success). On
+                // PQSuccess the ruling-aligned PQ remesh IS this panel's result ("PQ used as Dev0"); the subdivide
+                // chain is moot (sub0-only here). Crash/hang/empty -> false -> keep the developed panel.
+                PlanktonMesh pr = pc;
+                if (Dev2PQ.TryDev2PQ(pc, 5000, out var pq, out var pqlog)) { pr = pq; pqCount++; }
+                if (!string.IsNullOrWhiteSpace(pqlog)) _bakeLog.Add("panel " + c + ": " + pqlog.TrimEnd());
+                results.Add(pr);
+                _bakeProgress?.Report(((c + 1.0) / comps.Count, "panel " + (c + 1) + "/" + comps.Count + "  ·  " + pqCount + " PQ  ·  worst " + (worst * 100.0).ToString("0.##") + "%"));
             }
+            // If any panel PQ'd, the result mixes topologies (PQ polygons + developed tris), so assemble the
+            // per-panel results into one mesh. If none PQ'd, the stamped _session.Mesh stays the result (keeps the
+            // flat<->3D index alignment intact). (dev2pq/DEV2PQ-INTEGRATION.md)
+            _freeFloatResult = (pqCount > 0) ? CombineMeshes(results) : null;
             _flat = flatCombined; _hasFlat = true; _bffNeeded = false;
             _bakeStrain = worst * 100.0;
+            int outVerts = (_freeFloatResult ?? _session.Mesh).Vertices.Count;
             _bakeSummary = flattened + "/" + pieces + " panels  free-float (corner-pinned"
-                + (freePanels > 0 ? ", " + freePanels + " unanchored" : "") + ")  worst strain "
-                + (worst * 100.0).ToString("0.###") + "%  (" + _session.Mesh.Vertices.Count + " verts)";
+                + (freePanels > 0 ? ", " + freePanels + " unanchored" : "") + ")  " + pqCount + "/" + flattened + " PQ"
+                + "  worst strain " + (worst * 100.0).ToString("0.###") + "%  (" + outVerts + " verts)";
         }
 
         // Develop one component to the accuracy target with a given Dirichlet pin (null = unanchored). Supported
@@ -1333,6 +1349,30 @@ namespace PieceSolver
                 if (prev - pct < 1e-5) break;
                 prev = pct;
             }
+        }
+
+        // Concatenate per-panel result meshes (each its own topology — Dev2PQ polygon strips and/or developed
+        // triangles) into one PlanktonMesh, offsetting each panel's face indices by the running vertex base.
+        // The free-float result when Dev2PQ gave panels mixed topology.
+        static PlanktonMesh CombineMeshes(System.Collections.Generic.List<PlanktonMesh> meshes)
+        {
+            var outM = new PlanktonMesh();
+            foreach (var m in meshes)
+            {
+                if (m == null) continue;
+                int baseIdx = outM.Vertices.Count;
+                for (int v = 0; v < m.Vertices.Count; v++) { var p = m.Vertices[v]; outM.Vertices.Add(p.X, p.Y, p.Z); }
+                for (int f = 0; f < m.Faces.Count; f++)
+                {
+                    if (m.Faces[f].IsUnused) continue;
+                    var fv = m.Faces.GetFaceVertices(f);
+                    if (fv == null || fv.Length < 3) continue;
+                    var off = new int[fv.Length];
+                    for (int k = 0; k < fv.Length; k++) off[k] = fv[k] + baseIdx;
+                    try { outM.Faces.AddFace(off); } catch { }
+                }
+            }
+            return outM;
         }
 
         // Worker-safe flatten: BFF the live mesh into _flat + the anchor M0; NO GL upload (the UI thread
