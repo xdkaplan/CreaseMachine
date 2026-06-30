@@ -1,0 +1,5 @@
+# dev2pq build artifacts (rebuild with build.bat; see BUILD.md). The exe + GMP runtime dlls are
+# deployed next to the exe, like bff-command-line.exe — not committed.
+*.exe
+*.dll
+*.obj
