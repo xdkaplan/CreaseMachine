@@ -428,15 +428,29 @@ void main() {
                 if (P.Faces[f].IsUnused) continue;
                 int[] fv = P.Faces.GetFaceVertices(f);
                 if (fv == null || fv.Length < 3) continue;
-                // Fan-triangulate n-gons (Dev2PQ strips are quads/polygons): (0,1,2),(0,2,3),… from corner 0.
-                // A triangle (len 3) yields exactly one tri — unchanged from before.
-                int a = map[fv[0]];
-                if (a < 0) continue;
-                for (int k = 1; k + 1 < fv.Length; k++)
+                if (fv.Length == 4)
                 {
-                    int b = map[fv[k]], c = map[fv[k + 1]];
-                    if (b < 0 || c < 0) continue;
-                    tris.Add((a, b, c));
+                    // Quad (the common Dev2PQ strip face): split along the SHORTER diagonal so a skewed / slightly
+                    // non-planar quad folds along its natural diagonal — fanning always from corner 0 puts the same
+                    // (often wrong) crease on every quad.
+                    int a = map[fv[0]], b = map[fv[1]], c = map[fv[2]], d = map[fv[3]];
+                    if (a < 0 || b < 0 || c < 0 || d < 0) continue;
+                    if ((pos[a] - pos[c]).LengthSquared <= (pos[b] - pos[d]).LengthSquared)
+                    { tris.Add((a, b, c)); tris.Add((a, c, d)); }   // diagonal a-c
+                    else
+                    { tris.Add((b, c, d)); tris.Add((b, d, a)); }   // diagonal b-d
+                }
+                else
+                {
+                    // Triangle (one tri, unchanged) or general n-gon: fan from corner 0.
+                    int a = map[fv[0]];
+                    if (a < 0) continue;
+                    for (int k = 1; k + 1 < fv.Length; k++)
+                    {
+                        int b = map[fv[k]], c = map[fv[k + 1]];
+                        if (b < 0 || c < 0) continue;
+                        tris.Add((a, b, c));
+                    }
                 }
             }
 
