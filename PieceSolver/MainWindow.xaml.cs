@@ -84,6 +84,7 @@ namespace PieceSolver
         CancellationToken _bakeToken;
         IProgress<(double frac, string text)> _bakeProgress;
         int _bakeGen;   // bake epoch: bumped on every _developed invalidation; a bake Supplies only if its captured gen still matches (no invalidation landed mid-bake)
+        long _lastBakeSalt;   // Solve-param/level fingerprint of the last free-float bake; a change rots every SolvedPiece (INCREMENTAL-SOLVE §5a)
 
         // Crease proposer: cached per-edge settled fold angles + endpoint vertex indices from the last
         // Propose, so the Crease angle slider re-labels the overlay without re-proposing. The Propose
@@ -1326,44 +1327,87 @@ namespace PieceSolver
         // float along the creases -> they gap / overlap. sub0 only (no subdivision in this compare MVP).
         void RunBakeFreeFloat(System.Diagnostics.Stopwatch sw, long budgetMs, double target)
         {
-            var comps = CreaseMachine.MeshOps.SplitComponents(_session.Mesh, out var vmaps);
-            int pieces = comps.Count, flattened = 0, freePanels = 0, pqCount = 0; double worst = 0;
+            // INCREMENTAL (INCREMENTAL-SOLVE.md): each component is one piece (the develop mesh is unwelded BY
+            // region, faces 1:1 with authoring), so we key a SolvedPiece cache by the authoring piece id and skip
+            // BFF + LM + Dev2PQ for any piece whose develop input is unchanged. A Solve-param/level change (the
+            // salt) rots every piece; a Pattern edit already rotted the touched ones (Pattern.Apply/Invert).
+            var comps = CreaseMachine.MeshOps.SplitComponents(_session.Mesh, out var vmaps, out var fmaps);
+            var pat = _doc.Pattern; var pieceMap = pat?.PieceMap;   // authoring per-face; develop-mesh faces are 1:1 with it
+            long salt = SaltHash(target);
+            if (salt != _lastBakeSalt) { pat?.RotAllSolved(); _lastBakeSalt = salt; }
+
+            int pieces = comps.Count, flattened = 0, freePanels = 0, pqCount = 0, reused = 0; double worst = 0;
             var flatCombined = TopologyClone(_session.Mesh);
-            var results = new System.Collections.Generic.List<PlanktonMesh>();   // per-panel 3D result: the Dev2PQ remesh if PQSuccess, else the developed component
+            var results = new System.Collections.Generic.List<PlanktonMesh>();   // per-panel 3D result (cached or fresh) -> assembled into the developed mesh
             double xoff = 0;
             for (int c = 0; c < comps.Count && sw.ElapsedMilliseconds < budgetMs && !_bakeToken.IsCancellationRequested; c++)
             {
+                var vmap = vmaps[c];
+                int pid = (pieceMap != null && fmaps[c].Length > 0 && fmaps[c][0] < pieceMap.Length) ? pieceMap[fmaps[c][0]] : c;
+                var sp = pat?.SolvedFor(pid);
+                long h = PieceHash(fmaps[c], salt);
+
+                // Tier 1 (fresh: not rotted since last bake) or Tier 2 (rotted but input hash unchanged): REUSE the
+                // cached develop, skipping BFF + LM + Dev2PQ. Else Tier 3: develop and cache.
+                if (sp != null && sp.HasBake && (sp.IsFresh || h == sp.BakedHash))
+                {
+                    sp.Peek(out var crm, out var cfl); sp.Revalidate();
+                    results.Add(crm);
+                    if (cfl != null) xoff = PlaceFlatPiece(cfl, flatCombined, vmap, xoff);
+                    if (sp.Strain > worst) worst = sp.Strain;
+                    flattened++; reused++;
+                    _bakeProgress?.Report(((c + 1.0) / comps.Count, "panel " + (c + 1) + "/" + comps.Count + " (cached)"));
+                    continue;
+                }
+
                 var pc = comps[c];
                 if (!Bff.TryFlatten(pc, out var flat, out var log)) { if (!string.IsNullOrWhiteSpace(log)) _bakeLog.Add("panel " + c + ": " + log.TrimEnd()); continue; }
-                var vmap = vmaps[c];
                 var pin = new bool[pc.Vertices.Count]; int np = 0;
                 for (int local = 0; local < vmap.Length && local < pin.Length; local++)
                     if (_cornerPin != null && vmap[local] < _cornerPin.Length && _cornerPin[vmap[local]]) { pin[local] = true; np++; }
                 if (np == 0) freePanels++;
                 DevelopComponent(pc, flat, np > 0 ? pin : null, target, sw, budgetMs);   // Dev0 (settled)
-                for (int v = 0; v < vmap.Length; v++) { var p = pc.Vertices[v]; _session.Mesh.Vertices[vmap[v]].X = p.X; _session.Mesh.Vertices[vmap[v]].Y = p.Y; _session.Mesh.Vertices[vmap[v]].Z = p.Z; }
                 xoff = PlaceFlatPiece(flat, flatCombined, vmap, xoff);
-                double e = RelErr(pc, flat); if (e > worst) worst = e; flattened++;
+                double e = RelErr(pc, flat) * 100.0; if (e > worst) worst = e; flattened++;
                 // Dev0 settled -> attempt Dev2PQ (5s timeout, no deviance metric — a result IS the success). On
-                // PQSuccess the ruling-aligned PQ remesh IS this panel's result ("PQ used as Dev0"); the subdivide
-                // chain is moot (sub0-only here). Crash/hang/empty -> false -> keep the developed panel.
+                // PQSuccess the ruling-aligned PQ remesh IS this panel's result; crash/hang/empty -> developed panel.
                 PlanktonMesh pr = pc;
                 if (Dev2PQ.TryDev2PQ(pc, 5000, out var pq, out var pqlog)) { pr = pq; pqCount++; }
                 if (!string.IsNullOrWhiteSpace(pqlog)) _bakeLog.Add("panel " + c + ": " + pqlog.TrimEnd());
+                sp?.Bake(pr, flat, h, e);   // cache 3D result + flat + input hash + strain for the next Solve
                 results.Add(pr);
-                _bakeProgress?.Report(((c + 1.0) / comps.Count, "panel " + (c + 1) + "/" + comps.Count + "  ·  " + pqCount + " PQ  ·  worst " + (worst * 100.0).ToString("0.##") + "%"));
+                _bakeProgress?.Report(((c + 1.0) / comps.Count, "panel " + (c + 1) + "/" + comps.Count + "  ·  " + pqCount + " PQ  ·  worst " + worst.ToString("0.##") + "%"));
             }
-            // If any panel PQ'd, the result mixes topologies (PQ polygons + developed tris), so assemble the
-            // per-panel results into one mesh. If none PQ'd, the stamped _session.Mesh stays the result (keeps the
-            // flat<->3D index alignment intact). (dev2pq/DEV2PQ-INTEGRATION.md)
-            _pqResult = (pqCount > 0) ? CombineMeshes(results) : null;
+            // Free-float ALWAYS assembles the per-panel results (cached + fresh) into one mesh — this is what lets
+            // an unchanged panel's cached geometry combine with the re-developed ones. (Replaces the old stamp-into-
+            // _session.Mesh path.) Empty (every panel failed) -> null -> OnSolveAsync falls back to _session.Mesh.
+            _pqResult = results.Count > 0 ? CombineMeshes(results) : null;
             _flat = flatCombined; _hasFlat = true; _bffNeeded = false;
-            _bakeStrain = worst * 100.0;
+            _bakeStrain = worst;
             int outVerts = (_pqResult ?? _session.Mesh).Vertices.Count;
-            _bakeSummary = flattened + "/" + pieces + " panels  free-float (corner-pinned"
-                + (freePanels > 0 ? ", " + freePanels + " unanchored" : "") + ")  " + pqCount + "/" + flattened + " PQ"
-                + "  worst strain " + (worst * 100.0).ToString("0.###") + "%  (" + outVerts + " verts)";
+            _bakeSummary = flattened + "/" + pieces + " panels  free-float (" + (flattened - reused) + " developed, " + reused + " cached"
+                + (freePanels > 0 ? ", " + freePanels + " unanchored" : "") + ")  " + pqCount + " PQ"
+                + "  worst strain " + worst.ToString("0.###") + "%  (" + outVerts + " verts)";
         }
+
+        // Solve-param/level fingerprint: any change invalidates every SolvedPiece (global rot, INCREMENTAL-SOLVE
+        // §5a). Authoring vertex positions are constant within a Pattern (a mesh change rebinds -> empty cache),
+        // so they need not be hashed here.
+        long SaltHash(double target)
+        {
+            long h = 1469598103934665603L;   // FNV-1a offset basis
+            h = HashD(h, _sim.IsoWeight); h = HashD(h, _sim.FairWeight); h = HashD(h, _sim.AnchorWeight);
+            h = HashD(h, _sim.ScaleWeight); h = HashD(h, _sim.BendWeight); h = HashD(h, target);
+            h = HashI(h, _sim.DiffFair ? 1 : 0); h = HashI(h, _sim.BendDiff ? 1 : 0);
+            h = HashI(h, _sim.CreaseMode); h = HashI(h, _sim.SubdivLevel);
+            return h;
+        }
+        // Per-piece input hash: the face-set (the develop input that varies as pieces are edited) folded into the
+        // param salt. Faces arrive ascending+deterministic from SplitComponents, so identical content hashes alike.
+        static long PieceHash(int[] faces, long salt)
+        { long h = salt; for (int i = 0; i < faces.Length; i++) h = (h * 1099511628211L) ^ (uint)faces[i]; return h; }
+        static long HashD(long h, double d) => (h * 1099511628211L) ^ BitConverter.DoubleToInt64Bits(d);
+        static long HashI(long h, int i) => (h * 1099511628211L) ^ (uint)i;
 
         // Develop one component to the accuracy target with a given Dirichlet pin (null = unanchored). Supported
         // path (the corner-pinned free-float develop) — distinct from the abandoned whole-boundary DevelopPiece.

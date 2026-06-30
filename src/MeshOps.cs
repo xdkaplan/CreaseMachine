@@ -375,6 +375,11 @@ namespace CreaseMachine
         /// interior edges). vertexMaps[c][localVertex] = the source mesh's vertex index, so a solved piece
         /// can be written back in place. Each sub-mesh keeps its own boundary loop(s).</summary>
         public static List<PlanktonMesh> SplitComponents(PlanktonMesh M, out List<int[]> vertexMaps)
+            => SplitComponents(M, out vertexMaps, out _);
+
+        /// <summary>As SplitComponents, plus faceMaps[c][localFace] = the source mesh's face index — lets a
+        /// caller map a component back to per-face attributes (e.g. a piece id from a pieceMap).</summary>
+        public static List<PlanktonMesh> SplitComponents(PlanktonMesh M, out List<int[]> vertexMaps, out List<int[]> faceMaps)
         {
             int nF = M.Faces.Count;
             var uf = new UnionFind(nF);
@@ -387,7 +392,7 @@ namespace CreaseMachine
                 if (!groups.TryGetValue(r, out var g)) { g = new List<int>(); groups[r] = g; }
                 g.Add(f);
             }
-            var pieces = new List<PlanktonMesh>(); vertexMaps = new List<int[]>();
+            var pieces = new List<PlanktonMesh>(); vertexMaps = new List<int[]>(); faceMaps = new List<int[]>();
             foreach (var g in groups.Values)
             {
                 var sub = new PlanktonMesh();
@@ -403,7 +408,7 @@ namespace CreaseMachine
                     }
                     sub.Faces.AddFace(lf);
                 }
-                pieces.Add(sub); vertexMaps.Add(vmap.ToArray());
+                pieces.Add(sub); vertexMaps.Add(vmap.ToArray()); faceMaps.Add(g.ToArray());
             }
             return pieces;
         }
