@@ -421,62 +421,65 @@ void main() {
             Center = (bb0 + bb1) * 0.5f;
             Radius = MathF.Max(1e-4f, (bb1 - bb0).Length * 0.5f);
 
-            // collect triangles (compact vertex indices)
-            var tris = new List<(int a, int b, int c)>(P.Faces.Count);
+            // Faceting: a mesh with n-gon faces (Dev2PQ PQ strips) renders FLAT PER-FACE — split verts, one
+            // Newell normal per face — so the triangulation's diagonal ("false edge") is invisible while the real
+            // quad-boundary edges stay crisp. An all-triangle mesh keeps smooth averaged-normal shading.
+            bool hasNgon = false;
             for (int f = 0; f < P.Faces.Count; f++)
-            {
-                if (P.Faces[f].IsUnused) continue;
-                int[] fv = P.Faces.GetFaceVertices(f);
-                if (fv == null || fv.Length < 3) continue;
-                if (fv.Length == 4)
-                {
-                    // Quad (the common Dev2PQ strip face): split along the SHORTER diagonal so a skewed / slightly
-                    // non-planar quad folds along its natural diagonal — fanning always from corner 0 puts the same
-                    // (often wrong) crease on every quad.
-                    int a = map[fv[0]], b = map[fv[1]], c = map[fv[2]], d = map[fv[3]];
-                    if (a < 0 || b < 0 || c < 0 || d < 0) continue;
-                    if ((pos[a] - pos[c]).LengthSquared <= (pos[b] - pos[d]).LengthSquared)
-                    { tris.Add((a, b, c)); tris.Add((a, c, d)); }   // diagonal a-c
-                    else
-                    { tris.Add((b, c, d)); tris.Add((b, d, a)); }   // diagonal b-d
-                }
-                else
-                {
-                    // Triangle (one tri, unchanged) or general n-gon: fan from corner 0.
-                    int a = map[fv[0]];
-                    if (a < 0) continue;
-                    for (int k = 1; k + 1 < fv.Length; k++)
-                    {
-                        int b = map[fv[k]], c = map[fv[k + 1]];
-                        if (b < 0 || c < 0) continue;
-                        tris.Add((a, b, c));
-                    }
-                }
-            }
+            { if (!P.Faces[f].IsUnused) { var ff = P.Faces.GetFaceVertices(f); if (ff != null && ff.Length > 3) { hasNgon = true; break; } } }
 
-            // Area-weighted averaged vertex normals -> smooth shading. No winding re-orientation: the
-            // welded mesh has no proven inconsistent winding, and the fragment shader orients each
-            // normal toward the camera anyway. (The faceted look is the shader's job, not the upload's.)
-            var nrm = new Vector3[used];
-            foreach (var (a0, b0, c0) in tris)
+            float[] posF; float[] nrmF; uint[] indices;
+            if (hasNgon)
             {
-                Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); // 2*area * unit normal
-                nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn;
+                // FLAT PER-FACE: each face's corners become its OWN verts, all carrying the face's normal. The
+                // intra-face diagonal shares that normal (invisible); face boundaries are split (real edges show).
+                var pl = new List<float>(); var nl = new List<float>(); var il = new List<uint>();
+                var cp = new Vector3[8];
+                for (int f = 0; f < P.Faces.Count; f++)
+                {
+                    if (P.Faces[f].IsUnused) continue;
+                    int[] fv = P.Faces.GetFaceVertices(f);
+                    if (fv == null || fv.Length < 3) continue;
+                    int n = fv.Length; if (cp.Length < n) cp = new Vector3[n];
+                    bool ok = true;
+                    for (int k = 0; k < n; k++) { int mi = map[fv[k]]; if (mi < 0) { ok = false; break; } cp[k] = pos[mi]; }
+                    if (!ok) continue;
+                    Vector3 fn = Vector3.Zero;   // Newell's normal — robust for n-gons + slightly non-planar quads
+                    for (int k = 0; k < n; k++) { var a = cp[k]; var b = cp[(k + 1) % n]; fn.X += (a.Y - b.Y) * (a.Z + b.Z); fn.Y += (a.Z - b.Z) * (a.X + b.X); fn.Z += (a.X - b.X) * (a.Y + b.Y); }
+                    fn = fn.LengthSquared > 1e-20f ? Vector3.Normalize(fn) : Vector3.UnitZ;
+                    int baseV = pl.Count / 3;
+                    for (int k = 0; k < n; k++) { pl.Add(cp[k].X); pl.Add(cp[k].Y); pl.Add(cp[k].Z); nl.Add(fn.X); nl.Add(fn.Y); nl.Add(fn.Z); }
+                    for (int k = 1; k + 1 < n; k++) { il.Add((uint)baseV); il.Add((uint)(baseV + k)); il.Add((uint)(baseV + k + 1)); }   // fan (diagonal hidden by the shared normal)
+                }
+                posF = pl.ToArray(); nrmF = nl.ToArray(); indices = il.ToArray();
+                _vMap = null; _usedCount = posF.Length / 3;   // split verts -> the per-original-vertex field/LIC is N/A (SetField no-ops)
             }
-            var posF = new float[used * 3];
-            var nrmF = new float[used * 3];
-            for (int i = 0; i < used; i++)
+            else
             {
-                posF[i * 3] = pos[i].X; posF[i * 3 + 1] = pos[i].Y; posF[i * 3 + 2] = pos[i].Z;
-                Vector3 n = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.UnitZ;
-                nrmF[i * 3] = n.X; nrmF[i * 3 + 1] = n.Y; nrmF[i * 3 + 2] = n.Z;
-            }
-            var indices = new uint[tris.Count * 3];
-            for (int t = 0; t < tris.Count; t++)
-            {
-                indices[t * 3] = (uint)tris[t].a;
-                indices[t * 3 + 1] = (uint)tris[t].b;
-                indices[t * 3 + 2] = (uint)tris[t].c;
+                // All-triangle mesh: smooth area-weighted vertex normals over shared verts. No winding re-orient;
+                // the fragment shader orients each normal toward the camera.
+                var tris = new List<(int a, int b, int c)>(P.Faces.Count);
+                for (int f = 0; f < P.Faces.Count; f++)
+                {
+                    if (P.Faces[f].IsUnused) continue;
+                    int[] fv = P.Faces.GetFaceVertices(f);
+                    if (fv == null || fv.Length < 3) continue;
+                    int a = map[fv[0]]; if (a < 0) continue;
+                    for (int k = 1; k + 1 < fv.Length; k++) { int b = map[fv[k]], c = map[fv[k + 1]]; if (b < 0 || c < 0) continue; tris.Add((a, b, c)); }
+                }
+                var nrm = new Vector3[used];
+                foreach (var (a0, b0, c0) in tris)
+                { Vector3 fn = Vector3.Cross(pos[b0] - pos[a0], pos[c0] - pos[a0]); nrm[a0] += fn; nrm[b0] += fn; nrm[c0] += fn; }
+                posF = new float[used * 3]; nrmF = new float[used * 3];
+                for (int i = 0; i < used; i++)
+                {
+                    posF[i * 3] = pos[i].X; posF[i * 3 + 1] = pos[i].Y; posF[i * 3 + 2] = pos[i].Z;
+                    Vector3 nn = nrm[i].LengthSquared > 1e-20f ? Vector3.Normalize(nrm[i]) : Vector3.UnitZ;
+                    nrmF[i * 3] = nn.X; nrmF[i * 3 + 1] = nn.Y; nrmF[i * 3 + 2] = nn.Z;
+                }
+                indices = new uint[tris.Count * 3];
+                for (int t = 0; t < tris.Count; t++) { indices[t * 3] = (uint)tris[t].a; indices[t * 3 + 1] = (uint)tris[t].b; indices[t * 3 + 2] = (uint)tris[t].c; }
+                _vMap = map; _usedCount = used;
             }
             _indexCount = indices.Length;
 
@@ -497,7 +500,6 @@ void main() {
             // attribute reads constant 0 -> the LIC sees a zero field -> no grain (just the matcap).
             GL.DisableVertexAttribArray(2);
             GL.BindVertexArray(0);
-            _vMap = map; _usedCount = used;
             _ready = _indexCount > 0;
         }
 
