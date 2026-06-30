@@ -38,6 +38,15 @@ namespace PieceSolver
         // first multi-level edge in the refresh graph (a PieceMap change rots CreaseMap, which rots this in turn).
         public readonly Transient<RenderData> CreaseLines;
 
+        // PER-PIECE developed-geometry cache (Free-float incremental Solve; docs/specs/INCREMENTAL-SOLVE.md).
+        // Keyed by stable piece id; each entry is a LEAF Transient the delta rots BY ID (RotTouched in Apply/
+        // Invert) — deliberately NOT registered downstream of Pattern, so the wholesale Invalidate cascade
+        // doesn't rot every piece. Lazily populated; survives across edits (a new Pattern starts empty).
+        public readonly Dictionary<int, SolvedPiece> Solved = new Dictionary<int, SolvedPiece>();
+        public SolvedPiece SolvedFor(int id)   // get-or-create, born stale (no bake -> develops first time)
+        { if (!Solved.TryGetValue(id, out var sp)) { sp = new SolvedPiece(); Solved[id] = sp; } return sp; }
+        public void RotAllSolved() { foreach (var sp in Solved.Values) sp.Rot(); }   // global invalidation: a Solve-param/level change invalidates every piece (INCREMENTAL-SOLVE §5a)
+
         public Pattern(PlanktonMesh mesh, Func<int> mint = null)
         {
             _mesh = mesh; _mint = mint;
@@ -376,12 +385,26 @@ namespace PieceSolver
             if (PieceMap == null || !(d is PieceDelta pd)) return;
             foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.To;
             Invalidate();
+            RotTouched(pd);
         }
         public void Invert(IDelta d)
         {
             if (PieceMap == null || !(d is PieceDelta pd)) return;
             foreach (var o in pd.Ops) if (o.Face >= 0 && o.Face < PieceMap.Length) PieceMap[o.Face] = o.From;
             Invalidate();
+            RotTouched(pd);
+        }
+
+        // Delta-driven per-piece rot (INCREMENTAL-SOLVE §5): a delta touches the pieces named by each Op's
+        // From/To, so rot exactly those caches. An absent id needs no rot — it's born stale when next created.
+        // The wholesale Transients (CreaseMap/Geometry/CreaseLines) already rotted via Invalidate() above.
+        void RotTouched(PieceDelta pd)
+        {
+            foreach (var o in pd.Ops)
+            {
+                if (Solved.TryGetValue(o.From, out var a)) a.Rot();
+                if (Solved.TryGetValue(o.To, out var b)) b.Rot();
+            }
         }
 
         // Run an in-place mutator, capture the net PieceMap change as a delta, then ROLL BACK — leaving Real and
