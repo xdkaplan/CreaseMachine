@@ -66,6 +66,25 @@ crease** (`PieceSolver/MainWindow.xaml.cs`, `RunBakeMulti`/`DevelopPiece`).
 slit to the boundary). Locking junction vertices removes the cone singularities; it does *not* decouple the
 problem (the panels still couple), but it's worth doing and matches fixing corners you'd fix anyway.
 
+### Two compare modes (shipped as the `Crease` toggle — `SimSettings.CreaseMode`)
+
+Both fold-keeping options above are built and selectable, to compare a coupled fold against an uncoupled one:
+
+- **Coupled** (`CreaseMode = 0`, default) — the *welded + per-vertex exclusion*. `IsometricLM.Solve` takes a
+  per-vertex `noSmooth` mask (`CreaseVertMask` = every crease-incident vertex); the crease vertices' `fairM` /
+  `fairP` / bending residual rows are zeroed in `ComputeR` / `ApplyJ` / `DiagJtJ` (FD-gated to ~1e-9), so they
+  stop being smoothed while iso + shared position still couple the fan. Cone junctions Dirichlet-locked. Panels
+  **meet** at the fold.
+- **Free-float** (`CreaseMode = 1`) — the *unweld* option. Unweld per panel (`UnweldByRegion` →
+  `SplitComponents`), then BFF + develop each component independently, pinning **only the crease corners**
+  (`CornerMask` = crease-graph nodes, incident-crease-edge count ≠ 2 — junctions ≥3, boundary endpoints =1).
+  Crease interiors + the outer edge are free (a free outer edge behaves just like a crease). Panels are tacked
+  at the corners but **gap / overlap** along the creases — §2's "you can't isolate-solve" made visible, and the
+  panel-gap fabrication tolerance shown directly.
+
+These are exploratory; the loser gets removed once compared. `noSmooth` is *not* needed in Free-float (unwelded
+one-sided 1-rings can't smooth across a seam by construction) — it is the Coupled-only mechanism.
+
 ## 3. Subdivision — sub0 crease pinned, new midpoints free
 
 Reuse `SubdivideCompute` (`PieceSolver/MainWindow.xaml.cs`) — it already refines M, M′ (BFF flat), and the

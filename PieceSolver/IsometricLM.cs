@@ -51,9 +51,16 @@ namespace PieceSolver
         // Run `outerIters` LM iterations on (M, Mp). Weights define the objective (no step size). lambda
         // persists via ref. Returns the raw E_iso (Sum of squared-length mismatches, unweighted) for the
         // convergence readout - same quantity IsometricSolver.Step returns, so the GUI display is parity.
+        // noSmooth (optional, per-vertex, same shape as `pinned`): excludes a vertex from BOTH smoothing terms —
+        // fairness (fairM/fairP) AND bending (bi-Laplacian) — by zeroing its residual rows. Used for the welded
+        // curved-crease develop (CURVED-CREASE-DEVELOP.md §2 "welded + per-vertex exclusion"): crease vertices
+        // stay welded for position (the iso term still ties the fan) but stop being smoothed, so the fold
+        // survives. The vertex still appears in its neighbours' stencils (its position couples them) — only its
+        // OWN smoothing rows are dropped. null = smooth everywhere (legacy).
         public static double Solve(PlanktonMesh M, PlanktonMesh Mp, Vec3[] M0,
                                    double wIso, double wFair, double wPos, double wScale, bool diffFair, double wBend, bool bendDiff,
-                                   int outerIters, int cgIters, ref double lambda, bool[] pinned = null)
+                                   int outerIters, int cgIters, ref double lambda, bool[] pinned = null,
+                                   bool[] noSmooth = null)
         {
             int nV = M.Vertices.Count;
             if (nV == 0 || Mp.Vertices.Count != nV) return 0.0;
@@ -75,6 +82,12 @@ namespace PieceSolver
                 used[v] = !M.Vertices[v].IsUnused;
                 nbr[v] = used[v] ? (M.Vertices.GetVertexNeighbours(v) ?? Array.Empty<int>()) : Array.Empty<int>();
             }
+
+            // Bending uses the FULL 1-ring (`nbr`). The crease is freed per-VERTEX via `noSmooth` (below): the
+            // crease vertices' bending AND fairness residual rows are zeroed so they stop being smoothed and the
+            // fold survives — NOT by masking edges out of the stencil (a per-edge mask leaves the crease vertex
+            // smoothed within each panel). `bnbr` is kept as an alias so Umb/UmbT/diag read one name.
+            int[][] bnbr = nbr;
 
             // per-vertex incident-edge CSR: lets J^T r be assembled as a GATHER (each vertex sums its own
             // incident edges) rather than a SCATTER (edges add to both endpoints). The gather is race-free
@@ -168,7 +181,7 @@ namespace PieceSolver
                 {
                     for (int v = lo; v < hi; v++)
                     {
-                        int bb = 3 * v; var nb = nbr[v]; int d = nb.Length;
+                        int bb = 3 * v; var nb = bnbr[v]; int d = nb.Length;
                         if (!used[v] || d == 0) { outp[bb] = outp[bb + 1] = outp[bb + 2] = 0; continue; }
                         double ax = 0, ay = 0, az = 0;
                         for (int k = 0; k < d; k++) { int u = nb[k]; ax += inp[3 * u]; ay += inp[3 * u + 1]; az += inp[3 * u + 2]; }
@@ -185,10 +198,10 @@ namespace PieceSolver
                     {
                         int bb = 3 * w;
                         double sx = used[w] ? -inp[bb] : 0.0, sy = used[w] ? -inp[bb + 1] : 0.0, sz = used[w] ? -inp[bb + 2] : 0.0;
-                        var nb = nbr[w]; int d = nb.Length;
+                        var nb = bnbr[w]; int d = nb.Length;
                         for (int k = 0; k < d; k++)
                         {
-                            int s = nb[k]; int ds = nbr[s].Length; if (!used[s] || ds == 0) continue;
+                            int s = nb[k]; int ds = bnbr[s].Length; if (!used[s] || ds == 0) continue;
                             double iv = 1.0 / ds; sx += inp[3 * s] * iv; sy += inp[3 * s + 1] * iv; sz += inp[3 * s + 2] * iv;
                         }
                         outp[bb] = sx; outp[bb + 1] = sy; outp[bb + 2] = sz;
@@ -220,6 +233,7 @@ namespace PieceSolver
                 if (sFair > 0.0)
                     for (int v = 0; v < nV; v++)
                     {
+                        if (noSmooth != null && noSmooth[v]) continue;
                         var nb = nbr[v]; int d = nb.Length; if (d == 0) continue;
                         double ax = 0, ay = 0, az = 0, bx = 0, by = 0;
                         for (int k = 0; k < d; k++) { int u = nb[k]; ax += mx[u]; ay += my[u]; az += mz[u]; bx += px[u]; by += py[u]; }
@@ -251,7 +265,7 @@ namespace PieceSolver
                     Umb(pmB, t1B); Umb(t1B, t2B);
                     for (int v = 0; v < nV; v++)
                     {
-                        if (!used[v]) continue;
+                        if (!used[v] || (noSmooth != null && noSmooth[v])) continue;
                         double bx = t2B[3 * v], by = t2B[3 * v + 1], bz = t2B[3 * v + 2];
                         if (biRef != null) { bx -= biRef[v].X; by -= biRef[v].Y; bz -= biRef[v].Z; }
                         rout[R_BI + 3 * v + 0] = sBend * bx; rout[R_BI + 3 * v + 1] = sBend * by; rout[R_BI + 3 * v + 2] = sBend * bz;
@@ -286,6 +300,7 @@ namespace PieceSolver
                     {
                         for (int vtx = lo; vtx < hi; vtx++)
                         {
+                            if (noSmooth != null && noSmooth[vtx]) continue;
                             var nb = nbr[vtx]; int d = nb.Length; if (d == 0) continue;
                             double ax = 0, ay = 0, az = 0, bx = 0, by = 0; double inv = 1.0 / d;
                             for (int k = 0; k < d; k++) { int u = nb[k]; ax += v[3 * u]; ay += v[3 * u + 1]; az += v[3 * u + 2]; bx += v[oP + 2 * u]; by += v[oP + 2 * u + 1]; }
@@ -319,7 +334,7 @@ namespace PieceSolver
                 {
                     for (int vt = 0; vt < nV; vt++) { pmB[3 * vt] = v[3 * vt]; pmB[3 * vt + 1] = v[3 * vt + 1]; pmB[3 * vt + 2] = v[3 * vt + 2]; }
                     Umb(pmB, t1B); Umb(t1B, t2B);
-                    for (int vt = 0; vt < nV; vt++) { if (!used[vt]) continue; rout[R_BI + 3 * vt + 0] = sBend * t2B[3 * vt]; rout[R_BI + 3 * vt + 1] = sBend * t2B[3 * vt + 1]; rout[R_BI + 3 * vt + 2] = sBend * t2B[3 * vt + 2]; }
+                    for (int vt = 0; vt < nV; vt++) { if (!used[vt] || (noSmooth != null && noSmooth[vt])) continue; rout[R_BI + 3 * vt + 0] = sBend * t2B[3 * vt]; rout[R_BI + 3 * vt + 1] = sBend * t2B[3 * vt + 1]; rout[R_BI + 3 * vt + 2] = sBend * t2B[3 * vt + 2]; }
                 }
             }
 
@@ -410,6 +425,7 @@ namespace PieceSolver
                 if (sFair > 0.0)
                     for (int v = 0; v < nV; v++)
                     {
+                        if (noSmooth != null && noSmooth[v]) continue;
                         var nb = nbr[v]; int d = nb.Length; if (d == 0) continue;
                         double diag = sFair * sFair;
                         for (int k = 0; k < d; k++) { int u = nb[k]; int du = nbr[u].Length; if (du > 0) diag += sFair * sFair / ((double)du * du); }
@@ -421,9 +437,9 @@ namespace PieceSolver
                 if (sBend > 0.0)   // bending diag estimate: sBend^2*(U^2 self-coeff)^2, so Minv doesn't blow up here
                     for (int v = 0; v < nV; v++)
                     {
-                        if (!used[v]) continue; var nb = nbr[v]; int d = nb.Length; if (d == 0) continue;
-                        double iv = 1.0 / d, u2 = 1.0;                              // (U^2)_vv = 1 + sum_{k in nbr} 1/(d_v d_k)
-                        for (int k = 0; k < d; k++) { int du = nbr[nb[k]].Length; if (du > 0) u2 += iv / du; }
+                        if (!used[v] || (noSmooth != null && noSmooth[v])) continue; var nb = bnbr[v]; int d = nb.Length; if (d == 0) continue;
+                        double iv = 1.0 / d, u2 = 1.0;                              // (U^2)_vv = 1 + sum_k 1/(d_v d_k)  (full 1-ring; crease verts dropped via noSmooth)
+                        for (int k = 0; k < d; k++) { int du = bnbr[nb[k]].Length; if (du > 0) u2 += iv / du; }
                         double bd = sBend * sBend * u2 * u2;
                         dg[3 * v] += bd; dg[3 * v + 1] += bd; dg[3 * v + 2] += bd;
                     }
