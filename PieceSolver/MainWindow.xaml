@@ -426,6 +426,8 @@
                                 <TextBlock Text="ADVANCED" Foreground="#7A7A88" FontSize="10" FontWeight="Bold" Margin="2,16,0,6" />
                                 <CheckBox Content="Use Matcap" IsChecked="{Binding UseMatcap, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,6"
                                           ToolTip="Override the neutral + Shine shading with a hand-picked matcap from the set below." />
+                                <CheckBox Content="Piece ID colors" IsChecked="{Binding PieceIdColors, Mode=TwoWay}" Foreground="#C8C8C8" FontSize="11" Margin="2,0,0,6"
+                                          ToolTip="Tint each piece by its id (deterministic). A piece keeps its colour while its id is stable, so a colour jump after an op means the id changed — a visual id-stability check. Selection/preview highlights still show on top." />
                                 <ListBox x:Name="MatcapList" Background="Transparent" BorderThickness="0" Padding="0"
                                          IsEnabled="{Binding UseMatcap}"
                                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">

@@ -155,6 +155,12 @@ namespace PieceSolver
         bool _useMatcap;
         public bool UseMatcap { get => _useMatcap; set => Set(ref _useMatcap, value); }
 
+        // Advanced/diagnostic: tint each piece by its id (deterministic id%palette) instead of neutral white,
+        // so a piece KEEPS its colour iff its id is stable across an op — a visual id-stability check while
+        // editing. Selection/preview highlights still override. Off by default (keeps the neutral piecing look).
+        bool _pieceIdColors;
+        public bool PieceIdColors { get => _pieceIdColors; set => Set(ref _pieceIdColors, value); }
+
         // Piece visualization: inset/seam band width as a FRACTION of mesh radius (world-relative). Drives
         // uInset in the piece shader (the border / bevel-lip / gap thickness). Live; default narrow.
         double _insetWidthFrac = 0.012;

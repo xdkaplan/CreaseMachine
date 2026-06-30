@@ -280,6 +280,7 @@ namespace PieceSolver
                     _gl?.InvalidateVisual();
                 }
                 else if (e.PropertyName == nameof(SimSettings.FixBSplineEdges) || e.PropertyName == nameof(SimSettings.SeamRatio)) { RefreshSeamDisplay(); _gl?.InvalidateVisual(); }
+                else if (e.PropertyName == nameof(SimSettings.PieceIdColors)) { RebuildPieces(); _gl?.InvalidateVisual(); }   // re-tint pieces by id (id-stability check); colour is baked into the piece buffers
             };
 
             // Console-window transport: save the recorded session, replay a journal file, clear recording.
@@ -1074,7 +1075,7 @@ namespace PieceSolver
             //     null -> white).
             Func<int, int, Vector3> colorOf = (f, pid) =>
                 _camModal ? (_angleDragging ? Vector3.One : PieceColor(pid))
-                          : (_view.ActiveEditor?.FaceFill(f, pid) ?? Vector3.One);
+                          : (_view.ActiveEditor?.FaceFill(f, pid) ?? (_sim.PieceIdColors ? PieceColor(pid) : Vector3.One));
 
             var (pos, nrm, col, dist, edge) = DerivePieceBuffers(P, _doc.Pattern.PieceMap, creaseMap, meshR, colorOf);
             // SUPPLY the Pattern Real's geometry Transient (the buffers need render/editor inputs, so this is
