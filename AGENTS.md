@@ -348,6 +348,15 @@ transparently and `PlanktonGh.dll` binds to it unchanged. Vendored so the projec
 builds without a separate Plankton checkout. Plankton is LGPL — see
 [`docs/NOTICE.md`](docs/NOTICE.md) for the netstandard2.0 rebuild recipe.
 
+**[Directional](https://github.com/avaxman/Directional)** (Vaxman) — *external, not vendored* (clone at
+`C:\Repo\avaxman\Directional`) — is the directional-field library behind the **Dev2PQ** develop/PQ-remesh
+step (driven as a subprocess via `dev2pq.exe` / `PieceSolver/Dev2PQ.cs`). It provides ruling/field design,
+matching, **singularity detection**, seamless integration, and polygon meshing **out of the box**. **Before
+hand-rolling any field/integration/singularity/level-set operation, read
+[`docs/DIRECTIONAL.md`](docs/DIRECTIONAL.md)** — it maps each Dev2PQ stage to its OOTB Directional call and
+records the gotchas (the ruling must be the zero-curvature direction; the mesher asserts on branched
+arrangements; never `/DNDEBUG`). The `relax/` prototype's regression history is what hand-rolling these costs.
+
 ## License
 
 This project is released under the **GNU General Public License, version 2
