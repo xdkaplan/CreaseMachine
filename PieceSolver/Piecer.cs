@@ -18,7 +18,7 @@ namespace PieceSolver
     //   CTRL  — tap: REMOVE that piece from the selection. Drag: CARVE faces out of the whole selection (donated
     //           to a neighbour outside the selection, or split off as an island), or — nothing selected — DELETE
     //           whole pieces (healed into the dominant neighbour). Marked faces preview red; commits on release.
-    // Every committing MUTATION goes through Doc.Run as one transaction (undoable); the plain multi-select only sets
+    // Every committing MUTATION goes through one transaction (OpenTx -> Apply -> Run, undoable); the plain multi-select only sets
     // the (Ephemeral) selection, no tx. The Piecer computes the change and never mutates Real state directly.
     // See docs/DOC-TX-REFACTOR.md and docs/archive/PIECER-REFACTOR.md.
     sealed class Piecer : Editor
