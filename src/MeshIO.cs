@@ -93,10 +93,44 @@ namespace CreaseMachine
             }
             for (int f = 0; f < P.Faces.Count; f++)
             {
-                if (!IsTri(P, f)) continue;
+                if (P.Faces[f].IsUnused) continue;
                 int[] fv = P.Faces.GetFaceVertices(f);
-                sb.AppendLine("f " + map[fv[0]] + " " + map[fv[1]] + " " + map[fv[2]]);
+                if (fv == null || fv.Length < 3) continue;
+                var line = new System.Text.StringBuilder("f");   // n-gon faces preserved (e.g. Dev2PQ quad strips): f a b c d…
+                bool ok = true;
+                for (int k = 0; k < fv.Length; k++) { int mi = map[fv[k]]; if (mi < 0) { ok = false; break; } line.Append(' ').Append(mi); }
+                if (ok) sb.AppendLine(line.ToString());
             }
+            System.IO.File.WriteAllText(path, sb.ToString());
+        }
+
+        // ASCII STL (triangle facets; n-gon faces fan-triangulated). Universal for print / CAM / Rhino.
+        public static void WriteStl(PlanktonMesh P, string path)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("solid mesh");
+            for (int f = 0; f < P.Faces.Count; f++)
+            {
+                if (P.Faces[f].IsUnused) continue;
+                int[] fv = P.Faces.GetFaceVertices(f);
+                if (fv == null || fv.Length < 3) continue;
+                for (int k = 1; k + 1 < fv.Length; k++)   // fan: (0, k, k+1)
+                {
+                    var a = P.Vertices[fv[0]]; var b = P.Vertices[fv[k]]; var c = P.Vertices[fv[k + 1]];
+                    double ux = b.X - a.X, uy = b.Y - a.Y, uz = b.Z - a.Z;
+                    double vx = c.X - a.X, vy = c.Y - a.Y, vz = c.Z - a.Z;
+                    double nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+                    double len = System.Math.Sqrt(nx * nx + ny * ny + nz * nz); if (len > 1e-20) { nx /= len; ny /= len; nz /= len; }
+                    sb.AppendLine("facet normal " + F(nx) + " " + F(ny) + " " + F(nz));
+                    sb.AppendLine("  outer loop");
+                    sb.AppendLine("    vertex " + F(a.X) + " " + F(a.Y) + " " + F(a.Z));
+                    sb.AppendLine("    vertex " + F(b.X) + " " + F(b.Y) + " " + F(b.Z));
+                    sb.AppendLine("    vertex " + F(c.X) + " " + F(c.Y) + " " + F(c.Z));
+                    sb.AppendLine("  endloop");
+                    sb.AppendLine("endfacet");
+                }
+            }
+            sb.AppendLine("endsolid mesh");
             System.IO.File.WriteAllText(path, sb.ToString());
         }
 

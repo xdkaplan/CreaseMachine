@@ -95,6 +95,7 @@
         <Menu x:Name="MenuBar" Grid.Row="0" Background="#2D2D30" Foreground="#C8C8C8" Padding="2,1">
             <MenuItem Header="_File">
                 <MenuItem x:Name="MenuImport" Header="_Import…" />
+                <MenuItem x:Name="MenuExport" Header="_Export…" />
                 <Separator />
                 <MenuItem x:Name="MenuRevert" Header="_Revert" InputGestureText="Ctrl+R" />
             </MenuItem>

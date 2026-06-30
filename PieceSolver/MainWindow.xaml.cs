@@ -234,6 +234,7 @@ namespace PieceSolver
             CamModalAccept.Click += (s, e) => { var a = _camAccept; CloseCamModal(); a?.Invoke(); };
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
             MenuImport.Click += (s, e) => ImportMesh();   // File > Import (STL / FBX / OBJ) — no shortcut; Ctrl+O reserved for Open
+            MenuExport.Click += (s, e) => ExportMesh();   // File > Export the current view (OBJ preserves PQ quads; STL triangulates)
             MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
@@ -1773,6 +1774,29 @@ namespace PieceSolver
             };
             if (dlg.ShowDialog() != true) return;
             Execute(StudioCommand.Load(dlg.FileName), record: true);
+        }
+
+        // File > Export — write the CURRENTLY-SHOWN base mesh to OBJ/STL. On the Developed view that's the
+        // developed / Dev2PQ result (_developed); otherwise the authoring mesh. OBJ preserves Dev2PQ quad
+        // strips; STL fan-triangulates. (Display-aware, mirroring UploadForDisplay's source pick.)
+        void ExportMesh()
+        {
+            var mesh = (_view.Display == DisplaySource.Developed && _developed.Peek(out var dev) && dev != null) ? dev : _session?.Mesh;
+            if (mesh == null || mesh.Vertices.Count == 0) { _doc.Comment("export: nothing to export"); return; }
+            var dlg = new Microsoft.Win32.SaveFileDialog
+            {
+                Filter = "OBJ mesh (*.obj)|*.obj|STL mesh (*.stl)|*.stl",
+                InitialDirectory = @"C:\Temp",
+                FileName = System.IO.Path.GetFileNameWithoutExtension(_meshPath ?? "export") + (_view.Display == DisplaySource.Developed ? "_developed" : "")
+            };
+            if (dlg.ShowDialog() != true) return;
+            try
+            {
+                if (dlg.FileName.EndsWith(".stl", StringComparison.OrdinalIgnoreCase)) MeshIO.WriteStl(mesh, dlg.FileName);
+                else MeshIO.WriteObj(mesh, dlg.FileName);
+                _doc.Comment("exported " + dlg.FileName + " (" + mesh.Vertices.Count + " verts, " + _view.Display + " view)");
+            }
+            catch (Exception ex) { _doc.Comment("export failed: " + ex.Message); }
         }
 
         void OpenAndReplay()
