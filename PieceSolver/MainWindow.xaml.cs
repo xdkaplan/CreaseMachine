@@ -83,6 +83,7 @@ namespace PieceSolver
         CancellationTokenSource _bakeCts;
         CancellationToken _bakeToken;
         IProgress<(double frac, string text)> _bakeProgress;
+        int _bakeGen;   // bake epoch: bumped on every _developed invalidation; a bake Supplies only if its captured gen still matches (no invalidation landed mid-bake)
 
         // Crease proposer: cached per-edge settled fold angles + endpoint vertex indices from the last
         // Propose, so the Crease angle slider re-labels the overlay without re-proposing. The Propose
@@ -132,7 +133,7 @@ namespace PieceSolver
             // The view reacts to the Doc instead of being poked imperatively: a selection change repaints the
             // highlight; a transaction (Run/Undo/Redo) repaints pieces + crease grooves on the new partition.
             _doc.Pieces.Changed += () => { if (_view.Display == DisplaySource.Pieces) RebuildPieces(); };
-            _doc.Changed += () => { _developed.Rot(); RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };   // a committed Pattern edit rots the developed result (stale until re-Solve; TAB re-bakes)
+            _doc.Changed += () => { InvalidateDeveloped(); RebuildPieces(); RebuildCreaseOverlay(); InvalidateView(); };   // a committed Pattern edit rots the developed result (stale until re-Solve; TAB re-bakes)
             _doc.Recorded += line => Echo(line);   // committed ops + comments stream into the Console op-log
 
             // The session log lives in a non-modal Console window (Window > Console / Ctrl+Shift+J),
@@ -444,7 +445,7 @@ namespace PieceSolver
             try { _session = new FlowSession(MeshIO.Load(path)); _meshPath = path; }
             catch (Exception ex) { Title = "PieceSolver — load failed: " + ex.Message; return; }
             RebindPattern();          // the partition companion now wraps the new mesh
-            _developed.Rot();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
+            InvalidateDeveloped();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
             _reframe = true;          // new mesh -> re-fit the camera on the next upload
             _meshDirty = true;
             ClearProposedCreases();   // labels reference the prior mesh's vertices
@@ -642,6 +643,11 @@ namespace PieceSolver
         // worker (RunBake) is PURE compute on the managed mesh — no GL, no UI-bound property writes, no
         // dirty-flag sets. All GL/UI happens here on the UI thread; viewport uploads are gated on !_baking
         // so they never read the mesh while the worker is mutating it.
+        // Invalidate the developed result: rot it, bump the bake epoch (so a bake in flight for the OLD state
+        // can't Supply a stale mesh — see the epoch gate in OnSolveAsync), and cancel any in-flight bake. The
+        // single funnel for "_developed is no longer valid" (Pattern edit / load / subdivide).
+        void InvalidateDeveloped() { _developed.Rot(); _bakeGen++; if (_baking) _bakeCts?.Cancel(); }
+
         async Task OnSolveAsync()
         {
             if (_baking || _session == null || _meshPath == null) return;
@@ -705,6 +711,7 @@ namespace PieceSolver
             _meshDirty = false;
 
             _baking = true; _doc.EnterBusy(Busy.Calculating);   // the Doc rejects Run/Undo/Redo while the worker owns the mesh
+            int myGen = _bakeGen;   // epoch this bake develops; if an invalidation bumps _bakeGen before we Supply, the result is stale -> discard
             _bakeCts = new CancellationTokenSource();
             _bakeToken = _bakeCts.Token;
             _bakeLog.Clear(); _bakeStrain = double.NaN; _bakeSummary = "";
@@ -723,7 +730,7 @@ namespace PieceSolver
                 _baking = false; _doc.ExitBusy();
                 BakeOverlay.Visibility = Visibility.Collapsed;
                 foreach (var line in _bakeLog) _doc.Comment(line);
-                bool developed = !_bakeToken.IsCancellationRequested;
+                bool developed = !_bakeToken.IsCancellationRequested && myGen == _bakeGen;   // epoch gate: an invalidation mid-bake (load/subdivide) makes this result stale
                 if (developed)
                 {
                     // Coupled curved-crease develop solved the WELDED mesh; UNWELD it for display so the crease
@@ -1582,7 +1589,7 @@ namespace PieceSolver
                 _sim.StrainPct = RelErr(_session.Mesh, _flat) * 100.0;    // strain stays ~constant (subdivide is metric-preserving)
             }
             _meshDirty = true;
-            _developed.Rot();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
+            InvalidateDeveloped();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
             ClearProposedCreases();   // 1->4 renumbers vertices -> labels invalid
             Title = "PieceSolver — subdivided  (" + _session.Mesh.Vertices.Count + " verts)";
             _gl?.InvalidateVisual();
@@ -1598,7 +1605,7 @@ namespace PieceSolver
             try { _session = new FlowSession(MeshIO.Load(_meshPath)); }
             catch (Exception ex) { Title = "PieceSolver — reset failed: " + ex.Message; return; }
             RebindPattern();          // the partition companion now wraps the reloaded mesh
-            _developed.Rot();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
+            InvalidateDeveloped();         // authoring mesh changed -> stale the developed view (falls back to authoring until re-Solve). Becomes a real cascade edge once the mesh is a node.
             _meshDirty = true;
             _hasFlat = false;         // mesh changed -> drop any stale BFF flat map
             _flat = null; _M0 = null; // drop the retained flat map + anchor so neither is reused stale
