@@ -29,9 +29,10 @@ turning an N-piece edit→Solve from `O(all pieces)` into `O(changed pieces)`.
 
 | Term | Meaning |
 |---|---|
-| **SolvedPiece** | the developed geometry of ONE piece, at the active subdivision level. A **Supplied Transient** (DOC-SPEC §6) keyed by the piece's stable id. The per-`Piece` form of `Dev{level}` from [SOLVEDPIECE.md](SOLVEDPIECE.md). |
-| **rot / stale** | a `SolvedPiece` marked invalid (`Transient.Rot()`), so the next Solve re-develops it. "Never developed" and "developed-then-rotted" are the same observable state (`IsStale`) — a born-stale Transient. |
+| **SolvedPiece** | the developed geometry of ONE piece, at the active subdivision level. A **Supplied Transient** (DOC-SPEC §6) keyed by the piece's stable id. Retains its last-baked developed mesh, the **input hash** that produced it, and its layout slot. The per-`Piece` form of `Dev{level}` from [SOLVEDPIECE.md](SOLVEDPIECE.md). |
+| **rot / stale** | a `SolvedPiece` marked invalid (`Transient.Rot()`), so the next Solve **re-checks** it — and re-develops it only if its **input hash** changed (§7). `Rot()` keeps the cached mesh (`Peek` semantics), so an unchanged-input stale piece can revalidate for free. "Never developed" and "developed-then-rotted" are the same observable state (`IsStale`) — a born-stale Transient. |
 | **touched ids** | the set of piece ids a delta affects = the union over its `Op`s of `{From, To}`. The delta-driven rot target. |
+| **input hash** | a cheap fingerprint of everything a piece's develop consumes: its **face-set** (sorted face ids carrying that id) + the **global salt** (Subdivision level, Accuracy/target-strain, IsometricLM weights, seam-pin, **Authoring-mesh version**). Authoring vertex positions are constant within a Pattern (a mesh change bumps the version + rebinds → all reborn), so they fold into the salt rather than being hashed per piece. Stored on the `SolvedPiece` at each successful bake; compared on re-check. |
 | **layout slot** | the placement of a piece's flat panel beside the model. Held per id so an unchanged panel doesn't jump when a *different* piece re-develops. |
 
 ## 4. The model — per-piece `SolvedPiece` Transients on `Pattern`
@@ -45,10 +46,12 @@ Pattern (Real; PieceMap)
 ```
 
 - `Solved` is **lazily populated**: the first time an id is seen (Solve/reassembly or a mint `Op`'s `To`),
-  a **born-stale** `SolvedPiece` is created for it.
+  a **born-stale** `SolvedPiece` is created for it (no mesh, no hash → always bakes the first time).
 - A `SolvedPiece` is **Supplied**, never Grown — developing is the expensive async LM bake; readers `Peek`,
-  the bake `Supply`s (exactly DOC-SPEC §6). It carries the developed mesh for the active level + its layout
-  slot.
+  the bake `Supply`s (exactly DOC-SPEC §6). It carries, from its last successful bake, the **developed mesh**
+  (active level), the **input hash** that produced it, and its **layout slot**. `Rot()` marks it stale but
+  **keeps the cached mesh** (`Peek` still returns it) — that retention is what lets an unchanged-input stale
+  piece revalidate without re-baking (§7).
 
 This is the per-`Piece` generalization SOLVEDPIECE §7 named; the **stable int id is the key**, so it needs
 **no full `Piece` Real** — it's the bridge that brings the deferred feature forward.
@@ -67,6 +70,10 @@ Pattern.Apply(delta) / Invert(delta):
   → foreach id in touched: Solved[id]?.Rot()   (NEW: per-piece rot)
 ```
 
+- **Coarse trigger, exact gate.** The delta-rot is deliberately *coarse* — it may rot a piece whose develop
+  input turns out unchanged (and a global rot, §5a, rots all). The **input hash** (§7) is the exact gate: a
+  rotted piece re-bakes only if its hash actually changed, else it revalidates for free. So the rot is
+  allowed to be conservative — correctness comes from the hash, and **no bake is ever wasted.**
 - **Frozen Doc primitives untouched.** `Run`/`OpenTx`/`CloseTx`/`Undo`/`Redo`/`Record` are unchanged — they
   call `Pattern.Apply`/`Invert` exactly as before. Per-Store derived-state rot is the Store's job, the same
   place `Invalidate()` already lives. (This is the one delta-aware addition; it is *additive* and frozen-safe,
@@ -105,12 +112,22 @@ TAB-to-Developed is the Solve trigger (SOLVEDPIECE §5). Incremental just makes 
 ```
 Solve (Free-float):
   foreach id in current PieceMap ids:
-    sp = Solved.GetOrCreate(id)          // born stale if new
-    if sp.IsStale:  develop piece id (BFF + IsometricLM, ×levels);  Supply sp (mesh @ slot)   // re-bake
-    else:           reuse sp.Peek()                                                            // cache hit
-  reassemble cached + freshly-developed panels  →  Supply _developed
-  Console: "developed {k} / {n} pieces ({n-k} cached)"
+    sp = Solved.GetOrCreate(id)                       // born stale if new
+    if sp.IsFresh:                                    // (1) not rotted at all
+        reuse sp.Peek()
+    else:                                             // stale: rotted by a delta, global rot, or born-stale
+        h = inputHash(id)
+        if sp.HasBake && h == sp.BakedHash:           // (2) EXACT-GATE hit: input unchanged
+            revalidate(sp)                            //     cheap — clear stale, keep cached mesh; no bake
+        else:                                         // (3) input changed (or never baked)
+            develop piece id (BFF + IsometricLM, ×levels)
+            sp.Supply(mesh @ slot); sp.BakedHash = h  //     re-bake; store mesh + the hash that made it
+  reassemble (cached + revalidated + freshly-developed panels)  →  Supply _developed
+  Console: "developed {baked} / {n} pieces ({revalidated} revalidated, {fresh} cached)"
 ```
+
+Three tiers: **(1)** never rotted → reuse; **(2)** rotted but input hash matches the last bake → free
+revalidate (the escape hatch); **(3)** input actually changed → re-bake. Only tier (3) pays the LM cost.
 
 - Honors **DOC-SPEC §9's generation guard** (the async bake): a Pattern edit *during* a bake cancels in-
   flight piece solves and re-rots, so a late panel can't land stale. (TAB-as-Solve forces the gen-guard
@@ -120,12 +137,12 @@ Solve (Free-float):
 
 ## 8. Edge cases & tradeoffs
 
-- **Undo/redo re-develops the touched pieces.** Inverting a delta rots the same touched ids → they re-bake
-  on the next Solve, even though undo restored a state they were once developed in. This is the accepted cost
-  of the in-graph delta-rot model (vs a content-fingerprint cache that would dedupe it). It only ever re-
-  develops the *touched* pieces, never the whole model. *(Optional future: a content fingerprint stored
-  under `SolvedPiece.Ensure()` could short-circuit a rot whose input matches the last bake — a pure
-  optimization, not needed for correctness; see §10.)*
+- **Undo/redo is usually free.** Inverting a delta rots the touched ids, but the input-hash gate (§7) then
+  revalidates any whose input matches their last bake — no re-develop. The one case that *does* re-bake:
+  undo to a state **older** than a piece's last bake (e.g. `A→B→undo`, where the piece's last bake was `B`,
+  so `hash(A) ≠ BakedHash`). It re-bakes once, and only that piece. A per-piece hash→mesh **history** would
+  remove even that (§10, optional) — the single-last-bake baseline already makes the common loop (edit one
+  seam, undo, redo) cost at most one piece's bake.
 - **No warm-start.** A re-developed piece bakes from **Authoring** (re-BFF the piece, then LM), never from
   its old developed mesh — the seams/decomposition changed and the LM is non-convex (SOLVEDPIECE §4). Incremental
   changes *which* pieces bake, not *how* a piece bakes.
@@ -136,13 +153,15 @@ Solve (Free-float):
 
 Builds on SOLVEDPIECE's P1 (developed-as-Transient) + P2 (generation guard):
 
-1. **`SolvedPiece` Supplied Transient + `Pattern.Solved` keyed collection** (born-stale, lazily created).
+1. **`SolvedPiece` Supplied Transient + `Pattern.Solved` keyed collection** — born-stale, lazily created;
+   carries `{mesh, BakedHash, slot}`; `Rot()` keeps the mesh.
 2. **Delta-driven per-piece rot** in `Pattern.Apply`/`Invert` (collect touched ids → `Solved[id].Rot()`);
    global rot on param/level/mesh change (§5a).
-3. **Free-float bake reads/writes the cache** — `RunBakeFreeFloat` develops a panel only when its
-   `SolvedPiece` is stale, else reuses; reassemble; Console feedback (§7).
-4. **Layout slots** held per id for panel stability.
-5. *(optional)* content-fingerprint short-circuit under `Ensure()` to dedupe undo/redo re-develops (§10).
+3. **`inputHash(id)`** — sorted face-set + global salt (§3); cheap, recomputed at the re-check.
+4. **Free-float bake = the three-tier loop** (§7): reuse-fresh / revalidate-on-hash-match / re-bake-else;
+   `RunBakeFreeFloat` develops a panel only on tier (3); reassemble; Console feedback.
+5. **Layout slots** held per id for panel stability.
+6. *(optional)* per-piece hash→mesh **history (LRU)** to make *deep* undo free too (§10).
 
 ## 10. Out of scope / open
 
@@ -150,7 +169,9 @@ Builds on SOLVEDPIECE's P1 (developed-as-Transient) + P2 (generation guard):
 - **Soft / coupled seams** (the named seam-relaxation follow-up): if seams stop being frozen-per-piece, a
   piece's result depends on its neighbours → per-piece independence breaks → invalidation must widen to the
   **ring of pieces sharing a moved seam**, not just the touched piece. Re-spec when seam relaxation is built.
-- **Content-fingerprint dedupe** of undo/redo re-develops (§8) — pure optimization, deferred.
+- **Per-piece hash→mesh history (LRU)** — the baseline keeps only the *last* bake's `(hash, mesh)`, so undo
+  to an *older* state re-bakes once (§8). A small per-piece LRU of past bakes would make deep undo/redo free
+  too, at a memory cost. Pure optimization on top of the baseline hash gate — deferred.
 - **Cross-session persistence** of `SolvedPiece`s — ids reassign on load (identity is session-only today);
   the cache is rebuilt by the first Solve after load.
 - **Per-level retention** (instant TAB between subdivision levels) — SOLVEDPIECE §10, deferred.
