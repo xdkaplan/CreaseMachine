@@ -122,7 +122,7 @@ void main() {
     vec3 sn = normalize(vN);
     // Geometric face normal from screen-space derivatives = the 'unwelded' normal, for free.
     // Facet-end normal: the per-FACE normal for n-gon/PQ meshes (so a quad's false diagonal never shows), else
-    // the screen-space per-triangle normal (fine for triangle meshes — they have no false diagonal).
+    // the screen-space per-triangle normal (fine for triangle meshes - they have no false diagonal).
     vec3 fn = (uUseFaceN == 1) ? normalize(vFaceN) : normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
     if (dot(fn, sn) < 0.0) fn = -fn;       // align with the smooth normal before blending
     float s = pow(clamp(uSharpness, 0.0, 1.0), max(uFacetExp, 0.001));
