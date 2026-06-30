@@ -101,6 +101,11 @@ namespace PieceSolver
         // not a per-mint scan. Today every load re-Seeds through this factory, so nothing needs it yet.)
         public int MintId() => _nextId++;
 
+        // Restore the counter above a loaded partition's max id (File > Open sets PieceMap directly, bypassing
+        // MintId), so the next mint can't collide with a loaded id. The one-time "init from saved state" the
+        // monotonic counter needs on load. Only ever raises _nextId.
+        public void BumpIdsAbove(int maxId) { if (_nextId <= maxId) _nextId = maxId + 1; }
+
         // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
         // SAME mesh, so old deltas reference invalid piece ids). Selection is cleared separately by the caller.
         public void ClearHistory() { _undo.Clear(); _redo.Clear(); }

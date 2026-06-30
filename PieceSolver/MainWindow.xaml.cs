@@ -238,6 +238,7 @@ namespace PieceSolver
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
             MenuImport.Click += (s, e) => ImportMesh();   // File > Import (STL / FBX / OBJ) — no shortcut; Ctrl+O reserved for Open
             MenuExport.Click += (s, e) => ExportMesh();   // File > Export the current view (OBJ preserves PQ quads; STL triangulates)
+            MenuOpen.Click += (s, e) => OpenDocument();          // File > Open a grouped-OBJ document (restores the partition)
             MenuSave.Click += (s, e) => SaveDocument(false);     // File > Save the DOCUMENT (welded authoring mesh + partition groups)
             MenuSaveAs.Click += (s, e) => SaveDocument(true);
             MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
@@ -310,6 +311,7 @@ namespace PieceSolver
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
                 else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveDocument(false); e.Handled = true; }   // Ctrl+S = save the document
+                else if (e.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control) { OpenDocument(); e.Handled = true; }       // Ctrl+O = open a document
                 else if (e.Key == Key.Escape && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_view.ActiveEditor.GesturePending) _view.ActiveEditor.CancelGesture(); else _view.ActiveEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
                 else if (e.Key == Key.Y && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
@@ -1853,6 +1855,49 @@ namespace PieceSolver
                 _doc.Comment("exported " + dlg.FileName + " (" + mesh.Vertices.Count + " verts, " + _view.Display + " view)");
             }
             catch (Exception ex) { _doc.Comment("export failed: " + ex.Message); }
+        }
+
+        void OpenDocument()
+        {
+            var dlg = new Microsoft.Win32.OpenFileDialog
+            {
+                Filter = "CreaseStudio document (*.obj)|*.obj|All files (*.*)|*.*",
+                InitialDirectory = @"C:\Temp"
+            };
+            if (dlg.ShowDialog() != true) return;
+            OpenDocumentPath(dlg.FileName);
+        }
+
+        // File > Open — load a grouped-OBJ DOCUMENT: the welded mesh + the partition (g piece_<id> groups),
+        // restore the Pattern, derive creases, and land in the Piecing phase. A plain OBJ with no piece_ groups
+        // opens as a single unpieced mesh. (SAVE-OPEN.md) Mirrors ApplyLoad's resets, plus the partition restore.
+        void OpenDocumentPath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) { Title = "PieceSolver — missing: " + path; return; }
+            PlanktonMesh mesh; int[] pieceMap;
+            try { mesh = MeshIO.LoadObj(path, out pieceMap); }
+            catch (Exception ex) { Title = "PieceSolver — open failed: " + ex.Message; return; }
+            _session = new FlowSession(mesh); _meshPath = path; _docPath = path;
+            RebindPattern();          // new Pattern wrapping the loaded mesh (PieceMap null)
+            InvalidateDeveloped();    // a fresh document -> the developed view is stale until re-Solve
+            _reframe = true; _meshDirty = true;
+            ClearProposedCreases();   // any proposer state references the prior mesh
+            _hasFlat = false; _flat = null; _M0 = null;
+            _refMeanLen2 = 0; _isoResFactor = 1.0; _lmLambda = 0;
+            _bffNeeded = true;
+            // Restore the saved partition (after the resets, before the rebuild). Reseed the id counter above the
+            // loaded max so the next mint can't collide (Open sets PieceMap directly, bypassing MintId).
+            if (pieceMap != null && pieceMap.Length == mesh.Faces.Count)
+            {
+                _doc.Pattern.PieceMap = pieceMap;
+                int mx = -1; for (int i = 0; i < pieceMap.Length; i++) if (pieceMap[i] > mx) mx = pieceMap[i];
+                _doc.BumpIdsAbove(mx);
+            }
+            _view.ActiveEditor = _view.Piecer;   // restored partition -> piecing phase
+            RebuildPieces();                     // derive CreaseMap, build piece buffers, Display = Pieces
+            RefreshSeamDisplay();
+            Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
+            _gl?.InvalidateVisual();
         }
 
         // File > Save / Save As — write the DOCUMENT: the welded authoring mesh + the partition as g piece_<id>
