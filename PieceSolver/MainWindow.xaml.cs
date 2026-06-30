@@ -36,6 +36,7 @@ namespace PieceSolver
         FlowSession _session;        // live mesh + Nesterov velocity; the flow bakes it in place
         readonly SimSettings _sim = new SimSettings();   // bindable sim params (right toolbar)
         string _meshPath;            // source mesh path, so Revert can reload the input from disk
+        string _docPath;             // current .obj DOCUMENT path (Ctrl+S target); set by Open / Save As. Distinct from _meshPath (Revert source / import).
         bool _glInit, _meshDirty, _reframe, _rulingsDirty;   // _reframe: re-fit camera next upload; _rulingsDirty: recompute ruling overlay
         int _depthRbo, _depthW, _depthH;            // our depth attachment (GLWpfControl FBO is colour-only)
 
@@ -237,6 +238,8 @@ namespace PieceSolver
             CamModalCancel.Click += (s, e) => { var c = _camCancel; CloseCamModal(); c?.Invoke(); };
             MenuImport.Click += (s, e) => ImportMesh();   // File > Import (STL / FBX / OBJ) — no shortcut; Ctrl+O reserved for Open
             MenuExport.Click += (s, e) => ExportMesh();   // File > Export the current view (OBJ preserves PQ quads; STL triangulates)
+            MenuSave.Click += (s, e) => SaveDocument(false);     // File > Save the DOCUMENT (welded authoring mesh + partition groups)
+            MenuSaveAs.Click += (s, e) => SaveDocument(true);
             MenuRevert.Click += (s, e) => Execute(StudioCommand.Revert(), record: true);   // File > Revert (also Ctrl+R)
             // A/B/C developability presets: set the iso weights live (sliders update via binding). Tip:
             // click a preset, Ctrl+R to start clean, then Solve — repeat for each to compare.
@@ -306,6 +309,7 @@ namespace PieceSolver
                 }
                 else if (e.Key == Key.J && Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)) { ToggleConsole(); e.Handled = true; }
                 else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control) { Execute(StudioCommand.Revert(), record: true); e.Handled = true; }
+                else if (e.Key == Key.S && Keyboard.Modifiers == ModifierKeys.Control) { SaveDocument(false); e.Handled = true; }   // Ctrl+S = save the document
                 else if (e.Key == Key.Escape && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.None) { if (_view.ActiveEditor.GesturePending) _view.ActiveEditor.CancelGesture(); else _view.ActiveEditor.Deselect(); e.Handled = true; }   // ESC = cancel an in-flight stroke, else deselect
                 else if (e.Key == Key.Z && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Undo(); e.Handled = true; }   // Ctrl+Z = undo the last piecing transaction
                 else if (e.Key == Key.Y && _view.EditorActive && Keyboard.Modifiers == ModifierKeys.Control) { _doc.Redo(); e.Handled = true; }   // Ctrl+Y = redo
@@ -1849,6 +1853,35 @@ namespace PieceSolver
                 _doc.Comment("exported " + dlg.FileName + " (" + mesh.Vertices.Count + " verts, " + _view.Display + " view)");
             }
             catch (Exception ex) { _doc.Comment("export failed: " + ex.Message); }
+        }
+
+        // File > Save / Save As — write the DOCUMENT: the welded authoring mesh + the partition as g piece_<id>
+        // groups (SAVE-OPEN.md). NOT the developed result (that's Export). Ctrl+S re-saves _docPath; Save As (or
+        // no path yet) prompts. Always saves the authoring mesh (restored after any bake), never the developed.
+        void SaveDocument(bool saveAs)
+        {
+            var mesh = _session?.Mesh;
+            if (mesh == null || mesh.Vertices.Count == 0) { _doc.Comment("save: nothing to save"); return; }
+            string path = (!saveAs && _docPath != null) ? _docPath : null;
+            if (path == null)
+            {
+                var dlg = new Microsoft.Win32.SaveFileDialog
+                {
+                    Filter = "CreaseStudio document (*.obj)|*.obj",
+                    InitialDirectory = @"C:\Temp",
+                    FileName = System.IO.Path.GetFileNameWithoutExtension(_docPath ?? _meshPath ?? "untitled") + ".obj"
+                };
+                if (dlg.ShowDialog() != true) return;
+                path = dlg.FileName;
+            }
+            try
+            {
+                MeshIO.WriteObj(mesh, _doc.Pattern?.PieceMap, path);   // welds coincident seam verts + emits g piece_<id> groups
+                _docPath = path;
+                Title = "PieceSolver — " + System.IO.Path.GetFileName(path);
+                _doc.Comment("saved " + System.IO.Path.GetFileName(path) + " (" + mesh.Vertices.Count + " verts)");
+            }
+            catch (Exception ex) { _doc.Comment("save failed: " + ex.Message); }
         }
 
         void OpenAndReplay()
