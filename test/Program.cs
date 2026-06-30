@@ -102,6 +102,7 @@ class Program
 
         Console.WriteLine();
         UnweldTest();
+        ObjRoundtripTest();
 
         Console.WriteLine();
         // Perf bench: time CHA in each config on realistic-sized meshes so we can SEE what's
@@ -828,6 +829,52 @@ class Program
             + "  verts " + nV + "->" + M.Vertices.Count + " expect " + (nV + seam) + " (" + vertsOk + ")"
             + "  map=" + mapOk + "  coincident=" + coincident);
         Console.WriteLine("  RESULT: " + ((facesOk && compsOk && vertsOk && mapOk && coincident) ? "PASS" : "FAIL"));
+    }
+
+    // SAVE-OPEN gate: an unwelded (FBX-style) mesh + its partition -> WriteObj must RE-WELD + group -> LoadObj
+    // -> the welded mesh + pieceMap come back and the derived crease set is identical. (docs/specs/SAVE-OPEN.md)
+    static void ObjRoundtripTest()
+    {
+        Console.WriteLine("=== WriteObj(weld+groups) -> LoadObj round-trip (SAVE-OPEN gate) ===");
+        PlanktonMesh P = BuildBumpyGrid(7);
+        int nF = P.Faces.Count, nV = P.Vertices.Count;
+        double minx = double.MaxValue, maxx = double.MinValue;
+        for (int v = 0; v < nV; v++) { double x = P.Vertices[v].X; if (x < minx) minx = x; if (x > maxx) maxx = x; }
+        double mid = 0.5 * (minx + maxx);
+        var pieceMap = new int[nF]; int p0 = 0, p1 = 0;
+        for (int f = 0; f < nF; f++)
+        {
+            int[] fv = P.Faces.GetFaceVertices(f);
+            double cx = 0; foreach (int v in fv) cx += P.Vertices[v].X; cx /= fv.Length;
+            int piece = cx < mid ? 0 : 1; pieceMap[f] = piece; if (piece == 0) p0++; else p1++;
+        }
+        int crOrig = CreaseCount(P, pieceMap);
+
+        // Simulate an unwelded import (FBX solid): unweld by region (faces stay 1:1, so pieceMap still applies).
+        var U = MeshOps.UnweldByRegion(P, pieceMap, out _);
+        string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "creasestudio_roundtrip.obj");
+        MeshIO.WriteObj(U, pieceMap, tmp);                 // must RE-WELD on save -> connected mesh + g piece_N
+        var L = MeshIO.LoadObj(tmp, out int[] lpm);
+        try { System.IO.File.Delete(tmp); } catch { }
+
+        int lp0 = 0, lp1 = 0; foreach (int x in lpm) { if (x == 0) lp0++; else if (x == 1) lp1++; }
+        int crLoaded = CreaseCount(L, lpm);
+        bool vertsOk = L.Vertices.Count == nV;   // weld re-merged the seam duplicates the unweld created
+        bool facesOk = L.Faces.Count == nF;
+        bool partOk = (lp0 == p0 && lp1 == p1);
+        bool creaseOk = crOrig > 0 && crLoaded == crOrig;
+        Console.WriteLine("  unweld verts " + nV + "->" + U.Vertices.Count + "  write+load verts->" + L.Vertices.Count + " expect " + nV + " (" + vertsOk + ")"
+            + "  faces " + nF + "->" + L.Faces.Count + " (" + facesOk + ")"
+            + "  pieces " + p0 + "/" + p1 + "->" + lp0 + "/" + lp1 + " (" + partOk + ")"
+            + "  creases " + crOrig + "->" + crLoaded + " (" + creaseOk + ")");
+        Console.WriteLine("  RESULT: " + ((vertsOk && facesOk && partOk && creaseOk) ? "PASS" : "FAIL"));
+    }
+
+    static int CreaseCount(PlanktonMesh M, int[] pieceMap)
+    {
+        int c = 0;
+        MeshOps.ForEachInteriorEdge(M, (f1, f2, a, b) => { if (f1 < pieceMap.Length && f2 < pieceMap.Length && pieceMap[f1] != pieceMap[f2]) c++; });
+        return c;
     }
 
     // Make a short edge, then confirm the simple collapse removes it and the result is a valid
