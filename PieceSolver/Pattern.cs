@@ -72,7 +72,7 @@ namespace PieceSolver
             for (int f = 0; f < nF; f++)
             {
                 if (P.Faces[f].IsUnused) { piece[f] = -1; continue; }
-                int r = uf.Find(f); if (!rootId.TryGetValue(r, out int id)) { id = count++; rootId[r] = id; }
+                int r = uf.Find(f); if (!rootId.TryGetValue(r, out int id)) { id = _mint != null ? _mint() : count++; rootId[r] = id; }   // mint each piece through the factory (count++ only when detached/no-Doc)
                 piece[f] = id;
             }
             PieceMap = piece;

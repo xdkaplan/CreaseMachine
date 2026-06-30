@@ -92,17 +92,14 @@ namespace PieceSolver
         // selection + any open tx — deltas reference old face indices, so they cannot survive a re-mesh.
         public void Rebind(Pattern pattern) { _open?.Cancel(); Pattern = pattern; _undo.Clear(); _redo.Clear(); _open = null; Pieces.ClearSilent(); }   // F-9: Cancel (not orphan) any open tx — first, while the OLD Pattern is still in place so its rollback inverts the right mesh (in practice _open is null here: Rebind runs between gestures)
 
-        // The single monotonic id source for ALL Reals (today: Pattern pieces; future: Creases, Splines). Floors
-        // itself above the current partition's max, so a fresh mint never collides with a Seed (ids 0..N-1) or a
-        // loaded/replayed partition; and because the counter only ever rises, it never REUSES a freed id — that
-        // stability is what lets the int double as identity. int is ~2.1B and never reused; promote to long/Guid
-        // only if that ever bites (it won't in a session). Reals draw from this via the Func injected at construction.
-        public int MintId()
-        {
-            var pm = Pattern?.PieceMap;
-            if (pm != null) { int m = -1; for (int i = 0; i < pm.Length; i++) if (pm[i] > m) m = pm[i]; if (_nextId <= m) _nextId = m + 1; }
-            return _nextId++;
-        }
+        // The single monotonic id source for ALL Reals (today: Pattern pieces; future: Creases, Splines). EVERY id
+        // is allocated here — Seed mints one per piece too — so the counter is the sole authority and never has to
+        // scan its consumers to catch up. It only ever rises, so it never REUSES a freed id; that stability is what
+        // lets the int double as identity. int is ~2.1B and never reused; promote to long/Guid only if that ever
+        // bites (it won't in a session). Reals draw from this via the Func injected at construction.
+        // (When persisted-partition LOAD lands, init _nextId above the saved max ONCE — a restore from saved state,
+        // not a per-mint scan. Today every load re-Seeds through this factory, so nothing needs it yet.)
+        public int MintId() => _nextId++;
 
         // Drop the undo/redo history without re-pointing the Store — for a Chapter reset (Seed re-partitions the
         // SAME mesh, so old deltas reference invalid piece ids). Selection is cleared separately by the caller.
